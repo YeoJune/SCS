@@ -1,0 +1,160 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scs"
+version = "0.1.0"
+description = "Spike-Based Cognitive System: 의미론적 연산을 위한 뇌 모방 동적 컴퓨팅 아키텍처"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+authors = [
+    {name = "Your Name", email = "your.email@domain.com"}
+]
+keywords = ["spiking neural networks", "cognitive architecture", "NLP", "semantic reasoning"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    # Core ML frameworks
+    "torch>=1.12.0",
+    "torchvision>=0.13.0",
+    "numpy>=1.21.0",
+    
+    # NLP and data processing
+    "transformers>=4.20.0",
+    "tokenizers>=0.12.0",
+    "datasets>=2.0.0",
+    "nltk>=3.7",
+    
+    # Configuration and experiment management
+    "PyYAML>=6.0",
+    "hydra-core>=1.2.0",
+    "wandb>=0.13.0",
+    "tensorboard>=2.9.0",
+    
+    # Scientific computing and visualization
+    "scipy>=1.8.0",
+    "matplotlib>=3.5.0",
+    "seaborn>=0.11.0",
+    "plotly>=5.0.0",
+    
+    # Utilities
+    "tqdm>=4.64.0",
+    "rich>=12.0.0",
+    "click>=8.0.0",
+    "jsonlines>=3.0.0",
+    
+    # Testing and quality
+    "pytest>=7.0.0",
+    "pytest-cov>=3.0.0",
+    "black>=22.0.0",
+    "isort>=5.10.0",
+    "flake8>=4.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "jupyter>=1.0.0",
+    "ipykernel>=6.0.0",
+    "pre-commit>=2.0.0",
+    "mypy>=0.950",
+]
+
+neuromorphic = [
+    "snntorch>=0.6.0",
+    "norse>=0.0.7",
+]
+
+analysis = [
+    "networkx>=2.8.0",
+    "scikit-learn>=1.1.0",
+    "umap-learn>=0.5.0",
+    "tsne>=0.3.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/[your-username]/SCS"
+Documentation = "https://github.com/[your-username]/SCS/tree/main/docs"
+Repository = "https://github.com/[your-username]/SCS"
+Issues = "https://github.com/[your-username]/SCS/issues"
+
+[project.scripts]
+scs = "scs.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+scs = ["configs/*.yaml", "data/*.json"]
+
+# Testing configuration
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = "--cov=src/scs --cov-report=html --cov-report=term-missing"
+
+# Code formatting
+[tool.black]
+line-length = 88
+target-version = ['py38']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+line_length = 88
+known_first_party = ["scs"]
+
+# Type checking
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = [
+    "torch.*",
+    "transformers.*",
+    "datasets.*",
+    "wandb.*",
+    "matplotlib.*",
+    "seaborn.*",
+    "plotly.*",
+]
+ignore_missing_imports = true

@@ -1,0 +1,300 @@
+# Phase 2: Core Semantic Reasoning Validation
+# CLUTRR 태스크를 통한 구성적 추론 능력 검증
+
+# 기본 모델 설정 상속
+defaults:
+  - base_model
+
+# 실험 메타데이터
+experiment:
+  name: "phase2_clutrr"
+  phase: 2
+  description: "CLUTRR을 통한 구성적 추론 및 관계 결속 능력 검증"
+  tags: ["semantic_reasoning", "compositional", "clutrr", "relational_binding"]
+
+# 완전한 SCS 아키텍처 사용 (4개 모듈 모두 활성화)
+model:
+  # 모든 뇌 영역 활성화 (base_model 설정 그대로 사용)
+  brain_regions:
+    PFC:
+      enabled: true
+    ACC:
+      enabled: true
+    IPL:
+      enabled: true
+    MTL:
+      enabled: true
+
+  # 강화된 연결성 (의미 처리를 위해)
+  connectivity:
+    axonal:
+      connection_probability: 0.15 # 기본보다 50% 증가
+
+  # 출력 타이밍 조정 (복잡한 추론을 위해)
+  io_system:
+    output_timing:
+      min_processing_clk: 80 # 더 긴 최소 처리 시간
+      max_processing_clk: 800 # 더 긴 최대 처리 시간
+      convergence_threshold: 0.05 # 더 엄격한 수렴 기준
+
+# CLUTRR 태스크 설정
+task:
+  name: "clutrr"
+  type: "question_answering"
+
+  # CLUTRR 데이터셋 설정
+  dataset:
+    name: "clutrr"
+    version: "1.0"
+    difficulty_levels: [2, 3, 4, 5] # 추론 홉 수
+    max_context_length: 512
+
+  # 태스크별 설정
+  subtasks:
+    - name: "kinship_reasoning"
+      description: "가족 관계 추론"
+      hop_levels: [2, 3, 4]
+      target_accuracy: [0.90, 0.85, 0.80]
+
+    - name: "systematic_generalization"
+      description: "체계적 일반화 능력"
+      test_on_unseen_relations: true
+      target_accuracy: 0.75
+
+  # 데이터 전처리
+  preprocessing:
+    tokenizer: "bert-base-uncased"
+    max_tokens: 512
+    add_special_tokens: true
+
+    # 관계 인코딩
+    relation_encoding:
+      method: "positional" # 위치 기반 관계 인코딩
+      max_entities: 20
+      max_relations: 15
+
+# 학습 설정
+training:
+  # 하이퍼파라미터
+  batch_size: 16 # 복잡한 태스크이므로 작은 배치
+  max_epochs: 100
+  early_stopping_patience: 15
+
+  # 최적화
+  optimizer:
+    name: "AdamW"
+    lr: 1e-3
+    weight_decay: 1e-3
+    betas: [0.9, 0.999]
+
+  # 스케줄러
+  scheduler:
+    name: "ReduceLROnPlateau"
+    mode: "max"
+    factor: 0.5
+    patience: 5
+    min_lr: 1e-6
+
+  # 정규화 강화
+  regularization:
+    dropout: 0.2
+    spike_regularization: 2e-4
+    weight_decay: 1e-3
+
+    # 의미 일관성 정규화 (새로운 기법)
+    semantic_consistency:
+      enabled: true
+      weight: 1e-3
+
+  # 점진적 해동 (복잡한 학습을 위해)
+  progressive_unfreezing:
+    enabled: true
+    stages:
+      - epochs: [0, 20]
+        frozen_components: ["axonal_connections"]
+        active_components: ["io_nodes", "internal_connections"]
+      - epochs: [20, 50]
+        frozen_components: ["MTL_axonal"] # MTL은 나중에 해동
+        active_components:
+          [
+            "io_nodes",
+            "internal_connections",
+            "PFC_axonal",
+            "ACC_axonal",
+            "IPL_axonal",
+          ]
+      - epochs: [50, 100]
+        frozen_components: []
+        active_components: ["all"]
+
+  # 커리큘럼 학습
+  curriculum_learning:
+    enabled: true
+    strategy: "hop_based" # 홉 수 기반 점진적 학습
+    schedule:
+      - epochs: [0, 30]
+        max_hops: 2
+      - epochs: [30, 60]
+        max_hops: 3
+      - epochs: [60, 100]
+        max_hops: 5
+
+# 평가 설정
+evaluation:
+  metrics:
+    - "accuracy"
+    - "exact_match"
+    - "f1_score"
+    - "hop_wise_accuracy" # 홉 수별 정확도
+    - "relation_wise_accuracy" # 관계별 정확도
+    - "compositional_score" # 구성적 추론 점수
+    - "spike_rate"
+    - "convergence_time"
+    - "module_utilization" # 모듈 활용도
+
+  # 성공 기준
+  success_criteria:
+    min_accuracy_2hop: 0.85
+    min_accuracy_3hop: 0.75
+    min_accuracy_4hop: 0.65
+    max_convergence_time: 300 # CLK
+    min_compositional_score: 0.70
+
+  # 상세 분석
+  detailed_analysis:
+    enabled: true
+    error_analysis: true
+    attention_visualization: true
+    module_contribution_analysis: true
+
+# 베이스라인 비교
+baselines:
+  - name: "transformer_baseline"
+    model: "bert-base-uncased"
+    fine_tuned: true
+
+  - name: "snn_baseline"
+    model: "basic_snn"
+    architecture: "feedforward"
+
+  - name: "human_performance"
+    source: "clutrr_paper"
+    accuracy: [0.95, 0.90, 0.85, 0.80] # 홉별
+
+# 로깅 및 모니터링
+logging:
+  wandb:
+    enabled: true
+    project: "SCS_Phase2"
+    entity: "your_team"
+    tags: ["phase2", "clutrr", "semantic_reasoning", "compositional"]
+
+  tensorboard:
+    enabled: true
+    log_dir: "experiments/phase2_clutrr/tensorboard"
+
+  log_level: "INFO"
+  log_frequency:
+    train: 20
+    val: 1
+
+# 분석 설정
+analysis:
+  # 동역학 분석 (더 상세하게)
+  dynamics_analysis:
+    enabled: true
+    save_spike_patterns: true
+    save_membrane_potentials: true
+    save_attention_weights: true
+    analysis_frequency: 10
+
+    # 모듈별 분석
+    module_analysis:
+      enabled: true
+      track_pfc_working_memory: true
+      track_acc_conflict_detection: true
+      track_ipl_relation_binding: true
+      track_mtl_memory_retrieval: true
+
+  # 표상 분석
+  representation_analysis:
+    enabled: true
+    methods: ["pca", "umap", "tsne"]
+    save_embeddings: true
+
+    # 관계 표상 분석
+    relation_representation:
+      enabled: true
+      cluster_analysis: true
+      similarity_analysis: true
+
+  # 상세 Ablation Study
+  ablation_study:
+    enabled: true
+    components_to_ablate:
+      - "PFC_module"
+      - "ACC_module"
+      - "IPL_module"
+      - "MTL_module"
+      - "internal_connections"
+      - "axonal_connections"
+      - "adaptive_output_timing"
+      - "multi_scale_grids"
+
+    # 모듈 조합 실험
+    module_combinations:
+      - ["PFC", "ACC"]
+      - ["PFC", "IPL"]
+      - ["IPL", "MTL"]
+      - ["PFC", "ACC", "IPL"]
+
+# Transfer Learning 실험
+transfer_learning:
+  enabled: true
+
+  # Phase 1에서 사전 학습된 모델 사용
+  pretrained_model:
+    path: "experiments/phase1_logic_ops/model_final.pt"
+    freeze_components: ["io_nodes"] # IO만 고정하고 나머지는 미세조정
+
+  # 도메인 적응
+  domain_adaptation:
+    enabled: true
+    adaptation_epochs: 20
+    adaptation_lr: 1e-4
+
+# 실험 출력 설정
+output:
+  save_model: true
+  save_frequency: 10
+  save_best_only: true
+
+  # 고급 시각화
+  visualization:
+    enabled: true
+    plots:
+      - "training_curves"
+      - "hop_wise_performance"
+      - "module_activation_heatmap"
+      - "spike_pattern_evolution"
+      - "attention_flow_diagram"
+      - "relation_embedding_clusters"
+      - "convergence_analysis_by_complexity"
+
+  # 결과 보고서
+  report_generation:
+    enabled: true
+    format: ["html", "pdf"]
+    include_sections:
+      - "executive_summary"
+      - "performance_comparison"
+      - "ablation_results"
+      - "error_analysis"
+      - "computational_efficiency"
+
+  # 재현성 보장
+  reproducibility:
+    save_config: true
+    save_git_commit: true
+    save_environment: true
+    save_random_states: true

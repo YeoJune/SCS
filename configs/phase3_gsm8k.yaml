@@ -1,0 +1,386 @@
+# Phase 3: High-Level Reasoning via Pre-training and Fine-tuning
+# GSM8K 수학적 추론 태스크
+
+# 기본 모델 설정 상속
+defaults:
+  - base_model
+
+# 실험 메타데이터
+experiment:
+  name: "phase3_gsm8k"
+  phase: 3
+  description: "GSM8K를 통한 대규모 사전학습 후 고차원적 수학적 추론 능력 검증"
+  tags:
+    [
+      "high_level_reasoning",
+      "mathematical",
+      "gsm8k",
+      "pretraining",
+      "finetuning",
+    ]
+
+# 확장된 SCS 아키텍처 (Phase 3용)
+model:
+  # 모든 뇌 영역 활성화 + 확장
+  brain_regions:
+    PFC:
+      enabled: true
+      neurons_per_layer: [300, 480, 300, 360] # 기본 모델 대비 20% 증가
+    ACC:
+      enabled: true
+      neurons_per_layer: [300, 480, 300, 360]
+    IPL:
+      enabled: true
+      neurons_per_layer: [300, 480, 300, 360]
+    MTL:
+      enabled: true
+      neurons_per_layer: [300, 480, 300, 360]
+
+  # 고도화된 연결성
+  connectivity:
+    axonal:
+      connection_probability: 0.2 # 기본 대비 2배 증가
+      multi_scale_grids:
+        fine:
+          modules: 12 # 확장
+          spacing: 2
+          weight: 0.6
+        medium:
+          modules: 6
+          spacing: 3
+          weight: 0.4
+        coarse:
+          modules: 3
+          spacing: 5
+          weight: 0.3
+
+  # 향상된 입출력 시스템
+  io_system:
+    input_node:
+      embedding_dim: 768 # 확장
+      attention_heads: 12
+      max_tokens: 1024 # 긴 수학 문제 처리
+
+    output_node:
+      vocab_size: 50000 # 확장된 어휘
+      attention_heads: 12
+      confidence_threshold: 0.8
+
+    # 복잡한 추론을 위한 출력 타이밍
+    output_timing:
+      min_processing_clk: 150 # 더 긴 최소 처리
+      max_processing_clk: 1500 # 매우 긴 최대 처리 (1.5초)
+      convergence_threshold: 0.02 # 매우 엄격한 수렴 기준
+
+# GSM8K 태스크 설정
+task:
+  name: "gsm8k"
+  type: "mathematical_reasoning"
+
+  # 데이터셋 설정
+  dataset:
+    name: "gsm8k"
+    train_split: "train"
+    test_split: "test"
+    max_context_length: 1024
+
+  # 수학적 추론 태스크 설정
+  reasoning:
+    problem_types:
+      - "arithmetic"
+      - "word_problems"
+      - "multi_step_reasoning"
+      - "algebraic_reasoning"
+
+    difficulty_levels: ["easy", "medium", "hard"]
+
+    # 답변 생성 설정
+    generation:
+      method: "step_by_step" # 단계별 추론
+      max_steps: 10
+      intermediate_supervision: true
+
+  # 데이터 전처리
+  preprocessing:
+    tokenizer: "gpt2" # 생성에 적합한 토크나이저
+    max_tokens: 1024
+
+    # 수학 표현 처리
+    math_processing:
+      normalize_numbers: true
+      extract_equations: true
+      add_step_tokens: true # [STEP1], [STEP2] 등
+
+# 2단계 학습: Pre-training + Fine-tuning
+training:
+  # Stage 1: Pre-training on large text corpus
+  pretraining:
+    enabled: true
+
+    # 사전학습 데이터
+    dataset:
+      name: "math_corpus" # 수학 관련 텍스트 코퍼스
+      sources: ["wikipedia_math", "arxiv_math", "textbooks"]
+      size: "10M_tokens"
+
+    # 사전학습 설정
+    batch_size: 8
+    max_epochs: 20
+    learning_rate: 5e-4
+
+    # 사전학습 목표
+    objective: "causal_lm" # 언어 모델링
+    mask_ratio: 0.15
+
+    # 점진적 해동 (사전학습)
+    progressive_unfreezing:
+      enabled: true
+      stages:
+        - epochs: [0, 5]
+          active_components: ["io_nodes"]
+        - epochs: [5, 10]
+          active_components: ["io_nodes", "internal_connections"]
+        - epochs: [10, 20]
+          active_components: ["all"]
+
+  # Stage 2: Fine-tuning on GSM8K
+  finetuning:
+    enabled: true
+
+    # 미세조정 설정
+    batch_size: 4 # 복잡한 추론이므로 작은 배치
+    max_epochs: 50
+    early_stopping_patience: 10
+
+    # 최적화
+    optimizer:
+      name: "AdamW"
+      lr: 1e-4 # 사전학습보다 낮은 학습률
+      weight_decay: 1e-2
+      betas: [0.9, 0.999]
+
+    # 스케줄러
+    scheduler:
+      name: "LinearWarmupCosineAnnealingLR"
+      warmup_epochs: 5
+      T_max: 50
+      eta_min: 1e-7
+
+    # 강화된 정규화
+    regularization:
+      dropout: 0.3
+      spike_regularization: 3e-4
+      gradient_clipping: 1.0
+
+      # 수학적 일관성 정규화
+      mathematical_consistency:
+        enabled: true
+        weight: 2e-3
+
+    # 전이학습 설정
+    transfer_learning:
+      freeze_encoder: false # 전체 미세조정
+      adaptation_layers: true
+
+    # 커리큘럼 학습 (난이도 기반)
+    curriculum_learning:
+      enabled: true
+      strategy: "difficulty_based"
+      schedule:
+        - epochs: [0, 15]
+          difficulty: "easy"
+        - epochs: [15, 35]
+          difficulty: ["easy", "medium"]
+        - epochs: [35, 50]
+          difficulty: ["easy", "medium", "hard"]
+
+# 평가 설정
+evaluation:
+  metrics:
+    - "accuracy"
+    - "exact_match"
+    - "step_wise_accuracy" # 단계별 정확도
+    - "reasoning_quality" # 추론 품질 점수
+    - "mathematical_validity" # 수학적 유효성
+    - "convergence_time"
+    - "computational_cost"
+    - "module_specialization" # 모듈 특화 정도
+
+  # 성공 기준
+  success_criteria:
+    min_accuracy: 0.60 # GSM8K는 어려운 태스크
+    min_step_accuracy: 0.70
+    max_convergence_time: 800 # CLK
+    min_reasoning_quality: 0.65
+
+  # 상세 평가
+  detailed_evaluation:
+    enabled: true
+    human_evaluation: true # 인간 평가자 참여
+    error_categorization: true
+    reasoning_path_analysis: true
+
+# 베이스라인 비교
+baselines:
+  - name: "gpt3_baseline"
+    model: "text-davinci-003"
+    few_shot_examples: 8
+
+  - name: "chain_of_thought"
+    model: "gpt-3.5-turbo"
+    prompting_strategy: "cot"
+
+  - name: "tool_augmented"
+    model: "gpt-4"
+    external_tools: ["calculator", "equation_solver"]
+
+  - name: "human_performance"
+    source: "gsm8k_paper"
+    accuracy: 0.85
+
+# 고급 분석
+analysis:
+  # 수학적 추론 분석
+  mathematical_reasoning_analysis:
+    enabled: true
+
+    # 추론 단계 분석
+    step_analysis:
+      track_reasoning_steps: true
+      identify_error_points: true
+      measure_step_confidence: true
+
+    # 수학적 개념 분석
+    concept_analysis:
+      arithmetic_operations: true
+      algebraic_manipulation: true
+      logical_reasoning: true
+      pattern_recognition: true
+
+  # 모듈 기능 분석
+  module_functional_analysis:
+    enabled: true
+
+    # 가설 검증: 각 모듈의 예상 역할
+    hypothesis_testing:
+      PFC_working_memory: true # 중간 계산 유지
+      ACC_error_detection: true # 계산 오류 감지
+      IPL_step_sequencing: true # 추론 단계 순서화
+      MTL_math_knowledge: true # 수학 지식 저장
+
+  # 창발성 분석
+  emergence_analysis:
+    enabled: true
+    track_emergent_strategies: true
+    measure_strategy_evolution: true
+    analyze_module_cooperation: true
+
+  # Ablation Study (매우 상세)
+  ablation_study:
+    enabled: true
+
+    # 모듈별 제거 실험
+    module_ablation:
+      - "PFC_only"
+      - "without_PFC"
+      - "without_ACC"
+      - "without_IPL"
+      - "without_MTL"
+
+    # 연결성 제거 실험
+    connectivity_ablation:
+      - "no_internal"
+      - "no_axonal"
+      - "no_multiscale"
+
+    # 메커니즘 제거 실험
+    mechanism_ablation:
+      - "no_adaptive_timing"
+      - "no_refractory"
+      - "no_neuromodulation"
+
+# 로깅 및 모니터링 (고도화)
+logging:
+  wandb:
+    enabled: true
+    project: "SCS_Phase3"
+    entity: "your_team"
+    tags: ["phase3", "gsm8k", "mathematical_reasoning", "pretraining"]
+
+    # 고급 로깅
+    log_reasoning_traces: true
+    log_model_artifacts: true
+
+  tensorboard:
+    enabled: true
+    log_dir: "experiments/phase3_gsm8k/tensorboard"
+
+  # 커스텀 로깅
+  custom_logging:
+    reasoning_step_logging: true
+    module_activation_logging: true
+    mathematical_validity_logging: true
+
+# 컴퓨팅 리소스
+computational_resources:
+  # 하드웨어 요구사항
+  hardware:
+    min_gpu_memory: "24GB"
+    recommended_gpus: 2
+    distributed_training: true
+
+  # 성능 최적화
+  optimization:
+    mixed_precision: true
+    gradient_checkpointing: true
+    model_compilation: true
+    dataloader_optimization: true
+
+  # 메모리 관리
+  memory_management:
+    cache_size: "8GB"
+    offload_to_cpu: true
+    progressive_batch_size: true
+
+# 실험 출력 (매우 상세)
+output:
+  save_model: true
+  save_frequency: 5
+  save_best_only: false # 모든 체크포인트 저장
+
+  # 고급 시각화
+  visualization:
+    enabled: true
+    plots:
+      - "pretraining_curves"
+      - "finetuning_curves"
+      - "reasoning_step_accuracy"
+      - "module_specialization_heatmap"
+      - "mathematical_concept_clusters"
+      - "error_pattern_analysis"
+      - "convergence_time_distribution"
+      - "computational_cost_breakdown"
+
+  # 종합 보고서
+  comprehensive_report:
+    enabled: true
+    format: ["html", "pdf", "latex"]
+    include_sections:
+      - "executive_summary"
+      - "pretraining_results"
+      - "finetuning_results"
+      - "baseline_comparison"
+      - "ablation_analysis"
+      - "module_functionality_analysis"
+      - "mathematical_reasoning_quality"
+      - "computational_efficiency"
+      - "future_directions"
+
+  # 연구 재현성
+  reproducibility:
+    save_config: true
+    save_git_commit: true
+    save_environment: true
+    save_random_states: true
+    save_dataset_versions: true
+    create_reproduction_script: true

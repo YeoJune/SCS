@@ -1,0 +1,197 @@
+# Phase 1: Foundational Capability Verification
+# 기초 논리 연산 검증 실험 설정
+
+# 기본 모델 설정 상속
+defaults:
+  - base_model
+
+# 실험 메타데이터
+experiment:
+  name: "phase1_logic_ops"
+  phase: 1
+  description: "기초 논리 연산 능력 검증 (XOR, AND, OR, NOT)"
+  tags: ["foundational", "logic", "verification"]
+
+# Phase 1을 위한 경량화된 모델 설정
+model:
+  # 축소된 뇌 영역 (2개만 사용)
+  brain_regions:
+    PFC:
+      neurons_per_layer: [100, 160, 100, 120] # 기본 모델의 40%
+    ACC:
+      neurons_per_layer: [100, 160, 100, 120]
+    # IPL, MTL 비활성화
+    IPL:
+      enabled: false
+    MTL:
+      enabled: false
+
+  # 단순화된 연결성
+  connectivity:
+    axonal:
+      connection_probability: 0.05 # 기본 모델의 50%
+      multi_scale_grids:
+        fine:
+          modules: 4 # 8 -> 4
+          spacing: 2
+          weight: 0.3
+        # medium, coarse 비활성화
+        medium:
+          enabled: false
+        coarse:
+          enabled: false
+
+# 태스크 설정
+task:
+  name: "logical_operations"
+  type: "classification"
+
+  # 논리 연산 태스크들
+  operations:
+    - name: "XOR"
+      input_bits: 2
+      target_accuracy: 0.95
+    - name: "AND"
+      input_bits: 2
+      target_accuracy: 0.98
+    - name: "OR"
+      input_bits: 2
+      target_accuracy: 0.98
+    - name: "NOT"
+      input_bits: 1
+      target_accuracy: 0.99
+    - name: "3BIT_XOR" # 도전 과제
+      input_bits: 3
+      target_accuracy: 0.90
+
+  # 데이터 생성 설정
+  data_generation:
+    num_samples_per_op: 1000
+    train_split: 0.8
+    val_split: 0.1
+    test_split: 0.1
+    random_seed: 42
+
+  # 시퀀스 설정 (시간적 처리)
+  sequence:
+    max_length: 10 # 짧은 시퀀스
+    clk_per_input: 5 # 입력당 CLK 수
+
+# 학습 설정
+training:
+  # 기본 하이퍼파라미터
+  batch_size: 32
+  max_epochs: 50
+  early_stopping_patience: 10
+
+  # 최적화
+  optimizer:
+    name: "AdamW"
+    lr: 2e-3 # 작은 모델이므로 높은 학습률
+    weight_decay: 1e-4
+    betas: [0.9, 0.999]
+
+  # 스케줄러
+  scheduler:
+    name: "CosineAnnealingLR"
+    T_max: 50
+    eta_min: 1e-5
+
+  # 정규화
+  regularization:
+    dropout: 0.1
+    spike_regularization: 1e-4 # 스파이크 활동 정규화
+
+  # 점진적 해동 (Progressive Unfreezing)
+  progressive_unfreezing:
+    enabled: true
+    stages:
+      - epochs: [0, 10]
+        frozen_components: ["axonal_connections", "internal_connections"]
+        active_components: ["io_nodes"]
+      - epochs: [10, 25]
+        frozen_components: ["axonal_connections"]
+        active_components: ["io_nodes", "internal_connections"]
+      - epochs: [25, 50]
+        frozen_components: []
+        active_components:
+          ["io_nodes", "internal_connections", "axonal_connections"]
+
+# 평가 설정
+evaluation:
+  metrics:
+    - "accuracy"
+    - "precision"
+    - "recall"
+    - "f1_score"
+    - "spike_rate" # 스파이킹 특화 메트릭
+    - "convergence_time" # 수렴 시간
+
+  # 성공 기준
+  success_criteria:
+    min_accuracy: 0.90
+    max_convergence_time: 100 # CLK
+    min_spike_efficiency: 0.1 # 스파이크 효율성
+
+# 로깅 및 모니터링
+logging:
+  wandb:
+    enabled: true
+    project: "SCS_Phase1"
+    entity: "your_team"
+    tags: ["phase1", "logic_ops", "foundational"]
+
+  tensorboard:
+    enabled: true
+    log_dir: "experiments/phase1_logic_ops/tensorboard"
+
+  # 로그 레벨 및 빈도
+  log_level: "INFO"
+  log_frequency:
+    train: 10 # 매 10 batch
+    val: 1 # 매 epoch
+
+# 분석 설정
+analysis:
+  # 내부 동역학 분석
+  dynamics_analysis:
+    enabled: true
+    save_spike_patterns: true
+    save_membrane_potentials: true
+    analysis_frequency: 5 # 매 5 epoch
+
+  # 표상 분석
+  representation_analysis:
+    enabled: true
+    methods: ["pca", "umap"]
+    save_embeddings: true
+
+  # Ablation Study
+  ablation_study:
+    enabled: true
+    components_to_ablate:
+      - "PFC_module"
+      - "ACC_module"
+      - "internal_connections"
+      - "adaptive_refractory"
+
+# 실험 출력 설정
+output:
+  save_model: true
+  save_frequency: 5 # 매 5 epoch
+  save_best_only: true
+
+  # 결과 시각화
+  visualization:
+    enabled: true
+    plots:
+      - "training_curves"
+      - "spike_raster"
+      - "weight_evolution"
+      - "convergence_analysis"
+
+  # 실험 재현성
+  reproducibility:
+    save_config: true
+    save_git_commit: true
+    save_environment: true

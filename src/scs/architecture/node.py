@@ -1,184 +1,332 @@
-"""스파이킹 뉴런 노드 구현"""
+# src/scs/architecture/node.py
+"""
+스파이킹 뉴런 노드 구현
+"""
 
 import torch
 import torch.nn as nn
 from typing import Tuple, Optional, Dict, Any
 import math
 
-from ..config import SpikeNodeConfig, Constants
-from ..common import SurrogateGradients, MembraneUtils, ValidationUtils, clamp_tensor
-
 
 class SpikeNode(nn.Module):
-    """스파이킹 뉴런 노드"""
+    """
+    스파이킹 뉴런 노드 (2차원 격자, 순차적 시간 진화)
     
-    def __init__(self, num_neurons: int, config: Optional[SpikeNodeConfig] = None, device: str = "cuda"):
+    문서 명세에 따른 구현:
+    - 막전위: V_i(t) ∈ ℝ^(H×W)
+    - 스파이크 출력: s_i(t) ∈ {0,1}^(H×W)  
+    - 휴지기: R_i(t) ∈ ℕ_0^(H×W)
+    - 시간적 의존성: V_i(t+1) = f(V_i(t), ...)
+    """
+    
+    def __init__(
+        self,
+        grid_height: int,
+        grid_width: int,
+        decay_rate: float = 0.9,
+        spike_threshold: float = 0.0,
+        refractory_base: int = 3,
+        refractory_adaptive_factor: float = 10.0,
+        surrogate_beta: float = 10.0,
+        device: str = "cuda"
+    ):
         super().__init__()
-        self.num_neurons = num_neurons
-        self.config = config or SpikeNodeConfig()
+        
+        self.grid_height = grid_height
+        self.grid_width = grid_width
+        self.decay_rate = decay_rate
+        self.spike_threshold = spike_threshold
+        self.refractory_base = refractory_base
+        self.refractory_adaptive_factor = refractory_adaptive_factor
+        self.surrogate_beta = surrogate_beta
         self.device = device
-        self._init_state()
         
-    def _init_state(self):
-        self.membrane_potential = torch.zeros(self.num_neurons, device=self.device)
-        self.refractory_counter = torch.zeros(self.num_neurons, dtype=torch.int, device=self.device)
-        self.spike_history = []
+        # 상태 초기화
+        self.reset_state()
         
-    def forward(self, external_input: torch.Tensor, internal_input: Optional[torch.Tensor] = None, 
-                axonal_input: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
-        """뉴런 업데이트"""
-        if external_input.dim() == 1:
-            external_input = external_input.unsqueeze(0)
-        batch_size = external_input.shape[0]
+    def reset_state(self):
+        """2차원 격자 상태 초기화"""
+        self.membrane_potential = torch.zeros(
+            self.grid_height, self.grid_width, device=self.device
+        )
+        self.refractory_counter = torch.zeros(
+            self.grid_height, self.grid_width, dtype=torch.int, device=self.device
+        )
         
-        if self.membrane_potential.dim() == 1:
-            self.membrane_potential = self.membrane_potential.unsqueeze(0).expand(batch_size, -1)
-            self.refractory_counter = self.refractory_counter.unsqueeze(0).expand(batch_size, -1)
+    def forward(
+        self,
+        external_input: Optional[torch.Tensor] = None,  # [H, W] or None
+        internal_input: Optional[torch.Tensor] = None,  # [H, W] or None
+        axonal_input: Optional[torch.Tensor] = None     # [H, W] or None
+    ) -> Tuple[torch.Tensor, Dict[str, Any]]:
+        """
+        한 시간 스텝(CLK)에서의 뉴런 상태 업데이트 및 스파이크 생성
         
+        문서 명세 구현:
+        V_i(t+1) = λ * (V_i(t) + I_ext,i(t) + I_internal,i(t) + I_axon,i(t))
+        s_i(t) = H(V_i(t) - θ) * 1[R_i(t) = 0]
+        
+        Args:
+            external_input: 외부 입력 [H, W] (첫 CLK에만 있음)
+            internal_input: 내부 입력 [H, W]  
+            axonal_input: 축삭 입력 [H, W]
+            
+        Returns:
+            spikes: 스파이크 출력 [H, W]
+            states: 상태 정보 딕셔너리
+        """
+        # 1. 총 입력 계산 (벡터화)
         total_input = self._integrate_inputs(external_input, internal_input, axonal_input)
+        
+        # 2. 막전위 업데이트 (벡터화)
         self.membrane_potential = self._update_membrane_potential(total_input)
+        
+        # 3. 스파이크 생성 (벡터화)
         spikes = self._generate_spikes()
+        
+        # 4. 스파이크 후 처리 (벡터화)
         self._post_spike_update(spikes)
-        states = self._collect_states(spikes)
         
-        return spikes.squeeze(0) if batch_size == 1 else spikes, states
+        # 5. 기본 상태 반환
+        states = self._get_basic_states(spikes)
+        
+        return spikes, states
     
-    def _integrate_inputs(self, external: torch.Tensor, internal: Optional[torch.Tensor] = None,
-                         axonal: Optional[torch.Tensor] = None) -> torch.Tensor:
-        total_input = external
+    def _integrate_inputs(
+        self,
+        external: Optional[torch.Tensor] = None,
+        internal: Optional[torch.Tensor] = None,
+        axonal: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        """
+        입력 신호 통합 (2차원 격자)
         
+        원본: I_total = I_ext + I_internal + I_axon
+        벡터화: 2차원 격자에서 element-wise 덧셈
+        """
+        # 기본값은 0 입력
+        total_input = torch.zeros(self.grid_height, self.grid_width, device=self.device)
+        
+        # 각 입력이 있는 경우에만 추가 (벡터화)
+        if external is not None:
+            total_input = total_input + external
+            
         if internal is not None:
-            if internal.dim() == 1:
-                internal = internal.unsqueeze(0).expand_as(external)
             total_input = total_input + internal
             
         if axonal is not None:
-            if axonal.dim() == 1:
-                axonal = axonal.unsqueeze(0).expand_as(external)
             total_input = total_input + axonal
             
         return total_input
     
     def _update_membrane_potential(self, total_input: torch.Tensor) -> torch.Tensor:
+        """
+        막전위 업데이트 (2차원 격자)
+        
+        원본: V_i(t+1) = λ * (V_i(t) + I_total(t)) * (1 if R_i(t) = 0 else 0)
+        벡터화: 2차원 격자 전체에 element-wise 연산
+        """
+        # 휴지기가 아닌 뉴런 마스크 (벡터화)
         not_refractory = (self.refractory_counter == 0).float()
-        new_potential = MembraneUtils.apply_decay(self.membrane_potential, self.config.decay_rate)
-        new_potential = new_potential + total_input * not_refractory
-        new_potential = clamp_tensor(new_potential, -10.0, 10.0)
-        return new_potential
+        
+        # 막전위 업데이트 (벡터화: 문서 명세)
+        new_potential = self.decay_rate * (
+            self.membrane_potential + total_input * not_refractory
+        )
+        
+        # 수치 안정성을 위한 클램핑 (벡터화)
+        return torch.clamp(new_potential, -10.0, 10.0)
     
     def _generate_spikes(self) -> torch.Tensor:
-        threshold_exceeded = self.membrane_potential - self.config.spike_threshold
+        """
+        스파이크 생성 (2차원 격자, Surrogate gradient 포함)
+        
+        원본: s_i(t) = H(V_i(t) - θ) * 1[R_i(t) = 0]
+        벡터화: 2차원 격자 전체에 동시 임계값 비교
+        """
+        # 임계값 초과 계산 (벡터화)
+        threshold_exceeded = self.membrane_potential - self.spike_threshold
+        
+        # 휴지기가 아닌 뉴런 마스크 (벡터화)
         not_refractory = (self.refractory_counter == 0).float()
-        spikes = SurrogateGradients.sigmoid(threshold_exceeded, self.config.surrogate_beta)
-        spikes = spikes * not_refractory
-        return spikes
+        
+        # Surrogate gradient 적용 (벡터화)
+        spikes = self._surrogate_spike_function(threshold_exceeded)
+        
+        # 휴지기 마스크 적용 (벡터화: 2차원 element-wise 곱셈)
+        return spikes * not_refractory
+    
+    def _surrogate_spike_function(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Surrogate Gradient 기반 스파이크 함수 (2차원 격자)
+        
+        원본: Forward: H(x), Backward: β * σ(βx) * (1 - σ(βx))
+        벡터화: 2차원 격자 전체에 동시 계산
+        """
+        # Forward: Heaviside function (벡터화)
+        spikes = (x > 0).float()
+        
+        # Backward: Sigmoid surrogate (벡터화)
+        sigmoid_val = torch.sigmoid(self.surrogate_beta * x)
+        surrogate_grad = self.surrogate_beta * sigmoid_val * (1 - sigmoid_val)
+        
+        # Straight-through estimator (벡터화)
+        return spikes + surrogate_grad - surrogate_grad.detach()
     
     def _post_spike_update(self, spikes: torch.Tensor):
+        """
+        스파이크 후 처리 (2차원 격자)
+        
+        원본: V_reset = 0 if spike else V_current
+        벡터화: 2차원 격자 전체에 마스크 적용
+        """
+        # 스파이크 발생 시 막전위 리셋 (벡터화: 2차원 element-wise)
         self.membrane_potential = self.membrane_potential * (1.0 - spikes)
+        
+        # 휴지기 업데이트 (벡터화)
         self._update_refractory(spikes)
     
     def _update_refractory(self, spikes: torch.Tensor):
-        self.refractory_counter = torch.maximum(
-            self.refractory_counter - 1,
-            torch.zeros_like(self.refractory_counter)
-        )
+        """
+        적응형 휴지기 업데이트 (2차원 격자)
         
-        new_refractory = self.config.refractory_base
-        spike_mask = (spikes > 0.5).int()
-        self.refractory_counter = self.refractory_counter + spike_mask * new_refractory
+        원본: R_adaptive = R_base + ⌊α * <s(t)>⌋
+        벡터화: 2차원 격자 전체에 동시 계산
+        """
+        # 기존 휴지기 감소 (벡터화)
+        self.refractory_counter = torch.clamp(self.refractory_counter - 1, min=0)
+        
+        # 스파이크 발생 마스크 (벡터화)
+        spike_mask = (spikes > 0.5)
+        
+        # 적응형 휴지기 계산 (벡터화: 전체 격자 평균)
+        recent_spike_rate = spikes.mean()  # 스칼라 값
+        adaptive_refractory = self.refractory_base + torch.floor(
+            self.refractory_adaptive_factor * recent_spike_rate
+        ).int()
+        
+        # 새로운 휴지기 설정 (벡터화: 조건부 업데이트)
+        self.refractory_counter = torch.where(
+            spike_mask, 
+            adaptive_refractory, 
+            self.refractory_counter
+        )
     
-    def _collect_states(self, spikes: torch.Tensor) -> Dict[str, torch.Tensor]:
-        states = {
-            'membrane_potential': self.membrane_potential.clone().detach(),
-            'spikes': spikes.detach(),
-            'refractory_counter': self.refractory_counter.clone().detach(),
+    def _get_basic_states(self, spikes: torch.Tensor) -> Dict[str, Any]:
+        """
+        기본 상태 정보 반환 (2차원 격자)
+        
+        벡터화: 2차원 격자 전체에 대한 통계를 한번에 계산
+        """
+        return {
+            'membrane_potential': self.membrane_potential.clone(),
+            'spikes': spikes.clone(),
+            'refractory_counter': self.refractory_counter.clone(),
             'spike_rate': spikes.mean().item(),
             'active_neurons': (spikes > 0.5).sum().item(),
             'avg_membrane': self.membrane_potential.mean().item()
         }
-        
-        if not ValidationUtils.check_tensor_health(self.membrane_potential, "membrane_potential"):
-            self._handle_unhealthy_state()
-        
-        return states
-    
-    def _handle_unhealthy_state(self):
-        print("Warning: Unhealthy spike node state detected. Resetting...")
-        self._init_state()
-    
-    def reset_state(self):
-        self._init_state()
-    
-    def get_spike_statistics(self, window_size: int = 100) -> Dict[str, float]:
-        if len(self.spike_history) < window_size:
-            return {"insufficient_data": True}
-        
-        recent_spikes = torch.stack(self.spike_history[-window_size:])
-        return ValidationUtils.spike_rate_analysis(recent_spikes, window_size)
 
 
 class LocalConnectivity(nn.Module):
-    """로컬 연결성 모듈"""
+    """
+    지역적 연결성 모듈 (2차원 격자 Roll 연산 최적화)
     
-    def __init__(self, num_neurons: int, distance_tau: float = 20.0, 
-                 max_distance: float = Constants.MAX_CONNECTION_DISTANCE,
-                 connection_prob: float = 0.1, device: str = "cuda"):
+    문서 명세에 따른 구현:
+    I_internal(t) = Σ_{d=1}^5 w_d * [roll(s(t), d) + roll(s(t), -d)]
+    """
+    
+    def __init__(
+        self,
+        grid_height: int,
+        grid_width: int,
+        distance_tau: float = 2.0,
+        max_distance: int = 5,
+        device: str = "cuda"
+    ):
         super().__init__()
-        self.num_neurons = num_neurons
+        
+        self.grid_height = grid_height
+        self.grid_width = grid_width
         self.distance_tau = distance_tau
         self.max_distance = max_distance
-        self.connection_prob = connection_prob
         self.device = device
-        self.positions = self._generate_positions()
-        self.connection_weights = self._generate_connections()
         
-    def _generate_positions(self) -> torch.Tensor:
-        grid_size = int(math.sqrt(self.num_neurons))
-        if grid_size * grid_size < self.num_neurons:
-            grid_size += 1
+        # 거리별 가중치 초기화
+        self._initialize_distance_weights()
         
-        positions = []
-        for i in range(self.num_neurons):
-            x = i % grid_size
-            y = i // grid_size
-            positions.append([float(x), float(y)])
+    def _initialize_distance_weights(self):
+        """
+        거리 기반 가중치 초기화
         
-        return torch.tensor(positions, device=self.device)
+        문서 명세: W_internal(i,j) = w_0 * exp(-|i-j|/τ) for |i-j| ≤ 5
+        벡터화: 모든 거리의 가중치를 한번에 계산
+        """
+        # 모든 거리에 대한 가중치 계산 (벡터화)
+        distances = torch.arange(1, self.max_distance + 1, device=self.device).float()
+        weights = torch.exp(-distances / self.distance_tau)
+        
+        # 학습 가능한 파라미터로 등록
+        self.distance_weights = nn.Parameter(weights)
+        
+    def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:
+        """
+        2차원 격자에서 Roll 연산 기반 지역적 연결 처리
+        
+        원본: I_internal(t) = Σ_{d=1}^5 w_d * [neighbors at distance d]
+        벡터화: 모든 거리와 방향을 동시 처리
+        
+        Args:
+            grid_spikes: 2차원 격자 스파이크 [H, W]
+            
+        Returns:
+            연결된 신호 [H, W]
+        """
+        # 모든 거리의 이웃 기여도를 한번에 계산 (벡터화)
+        neighbor_contributions = []
+        for distance in range(1, self.max_distance + 1):
+            neighbors = self._get_neighbors_at_distance(grid_spikes, distance)
+            neighbor_contributions.append(neighbors)
+        
+        # 모든 거리별 기여도를 스택으로 쌓기 (벡터화)
+        if neighbor_contributions:
+            all_neighbors = torch.stack(neighbor_contributions, dim=0)  # [max_distance, H, W]
+            
+            # 가중치를 브로드캐스팅으로 적용 (벡터화)
+            weights = self.distance_weights.view(-1, 1, 1)  # [max_distance, 1, 1]
+            weighted_neighbors = all_neighbors * weights  # 브로드캐스팅
+            
+            # 모든 거리의 기여도 합산 (벡터화)
+            total_input = weighted_neighbors.sum(dim=0)  # [H, W]
+        else:
+            total_input = torch.zeros_like(grid_spikes)
+        
+        return total_input
     
-    def _generate_connections(self) -> nn.Parameter:
-        from ..common import ConnectionUtils
+    def _get_neighbors_at_distance(self, grid_spikes: torch.Tensor, distance: int) -> torch.Tensor:
+        """
+        특정 거리의 모든 이웃 뉴런들의 기여도 계산 (2차원 Roll 연산)
         
-        distance_weights = ConnectionUtils.distance_based_weights(
-            self.positions, self.positions, self.distance_tau, self.max_distance
-        )
+        원본: 각 뉴런마다 개별적으로 거리 계산 및 이웃 탐색 O(N²)
+        벡터화: 2차원 Roll 연산으로 모든 방향 동시 처리 O(1)
+        """
+        # 해당 거리의 모든 방향 벡터 미리 계산 (벡터화)
+        shifts = []
+        for dx in range(-distance, distance + 1):
+            for dy in range(-distance, distance + 1):
+                if abs(dx) + abs(dy) == distance:  # 맨하탄 거리
+                    shifts.append((dx, dy))
         
-        connection_mask = ConnectionUtils.sparse_random_connections(
-            self.num_neurons, self.num_neurons, self.connection_prob, self.device
-        )
+        if not shifts:
+            return torch.zeros_like(grid_spikes)
         
-        weights = distance_weights * connection_mask.float()
-        weights.fill_diagonal_(0.0)
+        # 모든 방향의 이웃들을 한번에 수집 (벡터화)
+        neighbors_sum = torch.zeros_like(grid_spikes)
+        for dx, dy in shifts:
+            # 2차원 Roll 연산으로 이웃 위치의 스파이크 가져오기
+            shifted = torch.roll(grid_spikes, shifts=dx, dims=0)  # height 방향
+            shifted = torch.roll(shifted, shifts=dy, dims=1)     # width 방향
+            neighbors_sum += shifted
         
-        return nn.Parameter(weights)
-    
-    def forward(self, spike_inputs: torch.Tensor) -> torch.Tensor:
-        connected_signals = torch.matmul(spike_inputs, self.connection_weights.T)
-        return connected_signals
-    
-    def update_plasticity(self, pre_spikes: torch.Tensor, post_spikes: torch.Tensor, learning_rate: float = 0.01):
-        delta_w = learning_rate * torch.outer(pre_spikes.mean(0), post_spikes.mean(0))
-        
-        with torch.no_grad():
-            self.connection_weights += delta_w
-            self.connection_weights.clamp_(*Constants.CONNECTION_STRENGTH_RANGE)
-            self.connection_weights.fill_diagonal_(0.0)
-    
-    def get_connection_statistics(self) -> Dict[str, float]:
-        weights = self.connection_weights.detach()
-        
-        return {
-            "num_connections": (weights > 0).sum().item(),
-            "avg_weight": weights[weights > 0].mean().item() if (weights > 0).any() else 0.0,
-            "max_weight": weights.max().item(),
-            "connection_density": (weights > 0).float().mean().item()
-        }
+        return neighbors_sum

@@ -18,7 +18,7 @@ SCS는 스파이킹 뉴럴 네트워크 기반의 인지 아키텍처입니다.
 ### Installation
 
 ```bash
-git clone https://github.com/[your-username]/SCS.git
+git clone https://github.com/YeoJune/SCS.git
 cd SCS
 pip install -e .
 ```
@@ -108,9 +108,9 @@ python run.py --mode analyze --type representation --experiment experiments/your
 ```bibtex
 @article{scs2025,
   title={Spike-Based Cognitive System: 의미론적 연산을 위한 뇌 모방 동적 컴퓨팅 아키텍처},
-  author={[Your Name]},
-  journal={[Journal Name]},
-  year={2025}
+  author={Yeo Joon},
+  journal={NOT YET},
+  year={NOT YET}
 }
 ```
 
@@ -122,4 +122,4 @@ python run.py --mode analyze --type representation --experiment experiments/your
 
 ---
 
-**Contact**: [your.email@domain.com]
+**Contact**: [joyyoj1@naver.com]

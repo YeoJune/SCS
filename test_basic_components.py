@@ -101,7 +101,7 @@ def test_input_output_nodes():
     print("\n=== InputNode & OutputNode 테스트 ===")
     
     try:
-        from src.scs.architecture.io import InputNode, OutputNode
+        from SCS.src.scs.architecture.io_node import InputNode, OutputNode
         
         # 더미 토크나이저 클래스
         class DummyTokenizer:

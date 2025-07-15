@@ -1,152 +1,101 @@
-# SCS Base Model Configuration
-# 모든 실험이 공유하는 기본 모델 구조 파라미터
+# configs/base_model.yaml
+# SCS 기본 모델 설정
 
-model:
-  name: "SCS"
-  version: "1.0"
+# 시스템 설정
+system:
+  device: "auto" # auto, cuda, cpu, mps
+  precision: "float32"
+  random_seed: 42
 
-  # 시스템 전역 파라미터
-  system:
-    clock_frequency: 1000 # Hz
-    spike_threshold: 0.0
-    surrogate_beta: 10.0
+# 뇌 영역별 설정
+brain_regions:
+  PFC:
+    total_neurons: 512
+    decay_rate: 0.95 # 긴 지속성 (작업 기억)
+    distance_tau: 1.5 # 빠른 감쇠
+    neurons_per_layer: [128, 205, 128, 51] # L1(25%), L2/3(40%), L4(25%), L5/6(10%) 비율
 
-  # 뇌 영역별 설정 (4개 주요 영역)
-  brain_regions:
-    PFC: # Prefrontal Cortex
-      decay_rate: 0.95
-      distance_tau: 1.5
-      neurons_per_layer: [250, 400, 250, 300] # L1, L2/3, L4, L5/6
-      function: "working_memory_reasoning"
+  ACC:
+    total_neurons: 256
+    decay_rate: 0.88 # 빠른 반응 (갈등 감지)
+    distance_tau: 2.0
+    neurons_per_layer: [64, 102, 64, 26]
 
-    ACC: # Anterior Cingulate Cortex
-      decay_rate: 0.88
-      distance_tau: 2.0
-      neurons_per_layer: [250, 400, 250, 300]
-      function: "conflict_detection"
+  IPL:
+    total_neurons: 384
+    decay_rate: 0.92 # 중간 지속성 (관계 연합)
+    distance_tau: 2.5
+    neurons_per_layer: [96, 154, 96, 38]
 
-    IPL: # Inferior Parietal Lobule
-      decay_rate: 0.92
-      distance_tau: 2.5
-      neurons_per_layer: [250, 400, 250, 300]
-      function: "relational_binding"
+  MTL:
+    total_neurons: 256
+    decay_rate: 0.97 # 장기 기억
+    distance_tau: 3.0 # 넓은 연결
+    neurons_per_layer: [64, 102, 64, 26]
 
-    MTL: # Medial Temporal Lobe
-      decay_rate: 0.97
-      distance_tau: 3.0
-      neurons_per_layer: [250, 400, 250, 300]
-      function: "semantic_memory"
+# 스파이크 동역학 설정
+spike_dynamics:
+  threshold: 0.0
+  refractory_base: 3
+  refractory_adaptive_factor: 10.0
+  surrogate_beta: 10.0
 
-  # 연결성 구조
-  connectivity:
-    # 내부 연결 (지역적 간섭)
-    internal:
-      max_distance: 5
-      weight_scale: 1.0
-      excitatory_ratio: 0.8
+# 연결성 설정
+connectivity:
+  # 지역적 연결 (Roll 연산)
+  local:
+    max_distance: 5
+    connection_prob: 0.1
 
-    # 축삭 연결 (원거리 간섭)
-    axonal:
-      connection_probability: 0.1
-      multi_scale_grids:
-        fine:
-          modules: 8
-          spacing: 2
-          weight: 0.5
-        medium:
-          modules: 4
-          spacing: 3
-          weight: 0.3
-        coarse:
-          modules: 2
-          spacing: 5
-          weight: 0.2
+  # 축삭 연결 (모듈 간)
+  axonal:
+    connection_prob: 0.1
+    excitatory_ratio: 0.8 # 80% 흥분성, 20% 억제성
 
-  # 입출력 시스템
-  io_system:
-    input_node:
-      embedding_dim: 512
-      attention_heads: 8
-      max_tokens: 512
+    # Multi-scale Grid 연결
+    multi_scale_grids:
+      fine:
+        modules: 8
+        spacing: 2
+        weight: 0.5
+      medium:
+        modules: 4
+        spacing: 3
+        weight: 0.3
+      coarse:
+        modules: 2
+        spacing: 5
+        weight: 0.2
 
-    output_node:
-      vocab_size: 30000
-      attention_heads: 8
-      confidence_threshold: 0.7
+# 입출력 시스템
+io_system:
+  vocab_size: 50000
+  embedding_dim: 512
+  num_slots: 512
+  attention_heads: 8
+  confidence_threshold: 0.7
 
-    # 적응적 출력 타이밍
-    output_timing:
-      min_processing_clk: 50 # 50ms
-      max_processing_clk: 500 # 500ms
-      convergence_threshold: 0.1
+# 적응적 타이밍
+timing:
+  min_processing_clk: 50 # 50ms
+  max_processing_clk: 500 # 500ms
+  convergence_threshold: 0.1
+  confidence_threshold: 0.7
 
-  # 휴지기 메커니즘
-  refractory:
-    base_period: 3
-    adaptive_factor: 10.0
-
-# 학습 관련 설정
+# 학습 메커니즘
 learning:
-  # 계층적 학습 전략
-  strategies:
-    io_nodes: "backpropagation"
-    internal_connections: "surrogate_gradient"
-    axonal_connections: "k_hop_backprop"
-    stdp: "trace_based" # 기본 비활성화
+  # K-hop 제한 역전파
+  k_hop_limit: 2
 
-  # 학습률
-  learning_rates:
-    surrogate_gradient: 1e-3
-    k_hop_backprop: 1e-4
-    stdp: 1e-6 # 비활성화 상태
-
-  # K-hop 제한 설정
-  k_hop:
-    max_hops: 2
-
-  # 신경조절 파라미터
+  # 신경조절 신호
   neuromodulation:
     dopamine_sensitivity: 2.0
     acetylcholine_sensitivity: 3.0
     stdp_modulation_strength: 0.1
 
-  # STDP 설정 (선택적 활성화)
+  # STDP (기본 비활성화)
   stdp:
-    enabled: false # 기본 비활성화
-    trace_tau_pre: 20 # ms
-    trace_tau_post: 20 # ms
-    update_frequency: 10 # CLK 주기
-    max_weight_change: 0.001
-
-    # 영역별 파라미터
-    region_params:
-      PFC:
-        A_plus: 0.005
-        A_minus: 0.0075
-      ACC:
-        A_plus: 0.008
-        A_minus: 0.010
-      IPL:
-        A_plus: 0.006
-        A_minus: 0.009
-      MTL:
-        A_plus: 0.004
-        A_minus: 0.006
-
-# 하드웨어/성능 설정
-hardware:
-  device: "cuda" # cuda, cpu, mps
-  mixed_precision: true
-  compile_model: false # PyTorch 2.0 compile
-
-  # 메모리 최적화
-  memory:
-    gradient_checkpointing: false
-    pin_memory: true
-    num_workers: 4
-
-  # 벡터화 최적화
-  vectorization:
-    use_roll_operations: true
-    global_matrix_axonal: true
-    sparse_connections: true
+    enabled: false
+    tau_pos: 20.0 # ms
+    tau_neg: 20.0 # ms
+    learning_rate: 1e-6

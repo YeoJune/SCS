@@ -14,7 +14,7 @@ from .common import (
 
 from .architecture.node import SpikeNode, LocalConnectivity
 from .architecture.module import CognitiveModule
-from .architecture.io import InputNode, OutputNode, AdaptiveOutputTiming, BaseIONode
+from .architecture.io_node import InputNode, OutputNode, AdaptiveOutputTiming, BaseIONode
 from .architecture.system import SCS, AxonalConnections, InterferencePatternGenerator
 
 from .training.trainer import SCSTrainer, PlasticityManager, SurrogateGradient

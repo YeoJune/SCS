@@ -1,18 +1,22 @@
+# src/scs/architecture/__init__.py
 """
-아키텍처 모듈
+SCS 아키텍처 모듈
 
-SCS의 모든 구조적 구성요소들을 정의합니다.
+표준에 맞는 깔끔한 아키텍처 구성요소들
 """
 
-from .node import SpikeNode
-from .module import CognitiveModule
-from .system import SCSSystem
-from .io import InputNode, OutputNode
+from .node import SpikeNode, LocalConnectivity
+from .module import CognitiveModule  
+from .io_node import InputNode, OutputNode
+from .system import SCSSystem, AxonalConnections, MultiScaleGrid
 
 __all__ = [
     "SpikeNode",
+    "LocalConnectivity",
     "CognitiveModule",
-    "SCSSystem", 
-    "InputNode",
+    "InputNode", 
     "OutputNode",
+    "SCSSystem",
+    "AxonalConnections",
+    "MultiScaleGrid"
 ]

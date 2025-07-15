@@ -1,9 +1,4 @@
-"""
-단일 실행 진입점
-
-모든 SCS 작업을 위한 통합 인터페이스
-사용법: python run.py --mode [train|evaluate|analyze] --config <config_path>
-"""
+"""SCS 실행 진입점"""
 
 import argparse
 import sys
@@ -13,7 +8,6 @@ import yaml
 import logging
 from typing import Dict, Any, Optional
 
-# 프로젝트 루트를 Python path에 추가
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root / "src"))
 

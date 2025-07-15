@@ -63,6 +63,8 @@ $$W_{internal}(i,j) = w_0 \exp(-|i-j|/\tau) \quad \text{for } |i-j| \leq 5$$
 
 $$I_{axon}^{(target)}(t) = (A^{source \to target})^T \cdot [E \odot s^{source}(t) - 0.5 \cdot (1-E) \odot s^{source}(t)]$$
 
+**간섭의 창발적 특성**: 이 두 간섭의 동시 작동은 개별 구성요소의 합을 넘어서는 의미 처리 능력을 창발시킨다. 구체적으로, 이는 **개념 표상과 관계 결속 과정의 상호적이고 동시적인 재조정**을 의미한다. 예를 들어, '사과'라는 개념 표상은 '빨갛다'는 속성과 관계를 맺는 과정에서 더욱 명확해지고, 동시에 '빨갛다'는 표상 또한 '사과'와 결속되면서 그 의미가 구체화된다. 이러한 **지속적인 피드백 루프**는 각 층의 연산이 단방향으로 끝나는 기존 딥러닝 아키텍처에서는 나타나기 어려운 연산 방식이다.
+
 #### 원리 3: 기능적 특화 (Functional Specialization)
 
 무작위 네트워크가 아닌, 의미 처리에 필요한 기능적 편향을 가진 모듈 구조가 효율적이다. 각 모듈은 고유한 동역학적 특성으로 초기화된다.
@@ -76,11 +78,66 @@ $$I_{axon}^{(target)}(t) = (A^{source \to target})^T \cdot [E \odot s^{source}(t
 
 **중요한 점은 이것이 '설계 가설'이라는 것이다.** 이 기능 분화가 실제로 학습을 통해 창발하는지 여부는 실험적 검증이 필요한 핵심 연구 질문이다.
 
-## 3. Validation Plan
+### 2.2. 시스템 아키텍처 및 동작
+
+#### 전역 동기화 및 분산 처리
+
+SCS의 핵심은 CLK 신호에 맞춰 모든 뉴런이 동시에 상태를 업데이트한다는 점이다. 이 전역적 동기화는 전체 네트워크 상태의 일관성을 매 시간 단계마다 보장하며, 모든 뉴런이 동일한 시간적 맥락 아래에서 상호작용할 수 있게 한다.
+
+#### 정보 처리의 흐름
+
+1. **인코딩**: Input Node가 어텐션을 통해 토큰을 다수 뉴런의 동시 활성 스파이크 패턴으로 변환한다.
+2. **분산 처리**: 지역적/원거리 간섭이 일어나면서 네트워크는 스스로 안정적인 해석을 찾아간다.
+3. **적응적 출력**: 시스템 스스로 수렴을 판단하고 출력을 생성한다.
+4. **디코딩**: Output Node가 최종 안정화된 스파이크 패턴을 토큰 확률 분포로 변환한다.
+
+#### 계층적 학습 전략
+
+복잡한 동역학 시스템의 학습은 안정성(안정적인 지식 유지)과 가소성(새로운 지식 학습) 사이의 균형을 요구한다. SCS는 이 문제를 해결하기 위해, 각기 다른 시공간적 스케일에서 작동하는 계층적 학습 메커니즘을 채택한다:
+
+- **입출력 노드**: Backpropagation (시스템 전체의 안정적인 수렴 보장)
+- **내부 연결**: Surrogate gradient 기반 학습
+- **축삭 연결**: K-hop 제한 backpropagation + 신경조절 피드백 (국소적이고 맥락 의존적인 가소성 제공)
+
+**K-hop 제한 편미분 기반 신경조절**:
+
+$$\frac{\partial L}{\partial s_i} = \sum_{j \in \text{children}_2(i)} A_{ij} \cdot \frac{\partial L}{\partial s_j}$$
+
+**Trace-based STDP (선택적 활성화)**: 기본적으로 비활성화되어 있으며 실험적 목적으로만 활성화 가능하다.
+
+도파민 신호: $D_i(t) = \tanh\left(2.0 \cdot \frac{\partial L}{\partial s_i} \cdot \Delta s_i\right)$
+
+아세틸콜린 신호: $\text{ACh}_i(t) = \sigma\left(3.0 \cdot \left|\frac{\partial L}{\partial s_i}\right|\right)$
+
+## 3. Rationale and Related Works
+
+### 3.1. 동적 신경망과 동적 컴퓨팅 원리
+
+동적 신경망은 입력에 따라 구조나 연산을 적응적으로 조절하는 신경망으로, 계산 효율성 향상을 주목적으로 발전해왔다. Zhou et al. (2023)의 Spikformer는 스파이킹 자기주의 메커니즘을 통해 기존 트랜스포머의 softmax 연산을 제거하고 계산 복잡도를 감소시켰다. 이러한 접근법들은 생체 모방 동역학의 계산적 유효성을 입증하지만, 주로 계산 자원 최적화에 국한되어 있다.
+
+우리의 동적 컴퓨팅 원리는 단순한 효율성 향상을 넘어 동적 구조 변화를 통해 의미론적 처리 능력 자체를 향상시키고자 하는 점에서 차별화된다.
+
+### 3.2. 적응적 추론 구조와 다중 스케일 간섭
+
+Zhou et al. (2024)의 SELF-DISCOVER 프레임워크는 LLM이 39개 원자적 추론 모듈에서 태스크별로 적절한 모듈을 선택, 적응, 구현하는 3단계 과정을 통해 추론 구조를 동적으로 구성한다. 25개 추론 태스크에서 Chain-of-Thought 대비 평균 20-32% 성능 향상과 10-40배 계산량 감소를 달성했다.
+
+SELF-DISCOVER의 핵심 기여는 태스크별 최적 추론 구조의 존재를 실증적으로 입증한 것이다. 이는 우리의 다중 스케일 간섭 원리와 기본 가정을 공유한다. 그러나 SELF-DISCOVER는 태스크 수준에서의 일회성 구조 결정에 머무른다. 우리는 이를 확장하여 추론 과정 중 지속적인 구조 적응을 가능하게 한다.
+
+### 3.3. 신경생물학적 근거와 기능적 특화
+
+Benisty et al. (2024)의 연구는 우리의 기능적 특화 원리에 대한 강력한 신경생물학적 근거를 제공한다. wide-field mesoscopic calcium imaging을 사용하여 마우스 대뇌피질 전체의 자발적 행동 중 신경 활동을 관찰한 결과, 기능적 연결성의 빠른 변화(서브초 단위)가 행동을 인코딩한다는 것을 발견했다. 구체적으로, 인접 뉴런 간 상관관계(지역적)와 뇌 영역 간 상관관계(원거리) 모두가 행동 정보를 담고 있으며, 이러한 동적 연결성 변화가 정적 활성도 패턴보다 행동 예측에 더 유효하다는 점을 확인했다.
+
+이는 우리 SCS의 핵심 설계 원리를 직접적으로 뒷받침한다. SCS의 지역적 간섭과 원거리 간섭이 실제 뇌에서 관찰되는 메커니즘과 일치함을 의미한다.
+
+### 3.4. 그래프 신경망과의 관계
+
+SCS는 동적으로 변화하는 그래프 구조 위에서 정보를 처리한다는 점에서 GNN, 특히 동적 GNN과 개념적 유사성을 공유한다. 그러나 결정적인 차이가 있다. GNN은 일반적으로 사전에 정의되거나 명시적으로 추론된 그래프 구조 위에서 메시지 패싱을 수행한다. 반면, SCS는 **어떠한 명시적인 그래프 구조도 없이, 오직 뉴런 간의 시공간적 스파이크 상호작용 그 자체를 통해 기능적 연결성 그래프가 실시간으로 창발한다.** 이는 사전 정의된 관계에 의존하지 않는, 보다 유연하고 근본적인 정보 처리 방식을 가능하게 한다.
+
+## 4. Validation Plan
 
 우리의 핵심 가설을 체계적으로 검증하고 SCS의 능력을 입증하기 위해, 기초 연산 능력의 증명부터 고차원적 논리 추론까지 포괄하는 3단계 검증 계획을 제안한다.
 
-### 3.1. Phase 1: Foundational Capability Verification
+### 4.1. Phase 1: Foundational Capability Verification
 
 **목표**: 제안된 스파이크 동역학이 원리적으로 기본적인 논리 및 순차 연산을 구현할 수 있는지 증명한다.
 
@@ -93,7 +150,7 @@ $$I_{axon}^{(target)}(t) = (A^{source \to target})^T \cdot [E \odot s^{source}(t
 
 **성공 기준**: 목표 출력을 높은 정확도로 재현하여, SCS 동역학이 기본적인 비선형 연산 및 순차 처리를 위한 충분한 표현력을 가짐을 입증한다.
 
-### 3.2. Phase 2: Core Semantic Reasoning Validation
+### 4.2. Phase 2: Core Semantic Reasoning Validation
 
 **목표**: 완전한 SCS 아키텍처가 우리의 설계 철학에 명시된 핵심 의미론적 연산을 효과적으로 수행하는지 평가한다.
 
@@ -107,7 +164,7 @@ $$I_{axon}^{(target)}(t) = (A^{source \to target})^T \cdot [E \odot s^{source}(t
 
 **평가**: Transformer 및 SNN 베이스라인과의 정량적 성능 비교를 통해 SCS의 효과성(RQ1)을 평가한다.
 
-### 3.3. Phase 3: High-Level Reasoning via Pre-training and Fine-tuning
+### 4.3. Phase 3: High-Level Reasoning via Pre-training and Fine-tuning
 
 **목표**: SCS의 확장성과, 대규모 데이터로부터 일반적인 세계 지식을 학습한 후 복잡하고 새로운 문제에 적응하는 능력을 평가한다.
 
@@ -118,7 +175,15 @@ $$I_{axon}^{(target)}(t) = (A^{source \to target})^T \cdot [E \odot s^{source}(t
 1. Multi-hop Logical Reasoning (StrategyQA)
 2. Mathematical & Algorithmic Reasoning (AQuA-RAT, GSM8K)
 
-## 4. Conclusion and Future Work
+### 4.4. 가설 기반 분석 및 잠재적 결과 해석
+
+**가설 기반 분석**: 우리의 분석은 사전에 설정된 가설을 검증하는 데 초점을 맞출 것이다. 예를 들어, 우리는 PFC 모듈 제거가 Task 2의 성능을 다른 모듈 제거 시보다 유의미하게 더 저하시킬 것이라 예측한다.
+
+**잠재적 결과 해석**: 우리는 **가설과 모순되는 결과 또한 중요한 과학적 발견으로 간주할 것이다.** 예를 들어, 예상과 다른 모듈이 특정 기능에 결정적인 역할을 하는 것으로 밝혀진다면, 이는 제안된 아키텍처 내에서 뇌와는 다른 방식으로 기능 분화가 일어남을 시사하는 결과가 될 것이다. 이는 우리의 초기 '설계 가설'을 데이터 기반으로 수정하고, 지능의 구현에 대한 새로운 통찰을 제공할 기회이다.
+
+**분석 방법**: Ablation Study를 통해 각 모듈을 비활성화했을 때, 의도했던 기능과 관련된 태스크에서만 선택적인 성능 저하가 나타나는지를 확인함으로써, 모듈이 성공적으로 분화되었는지 검증한다(RQ2). Transfer Entropy와 표상 유사도 분석을 도입하여, 모델의 내적 동역학과 표상 공간을 심층 분석하고 해석 가능성을 확보할 것이다.
+
+## 5. Conclusion, Limitations, and Future Work
 
 본 연구는 정적 패턴 매칭의 한계를 넘어, 동적 의미론적 연산을 위한 새로운 인지 아키텍처 패러다임을 제시한다. SCS는 생물학적으로 타당한 원리를 바탕으로, 분산된 모듈 간의 상호작용을 통해 복잡한 추론이 창발하는 과정을 모델링한다.
 
@@ -131,6 +196,8 @@ $$I_{axon}^{(target)}(t) = (A^{source \to target})^T \cdot [E \odot s^{source}(t
 Benisty, H., Barson, D., Moberly, A. H., Lohani, S., Tang, L., Coifman, R. R., Crair, M. C., Mishne, G., Cardin, J. A., & Higley, M. J. (2024). Rapid fluctuations in functional connectivity of cortical networks encode spontaneous behavior. _Nature Neuroscience_, 27(1), 148-158.
 
 Dziri, N., Lu, X., Sclar, M., Li, X. L., Jian, L., Lin, B. Y., West, P., Bhagavatula, C., Bras, R. L., Hwang, J. D., Sanyal, S., Welleck, S., Ren, X., Ettinger, A., Harchaoui, Z., & Choi, Y. (2023). Faith and fate: Limits of transformers on compositionality. _Advances in Neural Information Processing Systems_, 36.
+
+Huang, G. (2024). Dynamic neural networks: Advantages and challenges. _National Science Review_, 11(8), nwae088.
 
 Zhou, P., Pujara, J., Ren, X., Chen, X., Cheng, H.-T., Le, Q. V., Chi, E. H., Zhou, D., Mishra, S., & Zheng, H. S. (2024). SELF-DISCOVER: Large language models self-compose reasoning structures. _Advances in Neural Information Processing Systems_, 37.
 

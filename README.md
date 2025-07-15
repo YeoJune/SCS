@@ -1,90 +1,62 @@
 # Spike-Based Cognitive System (SCS)
 
-**의미론적 연산을 위한 뇌 모방 동적 컴퓨팅 아키텍처**
+스파이킹 인지 시스템
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+## Overview
 
-## 🧠 Overview
-
-SCS(Spike-Based Cognitive System)는 기존 트랜스포머의 정적 패턴 매칭 한계를 극복하기 위해 설계된 혁신적인 스파이킹 인지 아키텍처입니다.
+SCS는 스파이킹 뉴럴 네트워크 기반의 인지 아키텍처입니다.
 
 ### 핵심 특징
 
-- **동적 컴퓨팅**: 시간에 따라 변화하는 스파이크 패턴 자체가 연산자 역할
-- **다중 스케일 간섭**: 지역적/원거리 신경 간섭을 통한 의미 처리
-- **기능적 특화**: PFC, ACC, IPL, MTL 모듈의 차별화된 동역학
-- **생물학적 타당성**: 실제 뇌의 층구조와 동기화 메커니즘 모방
+- 동적 스파이크 패턴 기반 연산
+- 다중 스케일 신경 간섭
+- PFC, ACC, IPL, MTL 모듈 특화
+- 생물학적 뇌 구조 모방
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Installation
 
-```bash
-# 레포지토리 클론
-git clone https://github.com/[your-username]/SCS.git
-cd SCS
-
-# 환경 설정 및 의존성 설치
-bash scripts/setup.sh
-
-# 또는 수동 설치
-pip install -e .
-```
+````
 
 ### 기본 실행
 
 ```bash
-# Phase 1: 기초 논리 연산 검증
-python run.py --mode train --config configs/phase1_logic_ops.yaml
+python run.py --mode train --config configs/basic.yaml
+python run.py --mode analyze --experiment experiments/run_01
+````
 
-# Phase 2: 의미론적 추론 검증
-python run.py --mode train --config configs/phase2_clutrr.yaml
-
-# 결과 분석
-python run.py --mode analyze --experiment experiments/clutrr_run_01
-```
-
-## 📁 Project Structure
+## 구조
 
 ```
 SCS/
-├── configs/          # 실험 설정 파일
-├── docs/            # 연구 문서
+├── configs/          # 설정 파일
+├── docs/            # 문서
 ├── experiments/     # 실험 결과
-├── scripts/         # 자동화 스크립트
-├── src/scs/         # 핵심 소스 코드
+├── src/scs/         # 소스 코드
 │   ├── architecture/ # 모델 구조
-│   ├── training/     # 학습 방법론
-│   └── data/        # 데이터 처리
-└── run.py           # 실행 진입점
+│   ├── training/     # 학습
+│   └── data/        # 데이터
+└── run.py           # 실행 파일
 ```
 
-## 🔬 Research Phases
+## 실험
 
-### Phase 1: Foundational Capability Verification
+### Phase 1: 기초 검증
 
-- 기초 논리 연산 (XOR, AND)
-- 순차 연산 (Sequence Copying/Reversal)
+- 논리 연산 (XOR, AND)
+- 순차 연산
 
-### Phase 2: Core Semantic Reasoning Validation
+### Phase 2: 의미 추론
 
-- 관계 결속 (PIQA, SocialIQA)
-- 구성적 추론 (CLUTRR, ProofWriter)
-- 갈등 해소 (HotpotQA)
+- 관계 추론 (CLUTRR)
+- 갈등 해소
 
-### Phase 3: High-Level Reasoning
+### Phase 3: 고급 추론
 
-- 다단계 논리 추론 (StrategyQA)
-- 수학적 추론 (AQuA-RAT, GSM8K)
-
-## 📊 Performance
-
-| Task   | SCS | Transformer | SNN Baseline |
-| ------ | --- | ----------- | ------------ |
-| CLUTRR | -   | -           | -            |
-| PIQA   | -   | -           | -            |
-| GSM8K  | -   | -           | -            |
+- 다단계 논리
+- 수학적 추론
+  | GSM8K | - | - | - |
 
 _결과는 실험 완료 후 업데이트됩니다._
 

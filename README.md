@@ -17,14 +17,18 @@ SCS는 스파이킹 뉴럴 네트워크 기반의 인지 아키텍처입니다.
 
 ### Installation
 
-````
+```bash
+git clone https://github.com/[your-username]/SCS.git
+cd SCS
+pip install -e .
+```
 
 ### 기본 실행
 
 ```bash
 python run.py --mode train --config configs/basic.yaml
 python run.py --mode analyze --experiment experiments/run_01
-````
+```
 
 ## 구조
 
@@ -56,7 +60,6 @@ SCS/
 
 - 다단계 논리
 - 수학적 추론
-  | GSM8K | - | - | - |
 
 _결과는 실험 완료 후 업데이트됩니다._
 

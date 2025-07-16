@@ -5,13 +5,13 @@ import yaml
 from pathlib import Path
 
 from src.scs import (
-    SCS, SCSTrainer, DataProcessor, create_scs_datasets,
-    setup_logger, load_config, set_random_seed, get_device
+    SCSSystem, SCSTrainer, DataProcessor, create_scs_datasets
 )
+from utils import setup_logging, load_config, set_random_seed, get_device
 
 
 def main():
-    logger = setup_logger("SCS_Example")
+    logger = setup_logging("SCS_Example")
     logger.info("SCS 기본 예제 시작")
     
     # 설정 로드
@@ -81,7 +81,7 @@ def main():
     train_size = config["data"]["train_samples"]
     val_size = config["data"]["val_samples"]
     
-    from src.scs.data.dataset import SCSDataset
+    from src.scs import SCSDataset
     
     train_dataset = SCSDataset(
         texts=dummy_texts[:train_size],
@@ -116,7 +116,7 @@ def main():
     # SCS 모델 초기화
     logger.info("SCS 모델 초기화 중...")
     
-    model = SCS(
+    model = SCSSystem(
         vocab_size=data_processor.get_vocab_size(),
         config=config["model"],
         device=device

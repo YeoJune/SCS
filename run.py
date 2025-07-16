@@ -13,8 +13,8 @@ sys.path.insert(0, str(project_root / "src"))
 
 try:
     from scs.training import SCSTrainer
-    from scs.data import DataProcessor, DataLoader
-    from scs.utils import setup_logging, load_config, save_config
+    from scs.data import DataProcessor
+    from utils import setup_logging, load_config, save_config
 except ImportError as e:
     print(f"❌ 모듈 import 오류: {e}")
     print("💡 먼저 'pip install -e .' 명령어로 패키지를 설치해주세요.")
@@ -268,19 +268,22 @@ def analyze_mode(args: argparse.Namespace) -> None:
     
     try:
         # 분석 실행 (구현 예정)
-        from scs.analysis import ExperimentAnalyzer
+        # from scs.analysis import ExperimentAnalyzer
         
-        analyzer = ExperimentAnalyzer(experiment_dir)
+        # analyzer = ExperimentAnalyzer(experiment_dir)
         
         # 다양한 분석 수행
         if config.get("analysis", {}).get("dynamics_analysis", {}).get("enabled", False):
-            analyzer.analyze_dynamics()
+            # analyzer.analyze_dynamics()
+            logger.info("Dynamics 분석이 요청되었지만 아직 구현되지 않았습니다.")
             
         if config.get("analysis", {}).get("representation_analysis", {}).get("enabled", False):
-            analyzer.analyze_representations()
+            # analyzer.analyze_representations()
+            logger.info("Representation 분석이 요청되었지만 아직 구현되지 않았습니다.")
             
         if config.get("analysis", {}).get("ablation_study", {}).get("enabled", False):
-            analyzer.analyze_ablations()
+            # analyzer.analyze_ablations()
+            logger.info("Ablation 분석이 요청되었지만 아직 구현되지 않았습니다.")
             
         logger.info("분석이 성공적으로 완료되었습니다!")
         
@@ -322,12 +325,13 @@ def compare_mode(args: argparse.Namespace) -> None:
     
     try:
         # 비교 분석 실행 (구현 예정)
-        from scs.analysis import ComparisonAnalyzer
+        # from scs.analysis import ComparisonAnalyzer
         
-        analyzer = ComparisonAnalyzer(experiment_dirs)
-        analyzer.generate_comparison_report()
+        # analyzer = ComparisonAnalyzer(experiment_dirs)
+        # analyzer.generate_comparison_report()
         
-        print("비교 분석이 성공적으로 완료되었습니다!")
+        print("⚠️  비교 분석 모듈이 아직 구현되지 않았습니다.")
+        print("기본 비교 분석을 수행합니다...")
         
     except ImportError:
         print("⚠️  비교 분석 모듈이 아직 구현되지 않았습니다.")

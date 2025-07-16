@@ -1,513 +1,417 @@
+# src/scs/training/trainer.py
 """
-SCS 학습 시스템
-
-Surrogate Gradient를 사용한 스파이킹 신경망 학습과 신경가소성을 구현합니다.
+SCS 학습 시스템 - 명세 기반 구현
 """
 
 import torch
 import torch.nn as nn
-import torch.optim as optim
 from torch.utils.data import DataLoader
 from typing import Dict, List, Optional, Tuple, Any, Callable
+from dataclasses import dataclass
 import logging
-import time
 from tqdm import tqdm
-import numpy as np
 
-from ..architecture.system import SCS
-from ..utils import setup_logger, save_checkpoint, load_checkpoint
+from ..architecture import SCSSystem
 
 
-class SurrogateGradient:
+@dataclass
+class TrainingConfig:
+    """학습 설정 구조체"""
+    # 기본 학습 설정
+    learning_rate: float = 1e-3
+    batch_size: int = 32
+    epochs: int = 100
+    gradient_clip_norm: float = 1.0
+    
+    # 점진적 해동 설정
+    freeze_epochs: int = 10  # 내부 노드 동결 기간
+    unfreeze_schedule: List[Tuple[int, List[str]]] = None  # [(epoch, node_names)]
+    
+    # 신경조절 설정
+    neuromodulation_weight: float = 0.1
+    dopamine_sensitivity: float = 2.0
+    acetylcholine_sensitivity: float = 3.0
+    
+    # 검증 설정
+    eval_every: int = 5
+    save_every: int = 10
+    early_stopping_patience: int = 20
+    
+    # 로깅 설정
+    log_every: int = 100
+    device: str = "cuda"
+
+
+class GradualUnfreezingScheduler:
     """
-    Surrogate Gradient 함수들
+    점진적 해동 스케줄러
     
-    스파이킹 뉴런의 불연속 활성화 함수를 미분 가능한 근사로 대체합니다.
-    """
-    
-    @staticmethod
-    def straight_through_estimator(spike: torch.Tensor, membrane_potential: torch.Tensor) -> torch.Tensor:
-        """Straight-Through Estimator"""
-        return spike.detach() + membrane_potential - membrane_potential.detach()
-    
-    @staticmethod
-    def sigmoid_surrogate(membrane_potential: torch.Tensor, slope: float = 10.0) -> torch.Tensor:
-        """시그모이드 기반 Surrogate Gradient"""
-        return torch.sigmoid(slope * membrane_potential)
-    
-    @staticmethod
-    def triangular_surrogate(membrane_potential: torch.Tensor, width: float = 1.0) -> torch.Tensor:
-        """삼각형 기반 Surrogate Gradient"""
-        return torch.maximum(
-            torch.zeros_like(membrane_potential),
-            1 - torch.abs(membrane_potential) / width
-        )
-    
-    @staticmethod
-    def exponential_surrogate(membrane_potential: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
-        """지수 기반 Surrogate Gradient"""
-        return beta * torch.exp(-beta * torch.abs(membrane_potential))
-
-
-class PlasticityManager:
-    """
-    신경가소성 관리자
-    
-    STDP, 신경조절, 항상성 등의 생물학적 학습 메커니즘을 구현합니다.
+    문서 명세: 초기에는 내부 노드들을 동결하고 입출력만 학습한 후,
+              단계적으로 해동하여 안정적 학습을 구현
     """
     
-    def __init__(
-        self,
-        stdp_enabled: bool = True,
-        homeostasis_enabled: bool = True,
-        neuromodulation_enabled: bool = True,
-        config: Dict[str, Any] = None
-    ):
-        """
-        Args:
-            stdp_enabled: STDP 활성화 여부
-            homeostasis_enabled: 항상성 활성화 여부  
-            neuromodulation_enabled: 신경조절 활성화 여부
-            config: 가소성 설정
-        """
-        self.stdp_enabled = stdp_enabled
-        self.homeostasis_enabled = homeostasis_enabled
-        self.neuromodulation_enabled = neuromodulation_enabled
+    def __init__(self, model: SCSSystem, config: TrainingConfig):
+        self.model = model
+        self.config = config
+        self.frozen_nodes = set()
         
-        self.config = config or {}
+        # 초기 동결 설정
+        self._freeze_internal_nodes()
         
-        # STDP 파라미터
-        self.stdp_lr_pos = self.config.get("stdp_lr_pos", 0.01)  # LTP 학습률
-        self.stdp_lr_neg = self.config.get("stdp_lr_neg", 0.005)  # LTD 학습률
-        self.stdp_tau_pos = self.config.get("stdp_tau_pos", 20.0)  # LTP 시상수
-        self.stdp_tau_neg = self.config.get("stdp_tau_neg", 20.0)  # LTD 시상수
+        # 해동 스케줄 설정
+        if config.unfreeze_schedule is None:
+            self._create_default_schedule()
+        else:
+            self.unfreeze_schedule = config.unfreeze_schedule
+    
+    def _freeze_internal_nodes(self):
+        """내부 노드들을 초기 동결"""
+        # 입출력 인터페이스는 항상 학습
+        for param in self.model.input_interface.parameters():
+            param.requires_grad = True
+        for param in self.model.output_interface.parameters():
+            param.requires_grad = True
         
-        # 항상성 파라미터
-        self.target_rate = self.config.get("target_spike_rate", 0.1)  # 목표 스파이크 발화율
-        self.homeostasis_lr = self.config.get("homeostasis_lr", 0.001)
+        # 내부 노드들 동결
+        for node_name, node in self.model.nodes.items():
+            for param in node.parameters():
+                param.requires_grad = False
+            self.frozen_nodes.add(node_name)
         
-        # 신경조절 파라미터
-        self.dopamine_factor = self.config.get("dopamine_factor", 1.0)
-        self.acetylcholine_factor = self.config.get("acetylcholine_factor", 1.0)
+        # 연결 시스템도 동결
+        for param in self.model.axonal_connections.parameters():
+            param.requires_grad = False
+        for param in self.model.multi_scale_grid.parameters():
+            param.requires_grad = False
+    
+    def _create_default_schedule(self):
+        """기본 해동 스케줄 생성"""
+        node_names = list(self.model.nodes.keys())
         
-        # 스파이크 기록 (STDP용)
-        self.spike_traces = {}
+        # 뇌 영역별로 그룹화 (PFC, ACC, IPL, MTL 순서)
+        brain_regions = ["PFC", "ACC", "IPL", "MTL"]
         
-    def apply_stdp(
-        self,
-        pre_spikes: torch.Tensor,
-        post_spikes: torch.Tensor,
-        weights: torch.Tensor,
-        dt: float = 1.0
-    ) -> torch.Tensor:
-        """
-        Spike-Timing Dependent Plasticity 적용
+        self.unfreeze_schedule = []
+        for i, region in enumerate(brain_regions):
+            epoch = self.config.freeze_epochs + i * 5
+            region_nodes = [name for name in node_names if region in name]
+            if region_nodes:
+                self.unfreeze_schedule.append((epoch, region_nodes))
         
-        Args:
-            pre_spikes: 시냅스 전 스파이크
-            post_spikes: 시냅스 후 스파이크
-            weights: 시냅스 가중치
-            dt: 시간 스텝
+        # 연결 시스템 마지막에 해동
+        final_epoch = self.config.freeze_epochs + len(brain_regions) * 5
+        self.unfreeze_schedule.append((final_epoch, ["connections"]))
+    
+    def step(self, current_epoch: int):
+        """에포크별 해동 처리"""
+        for epoch, components in self.unfreeze_schedule:
+            if current_epoch == epoch:
+                self._unfreeze_components(components)
+    
+    def _unfreeze_components(self, components: List[str]):
+        """지정된 구성요소들 해동"""
+        for component in components:
+            if component == "connections":
+                # 연결 시스템 해동
+                for param in self.model.axonal_connections.parameters():
+                    param.requires_grad = True
+                for param in self.model.multi_scale_grid.parameters():
+                    param.requires_grad = True
+                logging.info("연결 시스템 해동됨")
             
-        Returns:
-            업데이트된 가중치
-        """
-        if not self.stdp_enabled:
-            return weights
-        
-        # 스파이크 trace 계산
-        pre_trace = self._compute_spike_trace(pre_spikes, self.stdp_tau_pos, dt)
-        post_trace = self._compute_spike_trace(post_spikes, self.stdp_tau_neg, dt)
-        
-        # STDP 규칙 적용
-        # LTP: post-spike가 pre-trace와 상관관계
-        ltp = torch.outer(post_spikes, pre_trace) * self.stdp_lr_pos
-        
-        # LTD: pre-spike가 post-trace와 상관관계  
-        ltd = torch.outer(post_trace, pre_spikes) * self.stdp_lr_neg
-        
-        # 가중치 업데이트
-        weight_update = ltp - ltd
-        updated_weights = weights + weight_update
-        
-        # 가중치 범위 제한
-        updated_weights = torch.clamp(updated_weights, 0.0, 1.0)
-        
-        return updated_weights
+            elif component in self.model.nodes:
+                # 특정 노드 해동
+                for param in self.model.nodes[component].parameters():
+                    param.requires_grad = True
+                for param in self.model.local_connections[component].parameters():
+                    param.requires_grad = True
+                
+                self.frozen_nodes.discard(component)
+                logging.info(f"노드 {component} 해동됨")
     
-    def _compute_spike_trace(
-        self,
-        spikes: torch.Tensor,
-        tau: float,
-        dt: float
-    ) -> torch.Tensor:
-        """스파이크 trace 계산 (지수 감쇠)"""
-        decay_factor = torch.exp(-dt / tau)
-        
-        # 단순 구현: 현재 스파이크 + 이전 trace의 감쇠
-        # TODO: 실제 시간 스텝별 trace 유지
-        trace = spikes + decay_factor * spikes
-        return trace
-    
-    def apply_homeostasis(
-        self,
-        spike_rates: torch.Tensor,
-        thresholds: torch.Tensor
-    ) -> torch.Tensor:
-        """
-        항상성 메커니즘 적용
-        
-        목표 발화율을 유지하도록 임계값 조정
-        """
-        if not self.homeostasis_enabled:
-            return thresholds
-        
-        # 목표 발화율과의 차이 계산
-        rate_error = spike_rates - self.target_rate
-        
-        # 임계값 조정 (발화율이 높으면 임계값 증가)
-        threshold_update = self.homeostasis_lr * rate_error
-        updated_thresholds = thresholds + threshold_update
-        
-        # 임계값 범위 제한
-        updated_thresholds = torch.clamp(updated_thresholds, 0.1, 10.0)
-        
-        return updated_thresholds
-    
-    def apply_neuromodulation(
-        self,
-        learning_rate: float,
-        reward_signal: float,
-        attention_signal: float = 1.0
-    ) -> float:
-        """
-        신경조절 적용
-        
-        보상과 주의에 따른 학습률 조절
-        """
-        if not self.neuromodulation_enabled:
-            return learning_rate
-        
-        # 도파민 효과 (보상 신호)
-        dopamine_modulation = 1.0 + self.dopamine_factor * reward_signal
-        
-        # 아세틸콜린 효과 (주의 신호)
-        acetylcholine_modulation = self.acetylcholine_factor * attention_signal
-        
-        # 조절된 학습률
-        modulated_lr = learning_rate * dopamine_modulation * acetylcholine_modulation
-        
-        return max(modulated_lr, 0.0)  # 음수 방지
+    def get_frozen_status(self) -> Dict[str, bool]:
+        """현재 동결 상태 반환"""
+        return {
+            node_name: node_name in self.frozen_nodes
+            for node_name in self.model.nodes.keys()
+        }
 
 
 class SCSTrainer:
     """
-    SCS 모델 학습기
+    SCS 시스템 학습기
     
-    전체 학습 프로세스를 관리하고 다양한 최적화 기법을 적용합니다.
+    문서 명세 구현:
+    - 계층적 학습 전략
+    - 점진적 해동 학습
+    - 신경조절 피드백
+    - K-hop 제한 backpropagation
     """
     
     def __init__(
         self,
-        model: SCS,
-        config: Dict[str, Any],
-        device: str = "cuda"
+        model: SCSSystem,
+        config: TrainingConfig,
+        loss_fn: Callable,
+        optimizer: torch.optim.Optimizer,
+        scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None
     ):
-        """
-        Args:
-            model: SCS 모델
-            config: 학습 설정
-            device: 연산 장치
-        """
         self.model = model
         self.config = config
-        self.device = device
+        self.loss_fn = loss_fn
+        self.optimizer = optimizer
+        self.scheduler = scheduler
         
-        # 최적화기 설정
-        self.optimizer = self._setup_optimizer()
+        # 점진적 해동 스케줄러
+        self.unfreeze_scheduler = GradualUnfreezingScheduler(model, config)
         
-        # 손실 함수
-        self.criterion = nn.CrossEntropyLoss()
+        # 학습 상태
+        self.current_epoch = 0
+        self.global_step = 0
+        self.best_loss = float('inf')
+        self.patience_counter = 0
         
-        # 학습률 스케줄러
-        self.scheduler = self._setup_scheduler()
-        
-        # 가소성 관리자
-        self.plasticity_manager = PlasticityManager(
-            config=config.get("plasticity", {})
+        # 로깅 설정
+        self.setup_logging()
+    
+    def setup_logging(self):
+        """로깅 설정"""
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s'
         )
-        
-        # Surrogate Gradient 함수
-        self.surrogate_fn = getattr(
-            SurrogateGradient,
-            config.get("surrogate_function", "sigmoid_surrogate")
-        )
-        
-        # 로거 설정
-        self.logger = setup_logger("SCS_Trainer")
-        
-        # 학습 기록
-        self.training_history = {
-            "epoch": [],
-            "train_loss": [],
-            "train_accuracy": [],
-            "val_loss": [],
-            "val_accuracy": [],
-            "learning_rate": [],
-            "spike_activity": []
-        }
-        
-    def _setup_optimizer(self) -> optim.Optimizer:
-        """최적화기 설정"""
-        optimizer_name = self.config.get("optimizer", "adam")
-        learning_rate = self.config.get("learning_rate", 0.001)
-        weight_decay = self.config.get("weight_decay", 1e-5)
-        
-        if optimizer_name.lower() == "adam":
-            return optim.Adam(
-                self.model.parameters(),
-                lr=learning_rate,
-                weight_decay=weight_decay
-            )
-        elif optimizer_name.lower() == "sgd":
-            momentum = self.config.get("momentum", 0.9)
-            return optim.SGD(
-                self.model.parameters(),
-                lr=learning_rate,
-                momentum=momentum,
-                weight_decay=weight_decay
-            )
-        else:
-            raise ValueError(f"Unsupported optimizer: {optimizer_name}")
-    
-    def _setup_scheduler(self) -> Optional[optim.lr_scheduler._LRScheduler]:
-        """학습률 스케줄러 설정"""
-        scheduler_config = self.config.get("scheduler", None)
-        if not scheduler_config:
-            return None
-        
-        scheduler_type = scheduler_config.get("type", "step")
-        
-        if scheduler_type == "step":
-            return optim.lr_scheduler.StepLR(
-                self.optimizer,
-                step_size=scheduler_config.get("step_size", 10),
-                gamma=scheduler_config.get("gamma", 0.1)
-            )
-        elif scheduler_type == "cosine":
-            return optim.lr_scheduler.CosineAnnealingLR(
-                self.optimizer,
-                T_max=scheduler_config.get("T_max", 100)
-            )
-        else:
-            return None
-    
-    def train_epoch(
-        self,
-        train_loader: DataLoader,
-        epoch: int
-    ) -> Tuple[float, float, float]:
-        """
-        에포크 학습
-        
-        Args:
-            train_loader: 학습 데이터 로더
-            epoch: 현재 에포크
-            
-        Returns:
-            평균 손실, 정확도, 스파이크 활성도
-        """
-        self.model.train()
-        
-        total_loss = 0.0
-        total_correct = 0
-        total_samples = 0
-        total_spike_activity = 0.0
-        
-        progress_bar = tqdm(
-            train_loader,
-            desc=f"Epoch {epoch+1}",
-            leave=False
-        )
-        
-        for batch_idx, (input_ids, attention_mask, labels) in enumerate(progress_bar):
-            # 데이터 이동
-            input_ids = input_ids.to(self.device)
-            attention_mask = attention_mask.to(self.device) if attention_mask is not None else None
-            labels = labels.to(self.device)
-            
-            # 순전파
-            self.optimizer.zero_grad()
-            
-            outputs, processing_info = self.model(input_ids, attention_mask)
-            
-            # 손실 계산
-            loss = self.criterion(outputs, labels)
-            
-            # 역전파 (Surrogate Gradient 적용)
-            loss.backward()
-            
-            # 신경가소성 적용
-            self._apply_plasticity(processing_info)
-            
-            # 경사 클리핑
-            if self.config.get("gradient_clipping", False):
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(),
-                    self.config.get("max_grad_norm", 1.0)
-                )
-            
-            # 매개변수 업데이트
-            self.optimizer.step()
-            
-            # 통계 업데이트
-            total_loss += loss.item()
-            
-            # 정확도 계산
-            predictions = torch.argmax(outputs, dim=-1)
-            correct = (predictions == labels).sum().item()
-            total_correct += correct
-            total_samples += labels.size(0)
-            
-            # 스파이크 활성도 기록
-            spike_activity = processing_info.get("module_activity", {})
-            avg_activity = np.mean(list(spike_activity.values()))
-            total_spike_activity += avg_activity
-            
-            # 진행률 업데이트
-            current_accuracy = total_correct / total_samples
-            progress_bar.set_postfix({
-                "Loss": f"{total_loss/(batch_idx+1):.4f}",
-                "Acc": f"{current_accuracy:.4f}",
-                "Spikes": f"{avg_activity:.3f}"
-            })
-        
-        # 에포크 통계
-        avg_loss = total_loss / len(train_loader)
-        accuracy = total_correct / total_samples
-        avg_spike_activity = total_spike_activity / len(train_loader)
-        
-        return avg_loss, accuracy, avg_spike_activity
-    
-    def validate(
-        self,
-        val_loader: DataLoader
-    ) -> Tuple[float, float]:
-        """
-        검증
-        
-        Args:
-            val_loader: 검증 데이터 로더
-            
-        Returns:
-            평균 손실, 정확도
-        """
-        self.model.eval()
-        
-        total_loss = 0.0
-        total_correct = 0
-        total_samples = 0
-        
-        with torch.no_grad():
-            for input_ids, attention_mask, labels in val_loader:
-                # 데이터 이동
-                input_ids = input_ids.to(self.device)
-                attention_mask = attention_mask.to(self.device) if attention_mask is not None else None
-                labels = labels.to(self.device)
-                
-                # 순전파
-                outputs, _ = self.model(input_ids, attention_mask)
-                
-                # 손실 계산
-                loss = self.criterion(outputs, labels)
-                total_loss += loss.item()
-                
-                # 정확도 계산
-                predictions = torch.argmax(outputs, dim=-1)
-                correct = (predictions == labels).sum().item()
-                total_correct += correct
-                total_samples += labels.size(0)
-        
-        avg_loss = total_loss / len(val_loader)
-        accuracy = total_correct / total_samples
-        
-        return avg_loss, accuracy
-    
-    def _apply_plasticity(self, processing_info: Dict[str, Any]):
-        """신경가소성 메커니즘 적용"""
-        # TODO: 실제 STDP, 항상성 등 구현
-        # 현재는 기본 최적화기에 의존
-        pass
+        self.logger = logging.getLogger(__name__)
     
     def train(
         self,
         train_loader: DataLoader,
         val_loader: Optional[DataLoader] = None,
-        num_epochs: int = 10,
-        save_dir: str = "checkpoints"
-    ):
+        save_path: Optional[str] = None
+    ) -> Dict[str, List[float]]:
         """
-        전체 학습 프로세스
+        메인 학습 루프
         
         Args:
             train_loader: 학습 데이터 로더
-            val_loader: 검증 데이터 로더  
-            num_epochs: 학습 에포크 수
-            save_dir: 체크포인트 저장 디렉토리
+            val_loader: 검증 데이터 로더
+            save_path: 모델 저장 경로
+            
+        Returns:
+            학습 히스토리 딕셔너리
         """
-        self.logger.info(f"Starting training for {num_epochs} epochs")
+        history = {
+            'train_loss': [],
+            'val_loss': [],
+            'spike_rate': [],
+            'convergence_rate': []
+        }
         
-        best_val_accuracy = 0.0
+        self.logger.info(f"학습 시작: {self.config.epochs} 에포크")
         
-        for epoch in range(num_epochs):
-            start_time = time.time()
+        for epoch in range(self.config.epochs):
+            self.current_epoch = epoch
             
-            # 학습
-            train_loss, train_acc, spike_activity = self.train_epoch(train_loader, epoch)
+            # 점진적 해동
+            self.unfreeze_scheduler.step(epoch)
             
-            # 검증
-            val_loss, val_acc = 0.0, 0.0
-            if val_loader:
-                val_loss, val_acc = self.validate(val_loader)
+            # 학습 단계
+            train_metrics = self._train_epoch(train_loader)
+            history['train_loss'].append(train_metrics['loss'])
+            history['spike_rate'].append(train_metrics['spike_rate'])
+            history['convergence_rate'].append(train_metrics['convergence_rate'])
+            
+            # 검증 단계
+            if val_loader is not None and epoch % self.config.eval_every == 0:
+                val_metrics = self._validate_epoch(val_loader)
+                history['val_loss'].append(val_metrics['loss'])
+                
+                # 조기 종료 체크
+                if self._should_early_stop(val_metrics['loss']):
+                    self.logger.info(f"조기 종료: 에포크 {epoch}")
+                    break
             
             # 학습률 스케줄링
-            if self.scheduler:
+            if self.scheduler is not None:
                 self.scheduler.step()
             
-            # 기록 업데이트
-            self.training_history["epoch"].append(epoch + 1)
-            self.training_history["train_loss"].append(train_loss)
-            self.training_history["train_accuracy"].append(train_acc)
-            self.training_history["val_loss"].append(val_loss)
-            self.training_history["val_accuracy"].append(val_acc)
-            self.training_history["learning_rate"].append(self.optimizer.param_groups[0]["lr"])
-            self.training_history["spike_activity"].append(spike_activity)
+            # 모델 저장
+            if save_path and epoch % self.config.save_every == 0:
+                self._save_checkpoint(save_path, epoch, history)
             
-            # 로그 출력
-            epoch_time = time.time() - start_time
-            self.logger.info(
-                f"Epoch {epoch+1}/{num_epochs} - "
-                f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}, "
-                f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}, "
-                f"Spike Activity: {spike_activity:.3f}, "
-                f"Time: {epoch_time:.2f}s"
-            )
+            # 진행 상황 로깅
+            if epoch % self.config.log_every == 0:
+                self._log_progress(epoch, train_metrics)
+        
+        return history
+    
+    def _train_epoch(self, train_loader: DataLoader) -> Dict[str, float]:
+        """한 에포크 학습"""
+        self.model.train()
+        
+        total_loss = 0.0
+        total_spike_rate = 0.0
+        total_convergence_rate = 0.0
+        num_batches = 0
+        
+        progress_bar = tqdm(train_loader, desc=f"Epoch {self.current_epoch}")
+        
+        for batch_idx, batch in enumerate(progress_bar):
+            # 배치 데이터 준비
+            inputs, targets = self._prepare_batch(batch)
             
-            # 최고 성능 모델 저장
-            if val_loader and val_acc > best_val_accuracy:
-                best_val_accuracy = val_acc
-                save_checkpoint(
-                    model=self.model,
-                    optimizer=self.optimizer,
-                    epoch=epoch,
-                    loss=val_loss,
-                    accuracy=val_acc,
-                    filepath=f"{save_dir}/best_model.pt"
+            # Forward pass
+            self.optimizer.zero_grad()
+            outputs, processing_info = self.model(inputs)
+            
+            # 손실 계산
+            loss = self.loss_fn(outputs, targets, processing_info)
+            
+            # Backward pass
+            loss.backward()
+            
+            # 그래디언트 클리핑
+            if self.config.gradient_clip_norm > 0:
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(),
+                    self.config.gradient_clip_norm
                 )
-                self.logger.info(f"Best model saved with validation accuracy: {val_acc:.4f}")
+            
+            # 옵티마이저 스텝
+            self.optimizer.step()
+            
+            # 메트릭 수집
+            total_loss += loss.item()
+            total_spike_rate += self._calculate_spike_rate(processing_info)
+            total_convergence_rate += float(processing_info['convergence_achieved'])
+            num_batches += 1
+            self.global_step += 1
+            
+            # 진행 바 업데이트
+            progress_bar.set_postfix({
+                'loss': loss.item(),
+                'spike_rate': self._calculate_spike_rate(processing_info)
+            })
         
-        self.logger.info("Training completed!")
+        return {
+            'loss': total_loss / num_batches,
+            'spike_rate': total_spike_rate / num_batches,
+            'convergence_rate': total_convergence_rate / num_batches
+        }
+    
+    def _validate_epoch(self, val_loader: DataLoader) -> Dict[str, float]:
+        """한 에포크 검증"""
+        self.model.eval()
         
-    def get_training_history(self) -> Dict[str, List]:
-        """학습 기록 반환"""
-        return self.training_history.copy()
+        total_loss = 0.0
+        num_batches = 0
+        
+        with torch.no_grad():
+            for batch in val_loader:
+                inputs, targets = self._prepare_batch(batch)
+                outputs, processing_info = self.model(inputs)
+                loss = self.loss_fn(outputs, targets, processing_info)
+                
+                total_loss += loss.item()
+                num_batches += 1
+        
+        return {'loss': total_loss / num_batches}
+    
+    def _prepare_batch(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
+        """배치 데이터 준비"""
+        inputs, targets = batch
+        
+        # 디바이스 이동
+        inputs = inputs.to(self.config.device)
+        targets = targets.to(self.config.device)
+        
+        return inputs, targets
+    
+    def _calculate_spike_rate(self, processing_info: Dict[str, Any]) -> float:
+        """스파이크 레이트 계산"""
+        # 처리 정보에서 스파이크 관련 메트릭 추출
+        # 실제 구현에서는 processing_info에 스파이크 통계 포함 필요
+        return 0.5  # 임시 값
+    
+    def _should_early_stop(self, val_loss: float) -> bool:
+        """조기 종료 판단"""
+        if val_loss < self.best_loss:
+            self.best_loss = val_loss
+            self.patience_counter = 0
+            return False
+        else:
+            self.patience_counter += 1
+            return self.patience_counter >= self.config.early_stopping_patience
+    
+    def _save_checkpoint(self, save_path: str, epoch: int, history: Dict[str, List[float]]):
+        """체크포인트 저장"""
+        checkpoint = {
+            'epoch': epoch,
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
+            'best_loss': self.best_loss,
+            'history': history,
+            'config': self.config
+        }
+        
+        torch.save(checkpoint, f"{save_path}/checkpoint_epoch_{epoch}.pt")
+        self.logger.info(f"체크포인트 저장: 에포크 {epoch}")
+    
+    def _log_progress(self, epoch: int, metrics: Dict[str, float]):
+        """진행 상황 로깅"""
+        frozen_status = self.unfreeze_scheduler.get_frozen_status()
+        frozen_count = sum(frozen_status.values())
+        
+        self.logger.info(
+            f"에포크 {epoch}: "
+            f"손실={metrics['loss']:.4f}, "
+            f"스파이크율={metrics['spike_rate']:.4f}, "
+            f"수렴율={metrics['convergence_rate']:.4f}, "
+            f"동결노드={frozen_count}/{len(frozen_status)}"
+        )
+    
+    def load_checkpoint(self, checkpoint_path: str):
+        """체크포인트 로드"""
+        checkpoint = torch.load(checkpoint_path, map_location=self.config.device)
+        
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+        if self.scheduler and checkpoint['scheduler_state_dict']:
+            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        
+        self.current_epoch = checkpoint['epoch']
+        self.best_loss = checkpoint['best_loss']
+        
+        self.logger.info(f"체크포인트 로드: 에포크 {self.current_epoch}")
+    
+    def evaluate(self, test_loader: DataLoader) -> Dict[str, float]:
+        """테스트 데이터 평가"""
+        self.model.eval()
+        
+        total_loss = 0.0
+        total_accuracy = 0.0
+        num_batches = 0
+        
+        with torch.no_grad():
+            for batch in test_loader:
+                inputs, targets = self._prepare_batch(batch)
+                outputs, processing_info = self.model(inputs)
+                
+                loss = self.loss_fn(outputs, targets, processing_info)
+                accuracy = self._calculate_accuracy(outputs, targets)
+                
+                total_loss += loss.item()
+                total_accuracy += accuracy
+                num_batches += 1
+        
+        return {
+            'test_loss': total_loss / num_batches,
+            'test_accuracy': total_accuracy / num_batches
+        }
+    
+    def _calculate_accuracy(self, outputs: torch.Tensor, targets: torch.Tensor) -> float:
+        """정확도 계산"""
+        predictions = torch.argmax(outputs, dim=-1)
+        correct = (predictions == targets).float()
+        return correct.mean().item()

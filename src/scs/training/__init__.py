@@ -1,14 +1,45 @@
+# src/scs/training/__init__.py
 """
-학습 모듈
+SCS 학습 시스템
 
-SCS의 모든 학습 관련 구성요소들을 정의합니다.
+문서 명세 기반 계층적 학습 전략 구현
 """
 
-# 기본 클래스들만 import (실제 구현은 추후)
-# from .trainer import SCSTrainer
-# from .plasticity import PlasticityManager
+from .trainer import (
+    SCSTrainer,
+    TrainingConfig,
+    GradualUnfreezingScheduler
+)
+
+from .loss import (
+    SpikingLoss,
+    NeuromodulationLoss,
+    MultiObjectiveLoss,
+    SCSMetrics
+)
+
+from .optimizer import (
+    SCSOptimizer,
+    KHopBackpropagation,
+    AdaptiveLearningRateScheduler,
+    OptimizerFactory
+)
 
 __all__ = [
-    # "SCSTrainer",
-    # "PlasticityManager",
+    # 메인 학습 시스템
+    "SCSTrainer",
+    "TrainingConfig",
+    "GradualUnfreezingScheduler",
+    
+    # 손실 함수 및 메트릭
+    "SpikingLoss",
+    "NeuromodulationLoss", 
+    "MultiObjectiveLoss",
+    "SCSMetrics",
+    
+    # 최적화 시스템
+    "SCSOptimizer",
+    "KHopBackpropagation",
+    "AdaptiveLearningRateScheduler",
+    "OptimizerFactory"
 ]

@@ -6,17 +6,34 @@ SCS 아키텍처 모듈
 """
 
 from .node import SpikeNode, LocalConnectivity
-from .module import CognitiveModule  
-from .io_node import InputNode, OutputNode
-from .system import SCSSystem, AxonalConnections, MultiScaleGrid
+from .io import InputInterface, OutputInterface
+from .system import (
+    SCSSystem, 
+    AxonalConnections, 
+    MultiScaleGrid,
+    AdaptiveOutputTiming,
+    NodeConfig,
+    ConnectionConfig,
+    TimingConfig
+)
 
 __all__ = [
+    # 기본 노드 구성요소
     "SpikeNode",
     "LocalConnectivity",
-    "CognitiveModule",
-    "InputNode", 
-    "OutputNode",
+    
+    # 입출력 인터페이스
+    "InputInterface",
+    "OutputInterface",
+    
+    # 시스템 구성요소
     "SCSSystem",
     "AxonalConnections",
-    "MultiScaleGrid"
+    "MultiScaleGrid",
+    "AdaptiveOutputTiming",
+    
+    # 설정 구조체
+    "NodeConfig",
+    "ConnectionConfig", 
+    "TimingConfig"
 ]

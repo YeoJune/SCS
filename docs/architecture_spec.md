@@ -8,11 +8,16 @@
 
 ### 기본 SpikeNode 모델
 
-각 SpikeNode는 실제 뉴런 집단을 모델링하며, 다음 상태들을 유지한다:
+각 SpikeNode는 실제 뉴런 집단을 **2차원 격자 구조**로 모델링하며, 다음 상태들을 유지한다:
 
-- **막전위**: $V_i(t) \in \mathbb{R}^N$ (연속값으로 뉴런의 활성화 정도)
-- **Spike 출력**: $s_i(t) \in \{0,1\}^N$ (임계값 초과 시 1, 아니면 0)
-- **휴지기**: $R_i(t) \in \mathbb{N}_0$ (spike 후 비활성화 기간)
+- **막전위**: $V_i(t) \in \mathbb{R}^{H \times W}$ (2차원 격자의 연속값으로 뉴런의 활성화 정도)
+- **Spike 출력**: $s_i(t) \in \{0,1\}^{H \times W}$ (임계값 초과 시 1, 아니면 0)
+- **휴지기**: $R_i(t) \in \mathbb{N}_0^{H \times W}$ (spike 후 비활성화 기간)
+
+### 2차원 격자 벡터화 처리
+
+모든 뉴런 상태 업데이트는 2차원 격자 전체에 대해 동시에 수행되어 계산 효율성을 극대화한다:
+$$V_i(t+1) = \lambda \cdot (V_i(t) + I_{ext,i}(t) + I_{internal,i}(t) + I_{axon,i}(t)) \quad \forall (i,j) \in [H \times W]$$
 
 ### Spike 생성과 Surrogate Gradient
 
@@ -22,22 +27,38 @@ $$s_i(t) = H(V_i(t) - \theta) \cdot \mathbb{1}[R_i(t) = 0]$$
 여기서 $H$는 Heaviside 함수이고, 역전파 시에는 sigmoid 기반 surrogate gradient를 사용한다:
 $$\frac{\partial s_i}{\partial V_i} = \beta \cdot \sigma(\beta(V_i - \theta)) \cdot (1 - \sigma(\beta(V_i - \theta)))$$
 
-### 적응형 휴지기 메커니즘
+**Straight-through Estimator 적용**: Forward pass에서는 이산 스파이크를, Backward pass에서는 연속 surrogate gradient를 사용한다.
 
-뉴런의 활동도에 따라 휴지기 길이가 동적으로 조절된다:
-$$R_{adaptive} = R_{base} + \lfloor \alpha \cdot \langle s(t) \rangle \rfloor$$
+### EMA 기반 적응형 휴지기 메커니즘
 
-이는 과도한 활성화를 방지하고 네트워크 안정성을 유지하는 생물학적 메커니즘이다.
+기존의 전역 평균 대신 **개별 뉴런별 EMA(Exponential Moving Average)**를 통해 메모리 효율적인 적응형 휴지기를 구현한다:
+
+$$\text{EMA}_i(t) = \alpha \cdot s_i(t) + (1-\alpha) \cdot \text{EMA}_i(t-1)$$
+
+$$R_{adaptive,i} = R_{base} + \lfloor \gamma \cdot \text{EMA}_i(t) \rfloor$$
+
+여기서 $\alpha = 0.1$은 EMA 감쇠 계수, $\gamma = 10.0$은 적응 강도 계수이다. 이는 과도한 활성화를 방지하고 네트워크 안정성을 유지하는 생물학적 메커니즘을 개별 뉴런 단위로 정밀하게 모델링한다.
+
+### 수치 안정성 보장
+
+막전위는 수치 안정성을 위해 $[-10.0, 10.0]$ 범위로 클램핑되어 발산을 방지한다.
 
 ## 2. 연결 구조
 
 ### 노드 내부 연결 (Local Connectivity)
 
-각 노드 내에서 뉴런들은 거리 기반으로 연결되며, 거리가 멀수록 연결 강도가 지수적으로 감소한다:
-$$W_{internal}(i,j) = w_0 \exp(-|i-j|/\tau) \quad \text{for } |i-j| \leq 5$$
+각 노드 내에서 뉴런들은 **2차원 맨하탄 거리** 기반으로 연결되며, 거리가 멀수록 연결 강도가 지수적으로 감소한다:
+$$W_{internal}(i,j) = w_d \exp(-d/\tau) \quad \text{for } d = |x_i - x_j| + |y_i - y_j| \leq 5$$
 
-실제 구현에서는 벡터화된 Roll 연산으로 효율적으로 계산한다:
-$$I_{internal}(t) = \sum_{d=1}^{5} w_d \cdot [\text{roll}(s(t), d) + \text{roll}(s(t), -d)]$$
+**Roll 연산 기반 벡터화 구현**: 기존 O(N²) 복잡도를 O(1)로 개선
+$$I_{internal}(t) = \sum_{d=1}^{5} w_d \cdot \sum_{(dx,dy): |dx|+|dy|=d} \text{roll}(s(t), (dx, dy))$$
+
+특정 거리의 모든 이웃들을 2차원 roll 연산으로 동시에 수집하여 계산 효율성을 극대화한다.
+
+### 학습 가능한 거리 가중치
+
+거리별 가중치는 학습 가능한 파라미터로 설정되어 최적화 과정에서 조정된다:
+$$\text{distance\_weights} = \text{nn.Parameter}([\exp(-1/\tau), \exp(-2/\tau), ..., \exp(-5/\tau)])$$
 
 ### 노드 간 축삭 연결 (Inter-node Connectivity)
 
@@ -99,17 +120,20 @@ $$I_{axon}^{(target)}(t) = (A^{source \to target})^T \cdot [E \odot s^{source}(t
 
 ### 막전위 업데이트 방정식
 
-매 CLK 사이클마다 모든 뉴런의 막전위가 동시에 업데이트된다:
+매 CLK 사이클마다 모든 뉴런의 막전위가 2차원 격자 전체에 대해 동시에 업데이트된다:
 $$V_i(t+1) = \lambda \cdot (V_i(t) + I_{ext,i}(t) + I_{internal,i}(t) + I_{axon,i}(t))$$
 
 Spike를 발생시킨 뉴런은 막전위가 리셋된다:
-$$V_i(t+1) = 0 \quad \text{if } s_i(t) = 1$$
+$$V_i(t+1) = V_i(t+1) \cdot (1 - s_i(t)) \quad \text{(벡터화된 조건부 리셋)}$$
 
 ### 동기화된 처리 흐름
 
-1. **Phase 1**: 모든 노드가 동시에 축삭 신호 전송
-2. **Phase 2**: 모든 노드가 동시에 상태 업데이트
-3. **CLK 증가**: 전역 시계 동기화
+1. **Phase 1**: 현재 막전위로부터 스파이크 계산 (`compute_spikes`)
+2. **Phase 2**: 입력 통합 및 상태 업데이트 (`update_state`)
+3. **Phase 3**: 스파이크 후처리 및 휴지기 업데이트 (`post_spike_update`)
+4. **CLK 증가**: 전역 시계 동기화
+
+**순차적 시간 진화**: 각 노드는 명시적인 시간 단계를 통해 상태를 진화시키며, 이는 생물학적 시간 역학을 정확히 모방한다.
 
 ## 5. 입출력 시스템
 
@@ -211,15 +235,18 @@ STDP 활성화 시에는 시스템 안정성과 계산 효율성을 위해 제�
 
 ### 벡터화 기법
 
-- **내부 연결**: Roll 연산으로 5-10배 성능 향상
+- **2차원 격자 처리**: Element-wise 연산으로 모든 뉴런 동시 처리
+- **Roll 연산 최적화**: 내부 연결 계산을 O(N²)에서 O(1)로 개선
 - **축삭 연결**: Global matrix로 3-5배 성능 향상
 - **신경조절 계산**: K=2 제한으로 12% 추가 비용만 발생
 - **Trace-based STDP**: Spike-driven 업데이트로 95% 계산 절약 (낮은 spike rate 시)
 - **메모리 접근**: Sequential access로 cache 효율성 개선
+- **브로드캐스팅**: 거리별 가중치 적용에서 효율적 메모리 사용
 
 ### 계산 복잡도
 
-- **기본 시스템**: O(N×connections)
+- **기본 시스템**: O(N×connections) → **O(H×W×최대거리)**
+- **Roll 연산 기반 내부 연결**: O(1) per distance
 - **K-hop 제한 backprop**: +12% 계산 비용
 - **Trace-based STDP (활성화 시)**: +20-40% 계산 비용 (적용 범위에 따라)
 - **출력 트리거 시스템**: +5% 계산 비용
@@ -229,8 +256,10 @@ STDP 활성화 시에는 시스템 안정성과 계산 효율성을 위해 제�
 
 ### 구조 파라미터
 
-- $f_{CLK} = 1000Hz$, $\theta = 0.0$, $R_{base} = 3$, $\alpha = 10.0$
+- $f_{CLK} = 1000Hz$, $\theta = 0.0$, $R_{base} = 3$, $\gamma = 10.0$ (적응 강도)
 - $d_{max} = 5$, $P(E=1) = 0.8$, $\beta = 10.0$
+- EMA 감쇠 계수: $\alpha = 0.1$
+- 막전위 클램핑: $[-10.0, 10.0]$
 
 ### 학습 파라미터
 
@@ -256,4 +285,4 @@ STDP 활성화 시에는 시스템 안정성과 계산 효율성을 위해 제�
 - 최대 처리 시간: 500 CLK (500ms)
 - 수렴 임계값: ACC 안정성 < 0.1, 출력 확신도 > 0.7
 
-이 아키텍처는 생물학적 사실성과 계산 효율성을 균형있게 결합한 대규모 스파이킹 인지 시스템으로, trace-based STDP와 신경조절 피드백, 그리고 적응적 출력 타이밍 제어를 선택적으로 활성화하여 점진적인 기능 확장이 가능하다.
+이 아키텍처는 생물학적 사실성과 계산 효율성을 균형있게 결합한 대규모 스파이킹 인지 시스템으로, 2차원 격자 벡터화 처리와 EMA 기반 적응형 휴지기, trace-based STDP와 신경조절 피드백, 그리고 적응적 출력 타이밍 제어를 선택적으로 활성화하여 점진적인 기능 확장이 가능하다.

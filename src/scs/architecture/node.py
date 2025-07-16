@@ -29,6 +29,7 @@ class SpikeNode(nn.Module):
         refractory_base: int = 3,
         refractory_adaptive_factor: float = 10.0,
         surrogate_beta: float = 10.0,
+        ema_alpha: float = 0.1,  # EMA 감쇠 계수
         device: str = "cuda"
     ):
         super().__init__()
@@ -40,6 +41,7 @@ class SpikeNode(nn.Module):
         self.refractory_base = refractory_base
         self.refractory_adaptive_factor = refractory_adaptive_factor
         self.surrogate_beta = surrogate_beta
+        self.ema_alpha = ema_alpha
         self.device = device
         
         # 상태 초기화
@@ -53,46 +55,65 @@ class SpikeNode(nn.Module):
         self.refractory_counter = torch.zeros(
             self.grid_height, self.grid_width, dtype=torch.int, device=self.device
         )
+        self.spike_history_ema = torch.zeros(
+            self.grid_height, self.grid_width, device=self.device
+        )
+
+    def compute_spikes(self) -> torch.Tensor:
+        """
+        현재 막전위 기반으로 스파이크 출력 계산 (2차원 격자, 상태 변경 없음)
         
-    def forward(
+        문서 명세 구현:
+        s_i(t) = H(V_i(t) - θ) * 1[R_i(t) = 0]
+        벡터화: 2차원 격자 전체에 동시 임계값 비교
+        """
+        # 임계값 초과 계산 (벡터화)
+        threshold_exceeded = self.membrane_potential - self.spike_threshold
+        
+        # 휴지기가 아닌 뉴런 마스크 (벡터화)
+        not_refractory = (self.refractory_counter == 0).float()
+        
+        # Surrogate gradient 적용 (벡터화)
+        spikes = self._surrogate_spike_function(threshold_exceeded)
+        
+        # 휴지기 마스크 적용 (벡터화: 2차원 element-wise 곱셈)
+        return spikes * not_refractory
+    
+    def update_state(
         self,
         external_input: Optional[torch.Tensor] = None,  # [H, W] or None
         internal_input: Optional[torch.Tensor] = None,  # [H, W] or None
-        axonal_input: Optional[torch.Tensor] = None     # [H, W] or None
-    ) -> Tuple[torch.Tensor, Dict[str, Any]]:
+        axonal_input: Optional[torch.Tensor] = None,    # [H, W] or None
+    ):
         """
-        한 시간 스텝(CLK)에서의 뉴런 상태 업데이트 및 스파이크 생성
+        입력값과 현재 스파이크로 내부 상태 업데이트 (2차원 격자)
         
         문서 명세 구현:
         V_i(t+1) = λ * (V_i(t) + I_ext,i(t) + I_internal,i(t) + I_axon,i(t))
-        s_i(t) = H(V_i(t) - θ) * 1[R_i(t) = 0]
-        
-        Args:
-            external_input: 외부 입력 [H, W] (첫 CLK에만 있음)
-            internal_input: 내부 입력 [H, W]  
-            axonal_input: 축삭 입력 [H, W]
-            
-        Returns:
-            spikes: 스파이크 출력 [H, W]
-            states: 상태 정보 딕셔너리
+        벡터화: 2차원 격자 전체에 element-wise 연산
         """
         # 1. 총 입력 계산 (벡터화)
         total_input = self._integrate_inputs(external_input, internal_input, axonal_input)
         
         # 2. 막전위 업데이트 (벡터화)
         self.membrane_potential = self._update_membrane_potential(total_input)
-        
-        # 3. 스파이크 생성 (벡터화)
-        spikes = self._generate_spikes()
-        
-        # 4. 스파이크 후 처리 (벡터화)
-        self._post_spike_update(spikes)
-        
-        # 5. 기본 상태 반환
-        states = self._get_basic_states(spikes)
-        
-        return spikes, states
     
+    def post_spike_update(
+        self,
+        spikes: torch.Tensor  # [H, W]
+    ):
+        """
+        스파이크 후 처리 (2차원 격자)
+        
+        원본: V_reset = 0 if spike else V_current
+        벡터화: 2차원 격자 전체에 마스크 적용
+        """
+        # 스파이크 발생 시 막전위 리셋 (벡터화: 2차원 element-wise)
+        self.membrane_potential = self.membrane_potential * (1.0 - spikes)
+        
+        # 휴지기 업데이트 (벡터화)
+        self._update_refractory(spikes)
+
     def _integrate_inputs(
         self,
         external: Optional[torch.Tensor] = None,
@@ -105,7 +126,7 @@ class SpikeNode(nn.Module):
         원본: I_total = I_ext + I_internal + I_axon
         벡터화: 2차원 격자에서 element-wise 덧셈
         """
-        # 기본값은 0 입력
+        # 기본값은 0 입력 (벡터화)
         total_input = torch.zeros(self.grid_height, self.grid_width, device=self.device)
         
         # 각 입력이 있는 경우에만 추가 (벡터화)
@@ -124,38 +145,16 @@ class SpikeNode(nn.Module):
         """
         막전위 업데이트 (2차원 격자)
         
-        원본: V_i(t+1) = λ * (V_i(t) + I_total(t)) * (1 if R_i(t) = 0 else 0)
+        원본: V_i(t+1) = λ * (V_i(t) + I_total(t))
         벡터화: 2차원 격자 전체에 element-wise 연산
         """
-        # 휴지기가 아닌 뉴런 마스크 (벡터화)
-        not_refractory = (self.refractory_counter == 0).float()
-        
         # 막전위 업데이트 (벡터화: 문서 명세)
         new_potential = self.decay_rate * (
-            self.membrane_potential + total_input * not_refractory
+            self.membrane_potential + total_input
         )
         
         # 수치 안정성을 위한 클램핑 (벡터화)
         return torch.clamp(new_potential, -10.0, 10.0)
-    
-    def _generate_spikes(self) -> torch.Tensor:
-        """
-        스파이크 생성 (2차원 격자, Surrogate gradient 포함)
-        
-        원본: s_i(t) = H(V_i(t) - θ) * 1[R_i(t) = 0]
-        벡터화: 2차원 격자 전체에 동시 임계값 비교
-        """
-        # 임계값 초과 계산 (벡터화)
-        threshold_exceeded = self.membrane_potential - self.spike_threshold
-        
-        # 휴지기가 아닌 뉴런 마스크 (벡터화)
-        not_refractory = (self.refractory_counter == 0).float()
-        
-        # Surrogate gradient 적용 (벡터화)
-        spikes = self._surrogate_spike_function(threshold_exceeded)
-        
-        # 휴지기 마스크 적용 (벡터화: 2차원 element-wise 곱셈)
-        return spikes * not_refractory
     
     def _surrogate_spike_function(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -166,44 +165,38 @@ class SpikeNode(nn.Module):
         """
         # Forward: Heaviside function (벡터화)
         spikes = (x > 0).float()
-        
+
         # Backward: Sigmoid surrogate (벡터화)
         sigmoid_val = torch.sigmoid(self.surrogate_beta * x)
         surrogate_grad = self.surrogate_beta * sigmoid_val * (1 - sigmoid_val)
-        
+
         # Straight-through estimator (벡터화)
-        return spikes + surrogate_grad - surrogate_grad.detach()
-    
-    def _post_spike_update(self, spikes: torch.Tensor):
-        """
-        스파이크 후 처리 (2차원 격자)
-        
-        원본: V_reset = 0 if spike else V_current
-        벡터화: 2차원 격자 전체에 마스크 적용
-        """
-        # 스파이크 발생 시 막전위 리셋 (벡터화: 2차원 element-wise)
-        self.membrane_potential = self.membrane_potential * (1.0 - spikes)
-        
-        # 휴지기 업데이트 (벡터화)
-        self._update_refractory(spikes)
-    
+        return spikes.detach() + surrogate_grad * x
+
     def _update_refractory(self, spikes: torch.Tensor):
         """
-        적응형 휴지기 업데이트 (2차원 격자)
+        EMA 기반 적응형 휴지기 업데이트 (2차원 격자)
         
+        개별 뉴런의 스파이크 히스토리를 EMA로 추적하여 메모리 효율적으로 적응형 휴지기 적용
         원본: R_adaptive = R_base + ⌊α * <s(t)>⌋
+        개선: EMA로 개별 뉴런 히스토리 추적
         벡터화: 2차원 격자 전체에 동시 계산
         """
+        # EMA 업데이트: 개별 뉴런의 활동 히스토리 추적 (벡터화)
+        self.spike_history_ema = (
+            self.ema_alpha * spikes + 
+            (1 - self.ema_alpha) * self.spike_history_ema
+        )
+        
         # 기존 휴지기 감소 (벡터화)
         self.refractory_counter = torch.clamp(self.refractory_counter - 1, min=0)
         
         # 스파이크 발생 마스크 (벡터화)
         spike_mask = (spikes > 0.5)
         
-        # 적응형 휴지기 계산 (벡터화: 전체 격자 평균)
-        recent_spike_rate = spikes.mean()  # 스칼라 값
+        # EMA 기반 적응형 휴지기 계산 (벡터화: 개별 뉴런별)
         adaptive_refractory = self.refractory_base + torch.floor(
-            self.refractory_adaptive_factor * recent_spike_rate
+            self.refractory_adaptive_factor * self.spike_history_ema
         ).int()
         
         # 새로운 휴지기 설정 (벡터화: 조건부 업데이트)
@@ -212,22 +205,6 @@ class SpikeNode(nn.Module):
             adaptive_refractory, 
             self.refractory_counter
         )
-    
-    def _get_basic_states(self, spikes: torch.Tensor) -> Dict[str, Any]:
-        """
-        기본 상태 정보 반환 (2차원 격자)
-        
-        벡터화: 2차원 격자 전체에 대한 통계를 한번에 계산
-        """
-        return {
-            'membrane_potential': self.membrane_potential.clone(),
-            'spikes': spikes.clone(),
-            'refractory_counter': self.refractory_counter.clone(),
-            'spike_rate': spikes.mean().item(),
-            'active_neurons': (spikes > 0.5).sum().item(),
-            'avg_membrane': self.membrane_potential.mean().item()
-        }
-
 
 class LocalConnectivity(nn.Module):
     """

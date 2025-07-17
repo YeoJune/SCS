@@ -44,20 +44,38 @@ class SpikeNode(nn.Module):
         self.ema_alpha = ema_alpha
         self.device = device
         
-        # 상태 초기화
+        # 상태 초기화 (단일 샘플용)
         self.reset_state()
         
-    def reset_state(self):
-        """2차원 격자 상태 초기화"""
-        self.membrane_potential = torch.zeros(
-            self.grid_height, self.grid_width, device=self.device
-        )
-        self.refractory_counter = torch.zeros(
-            self.grid_height, self.grid_width, dtype=torch.int, device=self.device
-        )
-        self.spike_history_ema = torch.zeros(
-            self.grid_height, self.grid_width, device=self.device
-        )
+    def reset_state(self, batch_size: Optional[int] = None):
+        """2차원 격자 상태 초기화 (배치 지원)
+        
+        Args:
+            batch_size: 배치 크기. None이면 단일 샘플 [H, W], 
+                       int면 배치 [B, H, W]
+        """
+        if batch_size is None:
+            # 단일 샘플: [H, W]
+            self.membrane_potential = torch.zeros(
+                self.grid_height, self.grid_width, device=self.device
+            )
+            self.refractory_counter = torch.zeros(
+                self.grid_height, self.grid_width, dtype=torch.int, device=self.device
+            )
+            self.spike_history_ema = torch.zeros(
+                self.grid_height, self.grid_width, device=self.device
+            )
+        else:
+            # 배치: [B, H, W]
+            self.membrane_potential = torch.zeros(
+                batch_size, self.grid_height, self.grid_width, device=self.device
+            )
+            self.refractory_counter = torch.zeros(
+                batch_size, self.grid_height, self.grid_width, dtype=torch.int, device=self.device
+            )
+            self.spike_history_ema = torch.zeros(
+                batch_size, self.grid_height, self.grid_width, device=self.device
+            )
 
     def compute_spikes(self) -> torch.Tensor:
         """
@@ -121,13 +139,13 @@ class SpikeNode(nn.Module):
         axonal: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """
-        입력 신호 통합 (2차원 격자)
+        입력 신호 통합 (2차원 격자, 배치 지원)
         
         원본: I_total = I_ext + I_internal + I_axon
-        벡터화: 2차원 격자에서 element-wise 덧셈
+        벡터화: 배치 차원 [B, H, W] 또는 단일 샘플 [H, W]에서 element-wise 덧셈
         """
-        # 기본값은 0 입력 (벡터화)
-        total_input = torch.zeros(self.grid_height, self.grid_width, device=self.device)
+        # 현재 상태 기반으로 기본 형태 결정 (배치 지원)
+        total_input = torch.zeros_like(self.membrane_potential)
         
         # 각 입력이 있는 경우에만 추가 (벡터화)
         if external is not None:
@@ -249,16 +267,16 @@ class LocalConnectivity(nn.Module):
         
     def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:
         """
-        2차원 격자에서 Roll 연산 기반 지역적 연결 처리
+        2차원 격자에서 Roll 연산 기반 지역적 연결 처리 (배치 지원)
         
         원본: I_internal(t) = Σ_{d=1}^5 w_d * [neighbors at distance d]
-        벡터화: 모든 거리와 방향을 동시 처리
+        벡터화: 모든 거리와 방향을 동시 처리, 배치 차원 [B, H, W] 또는 [H, W] 지원
         
         Args:
-            grid_spikes: 2차원 격자 스파이크 [H, W]
+            grid_spikes: 2차원 격자 스파이크 [B, H, W] 또는 [H, W]
             
         Returns:
-            연결된 신호 [H, W]
+            연결된 신호 [B, H, W] 또는 [H, W] (입력과 동일한 차원)
         """
         # 모든 거리의 이웃 기여도를 한번에 계산 (벡터화)
         neighbor_contributions = []
@@ -268,14 +286,17 @@ class LocalConnectivity(nn.Module):
         
         # 모든 거리별 기여도를 스택으로 쌓기 (벡터화)
         if neighbor_contributions:
-            all_neighbors = torch.stack(neighbor_contributions, dim=0)  # [max_distance, H, W]
+            all_neighbors = torch.stack(neighbor_contributions, dim=0)  # [max_distance, B, H, W] 또는 [max_distance, H, W]
             
             # 가중치를 브로드캐스팅으로 적용 (벡터화)
-            weights = self.distance_weights.view(-1, 1, 1)  # [max_distance, 1, 1]
+            if grid_spikes.dim() == 3:  # 배치 차원 있음 [B, H, W]
+                weights = self.distance_weights.view(-1, 1, 1, 1)  # [max_distance, 1, 1, 1]
+            else:  # 단일 샘플 [H, W]
+                weights = self.distance_weights.view(-1, 1, 1)  # [max_distance, 1, 1]
             weighted_neighbors = all_neighbors * weights  # 브로드캐스팅
             
             # 모든 거리의 기여도 합산 (벡터화)
-            total_input = weighted_neighbors.sum(dim=0)  # [H, W]
+            total_input = weighted_neighbors.sum(dim=0)  # [B, H, W] 또는 [H, W]
         else:
             total_input = torch.zeros_like(grid_spikes)
         
@@ -283,10 +304,17 @@ class LocalConnectivity(nn.Module):
     
     def _get_neighbors_at_distance(self, grid_spikes: torch.Tensor, distance: int) -> torch.Tensor:
         """
-        특정 거리의 모든 이웃 뉴런들의 기여도 계산 (2차원 Roll 연산)
+        특정 거리의 모든 이웃 뉴런들의 기여도 계산 (2차원 Roll 연산, 배치 지원)
         
         원본: 각 뉴런마다 개별적으로 거리 계산 및 이웃 탐색 O(N²)
-        벡터화: 2차원 Roll 연산으로 모든 방향 동시 처리 O(1)
+        벡터화: 2차원 Roll 연산으로 모든 방향 동시 처리 O(1), 배치 차원 지원
+        
+        Args:
+            grid_spikes: [B, H, W] 또는 [H, W]
+            distance: 거리
+            
+        Returns:
+            이웃 합산 [B, H, W] 또는 [H, W]
         """
         # 해당 거리의 모든 방향 벡터 미리 계산 (벡터화)
         shifts = []
@@ -300,10 +328,17 @@ class LocalConnectivity(nn.Module):
         
         # 모든 방향의 이웃들을 한번에 수집 (벡터화)
         neighbors_sum = torch.zeros_like(grid_spikes)
+        
+        # 배치 차원을 고려한 roll 연산
+        if grid_spikes.dim() == 3:  # 배치 차원 있음 [B, H, W]
+            height_dim, width_dim = 1, 2
+        else:  # 단일 샘플 [H, W]
+            height_dim, width_dim = 0, 1
+            
         for dx, dy in shifts:
             # 2차원 Roll 연산으로 이웃 위치의 스파이크 가져오기
-            shifted = torch.roll(grid_spikes, shifts=dx, dims=0)  # height 방향
-            shifted = torch.roll(shifted, shifts=dy, dims=1)     # width 방향
+            shifted = torch.roll(grid_spikes, shifts=dx, dims=height_dim)  # height 방향
+            shifted = torch.roll(shifted, shifts=dy, dims=width_dim)       # width 방향
             neighbors_sum += shifted
         
         return neighbors_sum

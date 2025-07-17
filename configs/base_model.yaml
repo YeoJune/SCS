@@ -1,37 +1,50 @@
-# configs/base_model.yaml
 # SCS 기본 모델 설정
 
 # 시스템 설정
 system:
+  clk_frequency: 1000 # 1000Hz (1ms per CLK)
   device: "auto" # auto, cuda, cpu, mps
   precision: "float32"
   random_seed: 42
 
+  # 배치 처리 설정
+  enable_batch_processing: true
+  default_batch_size: 8
+  max_clk_training: 100 # 학습 시 고정 CLK 수
+
+  # 메모리 최적화
+  gradient_checkpointing: false
+  mixed_precision: false
+
 # 뇌 영역별 설정
 brain_regions:
   PFC:
+    grid_height: 32
+    grid_width: 16
     total_neurons: 512
     decay_rate: 0.95 # 긴 지속성 (작업 기억)
     distance_tau: 1.5 # 빠른 감쇠
-    neurons_per_layer: [128, 205, 128, 51] # L1(25%), L2/3(40%), L4(25%), L5/6(10%) 비율
 
   ACC:
+    grid_height: 16
+    grid_width: 16
     total_neurons: 256
     decay_rate: 0.88 # 빠른 반응 (갈등 감지)
     distance_tau: 2.0
-    neurons_per_layer: [64, 102, 64, 26]
 
   IPL:
+    grid_height: 24
+    grid_width: 16
     total_neurons: 384
     decay_rate: 0.92 # 중간 지속성 (관계 연합)
     distance_tau: 2.5
-    neurons_per_layer: [96, 154, 96, 38]
 
   MTL:
+    grid_height: 16
+    grid_width: 16
     total_neurons: 256
     decay_rate: 0.97 # 장기 기억
     distance_tau: 3.0 # 넓은 연결
-    neurons_per_layer: [64, 102, 64, 26]
 
 # 스파이크 동역학 설정
 spike_dynamics:
@@ -39,41 +52,47 @@ spike_dynamics:
   refractory_base: 3
   refractory_adaptive_factor: 10.0
   surrogate_beta: 10.0
+  ema_alpha: 0.1
 
 # 연결성 설정
 connectivity:
-  # 지역적 연결 (Roll 연산)
+  # 지역적 연결
   local:
     max_distance: 5
     connection_prob: 0.1
 
-  # 축삭 연결 (모듈 간)
+  # 축삭 연결
   axonal:
-    connection_prob: 0.1
     excitatory_ratio: 0.8 # 80% 흥분성, 20% 억제성
+    connections:
+      - { source: "PFC", target: "ACC", weight_scale: 0.8 }
+      - { source: "PFC", target: "IPL", weight_scale: 0.6 }
+      - { source: "ACC", target: "MTL", weight_scale: 0.7 }
+      - { source: "IPL", target: "MTL", weight_scale: 0.5 }
 
-    # Multi-scale Grid 연결
-    multi_scale_grids:
-      fine:
-        modules: 8
-        spacing: 2
-        weight: 0.5
-      medium:
-        modules: 4
-        spacing: 3
-        weight: 0.3
-      coarse:
-        modules: 2
-        spacing: 5
-        weight: 0.2
+  # Multi-scale Grid 연결
+  multi_scale_grid:
+    fine: { spacing: 2, weight: 0.5 }
+    medium: { spacing: 3, weight: 0.3 }
+    coarse: { spacing: 5, weight: 0.2 }
 
 # 입출력 시스템
 io_system:
-  vocab_size: 50000
-  embedding_dim: 512
-  num_slots: 512
-  attention_heads: 8
-  confidence_threshold: 0.7
+  input_interface:
+    vocab_size: 50000
+    embedding_dim: 512
+    max_seq_len: 128
+    num_heads: 8
+    positional_encoding: true
+
+  output_interface:
+    vocab_size: 50000
+    embedding_dim: 256
+    max_output_len: 128
+    num_heads: 4
+    num_decoder_layers: 2
+    dim_feedforward: 1024
+    dropout: 0.1
 
 # 적응적 타이밍
 timing:
@@ -81,9 +100,26 @@ timing:
   max_processing_clk: 500 # 500ms
   convergence_threshold: 0.1
   confidence_threshold: 0.7
+  stability_window: 10
+  start_output_threshold: 0.5
 
 # 학습 메커니즘
 learning:
+  base_learning_rate: 1e-3
+  optimizer: "Adam"
+
+  # 배치 학습 설정
+  batch_size: 8
+  max_sequence_length: 128
+  gradient_accumulation_steps: 1
+  max_grad_norm: 1.0
+
+  # 학습 스케줄러
+  scheduler:
+    type: "cosine" # linear, cosine, constant
+    warmup_steps: 1000
+    total_steps: 10000
+
   # K-hop 제한 역전파
   k_hop_limit: 2
 
@@ -96,6 +132,37 @@ learning:
   # STDP (기본 비활성화)
   stdp:
     enabled: false
-    tau_pos: 20.0 # ms
-    tau_neg: 20.0 # ms
+    level: 1 # 1: 노드 내부만, 2: 층간 포함
+    tau_pos: 20.0
+    tau_neg: 20.0
     learning_rate: 1e-6
+    weight_limits: [0.0, 0.1]
+    max_weight_change: 0.001
+    update_frequency: 10
+
+# 데이터 로딩 설정
+data_loading:
+  batch_size: 8
+  shuffle: true
+  num_workers: 4
+  pin_memory: true
+  drop_last: false
+
+  # 토큰화 설정
+  tokenizer:
+    name: "bert-base-uncased"
+    max_length: 128
+    padding: true
+    truncation: true
+
+  # 데이터셋별 설정
+  datasets:
+    train:
+      path: "data/train"
+      max_samples: null
+    validation:
+      path: "data/val"
+      max_samples: 1000
+    test:
+      path: "data/test"
+      max_samples: 500

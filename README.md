@@ -1,218 +1,108 @@
-# Spike-Based Cognitive System (SCS)
+# SCS: Spike-based Cognitive System
 
-스파이킹 뉴럴 네트워크 기반 인지 시스템
+### _A Bio-Inspired Dynamic Computing Architecture for Semantic Reasoning_
 
-## 🧠 Overview
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/release/python-380/)
+[![Status](https://img.shields.io/badge/status-alpha-orange.svg)](https://shields.io/)
 
-SCS는 생물학적 뇌의 스파이킹 동역학을 모방한 인지 아키텍처로, 의미론적 추론과 복합적 사고를 위한 신경형 컴퓨팅 시스템입니다.
+**SCS (Spike-based Cognitive System)** 는 기존 대규모 언어 모델(LLM)의 정적 패턴 매칭 방식의 한계를 극복하기 위해 제안된 새로운 스파이킹 인지 아키텍처입니다. 본 프로젝트는 뇌의 동적 정보 처리 방식을 모방하여, 시간에 따라 변화하는 내적 상태와 스파이크 패턴 자체가 의미를 인코딩하고 처리하는 동적 연산자로 기능하는 것을 목표로 합니다.
 
-### ✨ 핵심 특징
+## Core Philosophy
 
-- **2차원 격자 기반 스파이킹 뉴런**: 공간적 패턴과 시간적 동역학 결합
-- **다중 뇌영역 모델링**: PFC, ACC, IPL, MTL 영역별 특화 연산
-- **적응적 축삭 연결**: 흥분성/억제성 균형을 통한 동적 신호 전달
-- **시퀀스-격자 변환**: 자연어를 2차원 공간 활성화 패턴으로 매핑
+> **"단순한 스파이크 동역학으로 작동하는 네트워크는, (1) 각 모듈에 부여된 기능적 편향(inductive bias)과 (2) 태스크 기반 종단간 학습 신호에 의해 유도될 때, 중앙 통제 장치 없이도 상호작용을 통해 스스로를 조직화하여 복잡한 NLP 문제를 해결하는 데 필요한 연산 구조를 형성할 것이다."**
 
-## 🚀 Quick Start
+SCS는 정적인 가중치 행렬에 의존하는 트랜스포머와 달리, 시변(time-varying)하는 신경망의 내적 상태와 스파이크 패턴의 상호작용을 통해 의미론적 추론을 수행합니다. 이는 예측 불가능한 상황에 대한 유연성과 진정한 의미의 맥락 의존적 추론을 가능하게 하는 새로운 패러다임을 제시합니다.
 
-### Installation
+더 자세한 내용은 [연구 제안서](docs/proposal.md)를 참고해 주십시오.
+
+## ✨ 특징 (Features)
+
+- **뇌 모방 아키텍처**: PFC, ACC, IPL, MTL 등 기능적으로 특화된 뇌 영역에서 영감을 받은 모듈식 구조.
+- **동적 컴퓨팅**: 시간에 따라 변화하는 막전위와 스파이크 패턴이 연산자의 역할을 수행하는 상태 의존적(stateful) 처리.
+- **다중 스케일 간섭**: 안정적인 표상 형성을 위한 지역적 간섭과 동적 관계 결속을 위한 원거리 간섭의 상호작용.
+- **계층적 학습 전략**: Backpropagation, Surrogate Gradient, K-hop 제한 신경조절 등 다양한 스케일에서 작동하는 학습 메커니즘.
+- **설정 기반 실험**: YAML 설정 파일을 통해 모델 구조, 데이터, 학습 파라미터를 완벽하게 제어하여 실험의 재현성과 확장성을 보장.
+- **전문적인 개발 환경**: `pyproject.toml` 기반의 체계적인 패키지 관리와 코드 품질 도구(Black, isort, mypy) 적용.
+
+## 🚀 시작하기 (Getting Started)
+
+### 1. 요구사항
+
+- Python 3.8 이상
+- PyTorch
+
+### 2. 설치
+
+먼저 이 레포지토리를 클론합니다.
 
 ```bash
 git clone https://github.com/YeoJune/SCS.git
 cd SCS
+```
+
+그런 다음, editable 모드로 패키지를 설치합니다. 이 방식은 모든 의존성을 설치하고, 프로젝트 내 어디서든 `scs` 모듈을 인식할 수 있게 해줍니다.
+
+```bash
 pip install -e .
 ```
 
-### 기본 사용법
+개발 및 분석을 위한 모든 추가 도구를 설치하려면 다음을 실행하세요.
 
 ```bash
-# 기본 훈련 실행
-python run.py --mode train --config configs/base_model.yaml
+pip install -e ".[dev,analysis]"
+```
 
-# 모델 평가
-python run.py --mode evaluate --experiment_dir experiments/your_experiment
+## ⚙️ 사용법 (Usage)
 
-# 결과 분석
-python run.py --mode analyze --experiment_dir experiments/your_experiment
+본 프로젝트는 두 가지 실행 경로를 제공합니다.
+
+### 1. 공식적인 실험 실행 (권장)
+
+패키지 설치 후 생성되는 `scs` CLI 명령어를 사용합니다. 이 방식은 재현 가능하며, 어떤 디렉토리에서든 실행할 수 있습니다.
+
+```bash
+# LogiQA 데이터셋으로 작은 모델 학습 시작
+scs --mode train --config configs/phase2_logiqa_small.yaml
+
+# 학습이 끝난 후, 생성된 실험 디렉토리를 사용하여 평가 수행
+scs --mode evaluate --experiment_dir experiments/phase2_logiqa_small_[timestamp]
+```
+
+### 2. 로컬 개발 및 디버깅
+
+프로젝트 루트의 `run.py` 스크립트를 직접 실행합니다. 이 방식은 `pip install -e .` 없이도 즉시 코드를 테스트하고 IDE에서 디버깅(F5)하는 데 유용합니다.
+
+```bash
+python run.py --mode train --config configs/phase2_logiqa_small.yaml --debug
 ```
 
 ## 📁 프로젝트 구조
 
 ```
 SCS/
-├── src/scs/              # 📦 핵심 모듈
-│   ├── architecture/     # 🏗️  신경망 아키텍처 (SpikeNode, IO, System)
-│   ├── training/         # 🎯 학습 시스템 (Trainer, Loss, Optimizer)
-│   └── data/            # 📊 데이터 처리 (Dataset, Processor)
-├── utils/               # 🛠️  범용 유틸리티 (logging, config, file)
-├── configs/             # ⚙️  설정 파일 (YAML)
-├── examples/            # 📝 사용 예제
-├── scripts/             # 🔧 실행 스크립트
-├── run.py              # 🎮 메인 실행 파일
-└── test_basic_components.py # 🧪 기본 테스트
-```
-
-## 🧪 실험 단계
-
-### Phase 1: 기초 논리 연산
-
-```bash
-python run.py --mode train --config configs/phase1_logic_ops.yaml
-```
-
-- XOR, AND, OR 등 기본 논리 연산 검증
-- 스파이킹 뉴런의 비선형 연산 능력 확인
-
-### Phase 2: 관계 추론 (CLUTRR)
-
-```bash
-python run.py --mode train --config configs/phase2_clutrr.yaml
-```
-
-- 가족 관계 추론 문제 해결
-- 다중 홉 추론과 갈등 해소 능력 검증
-
-### Phase 3: 수학적 추론 (GSM8K)
-
-```bash
-python run.py --mode train --config configs/phase3_gsm8k.yaml
-```
-
-- 초등학교 수준 수학 문제 해결
-- 다단계 논리적 사고 과정 구현
-
-## 💡 코드 예제
-
-### 기본 사용법
-
-```python
-from src.scs import SCSSystem, SCSTrainer, SCSDataset
-
-# 1. 모델 초기화
-model = SCSSystem(
-    vocab_size=50000,
-    grid_height=16,
-    grid_width=16,
-    embedding_dim=512
-)
-
-# 2. 데이터 준비
-dataset = SCSDataset(
-    texts=["Hello world", "SCS is amazing"],
-    labels=[0, 1],
-    tokenizer=tokenizer
-)
-
-# 3. 훈련
-trainer = SCSTrainer(model=model)
-trainer.train(dataset)
-```
-
-### 커스텀 실험
-
-```python
-# 커스텀 설정으로 실험
-config = {
-    "model": {
-        "pfc_size": 512,
-        "acc_size": 256,
-        "learning_rate": 0.001
-    }
-}
-
-# 실험 실행
-python run.py --mode train --config your_config.yaml --experiment_name "custom_exp"
-```
-
-## 🛠 고급 사용법
-
-### 모델 컴포넌트
-
-- **SpikeNode**: 2차원 격자 스파이킹 뉴런
-- **InputInterface**: 토큰 시퀀스 → 격자 활성화 변환
-- **OutputInterface**: 격자 스파이크 → 토큰 확률 변환
-- **SCSSystem**: 전체 인지 시스템 통합
-
-### 분석 도구
-
-```bash
-# 기본 컴포넌트 테스트
-python test_basic_components.py
-
-# 스파이킹 동역학 분석
-python run.py --mode analyze --type dynamics
-
-# 내부 표상 시각화
-python run.py --mode analyze --type representation
-```
-
-### 설정 커스터마이징
-
-```yaml
-# configs/custom.yaml
-brain_regions:
-  PFC:
-    total_neurons: 512
-    decay_rate: 0.95
-  ACC:
-    total_neurons: 256
-    decay_rate: 0.88
-
-training:
-  learning_rate: 0.001
-  batch_size: 32
-  epochs: 100
-```
-
-## 📖 문서 및 참고자료
-
-### 프로젝트 문서
-
-- [아키텍처 명세](docs/architecture_spec.md) - 기술적 구현 세부사항
-- [연구 제안서](docs/proposal.md) - 연구 목표와 방향성
-- [API 문서](docs/api.md) - _(개발 중)_
-
-### 핵심 개념
-
-- **Spiking Neural Networks**: 생물학적 뉴런의 이산적 스파이크 동역학
-- **Cognitive Architecture**: 다중 뇌영역 기반 인지 처리 모델
-- **Semantic Reasoning**: 의미론적 관계 추론과 복합적 사고
-
-## 🤝 기여하기
-
-1. 레포지토리 Fork
-2. 기능 브랜치 생성 (`git checkout -b feature/amazing-feature`)
-3. 변경사항 커밋 (`git commit -m 'Add amazing feature'`)
-4. 브랜치에 Push (`git push origin feature/amazing-feature`)
-5. Pull Request 생성
-
-### 개발 가이드라인
-
-- 코드 스타일: Black formatter 사용
-- 테스트: pytest로 단위 테스트 작성
-- 문서화: docstring과 type hints 필수
-
-## 📄 라이선스
-
-이 프로젝트는 MIT 라이선스 하에 배포됩니다. 자세한 내용은 [LICENSE](LICENSE) 파일을 참조하세요.
-
-## 📚 인용
-
-```bibtex
-@article{scs2025,
-  title={Spike-Based Cognitive System: A Bio-Inspired Dynamic Computing Architecture for Semantic Reasoning},
-  author={YeoJune},
-  journal={arXiv preprint},
-  year={2025}
-}
+├── configs/              # 모든 실험 설정 (YAML) 파일
+├── experiments/          # 학습 결과(로그, 체크포인트, 결과)가 저장되는 곳
+├── src/
+│   └── scs/              # 핵심 소스 코드 패키지
+│       ├── architecture/ # SCS 모델 아키텍처
+│       ├── data/         # 데이터 처리 및 로더
+│       ├── training/     # 학습 루프, 손실, 메트릭
+│       ├── utils/        # 보조 유틸리티
+│       └── cli.py        # 공식 CLI 진입점
+├── tests/                # 단위 테스트 코드
+├── pyproject.toml        # 프로젝트 설정 및 의존성 관리
+└── run.py                # 로컬 개발용 실행 래퍼
 ```
 
 ## 🔗 관련 연구
 
-- [Faith and Fate: Limits of Transformers on Compositionality](https://arxiv.org/abs/2305.18654)
-- [LINC: A Neurosymbolic Approach for Logical Reasoning](https://arxiv.org/abs/2310.15164)
-- [Spikformer: When Spiking Neural Network Meets Transformer](https://arxiv.org/abs/2209.15425)
-- [Neural Theorem Proving at Scale](https://arxiv.org/abs/2205.11491)
+본 연구는 다음 선행 연구들의 한계를 인식하고, 그 대안을 제시하고자 합니다.
+
+- [Faith and Fate: Limits of Transformers on Compositionality (Dziri et al., 2023)](https://arxiv.org/abs/2305.18654)
+- [LINC: A Neurosymbolic Approach for Logical Reasoning (Arora et al., 2023)](https://arxiv.org/abs/2310.15164)
+- [Spikformer: When Spiking Neural Network Meets Transformer (Zhou et al., 2023)](https://arxiv.org/abs/2209.15425)
+- [Neural Theorem Proving at Scale (Jiang et al., 2022)](https://arxiv.org/abs/2205.11491)
 
 ---
 

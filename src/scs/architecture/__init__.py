@@ -11,10 +11,7 @@ from .system import (
     SCSSystem, 
     AxonalConnections, 
     MultiScaleGrid,
-    AdaptiveOutputTiming,
-    NodeConfig,
-    ConnectionConfig,
-    TimingConfig
+    AdaptiveOutputTiming
 )
 
 __all__ = [
@@ -30,10 +27,5 @@ __all__ = [
     "SCSSystem",
     "AxonalConnections",
     "MultiScaleGrid",
-    "AdaptiveOutputTiming",
-    
-    # 설정 구조체
-    "NodeConfig",
-    "ConnectionConfig", 
-    "TimingConfig"
+    "AdaptiveOutputTiming"
 ]

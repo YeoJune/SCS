@@ -1,0 +1,111 @@
+# configs/phase2_logiqa_small.yaml
+# Phase 2: LogiQA 추론 능력 검증 (Small-Scale)
+
+# 기본 설정 상속
+defaults:
+  - base_model
+
+# 실험 메타정보
+experiment:
+  name: "Phase2_LogiQA_Small"
+  description: "LogiQA 데이터셋을 통한 기본 추론 능력 검증 (작은 규모)"
+  phase: 2
+  expected_runtime: "30-60분"
+
+# 태스크 설정
+task:
+  name: "LogiQA"
+  type: "reasoning" # DataProcessor가 process_reasoning을 호출하도록 지시
+  dataset_name: "lucasmccabe/logiqa" # Hugging Face 데이터셋 ID
+  max_samples:
+    train: 500 # 빠른 테스트를 위해 제한
+    validation: 100
+    test: 100
+
+# 모델 설정 (Small 구성으로 오버라이드)
+model:
+  brain_regions:
+    PFC:
+      grid_height: 16
+      grid_width: 8
+      total_neurons: 128
+      decay_rate: 0.95
+      distance_tau: 1.5
+    ACC:
+      grid_height: 8
+      grid_width: 8
+      total_neurons: 64
+      decay_rate: 0.88
+      distance_tau: 2.0
+    IPL:
+      grid_height: 12
+      grid_width: 8
+      total_neurons: 96
+      decay_rate: 0.92
+      distance_tau: 2.5
+    MTL:
+      grid_height: 8
+      grid_width: 8
+      total_neurons: 64
+      decay_rate: 0.97
+      distance_tau: 3.0
+
+# 학습 설정
+training:
+  epochs: 20 # 빠른 검증을 위해 단축
+  learning_rate: 5e-4
+  batch_size: 4 # QA/추론 태스크는 작은 배치가 안정적
+  max_clk_training: 150 # 작은 모델이므로 CLK 수를 약간 늘려줌
+  
+  # 최적화 설정
+  optimizer: "adamw"
+  weight_decay: 0.01
+  warmup_steps: 100
+  
+  # 평가 설정
+  eval_every_n_epochs: 5
+  save_every_n_epochs: 10
+  early_stopping_patience: 5
+
+# 데이터 설정
+data:
+  tokenizer:
+    name: "bert-base-uncased"
+    max_length: 256 # LogiQA는 컨텍스트가 길 수 있음
+    padding: true
+    truncation: true
+  
+  # 데이터 전처리 설정
+  preprocessing:
+    lowercase: true
+    remove_punctuation: false # 논리 관계에 중요
+    max_context_length: 200
+    max_question_length: 50
+
+# 평가 메트릭
+metrics:
+  primary: "accuracy"
+  additional: ["f1", "precision", "recall"]
+  
+# 실험 추적 설정
+tracking:
+  use_wandb: true
+  wandb_project: "SCS_LogiQA"
+  wandb_tags: ["phase2", "logiqa", "small", "reasoning"]
+  
+  # 저장할 메트릭
+  log_metrics: ["loss", "accuracy", "f1"]
+  log_frequency: 10 # 매 10 스텝마다
+
+# 분석 설정
+analysis:
+  dynamics_analysis:
+    enabled: true
+    save_spike_patterns: true
+    analyze_connectivity: true
+  
+  representation_analysis:
+    enabled: false # Phase 2에서는 비활성화
+    
+  ablation_study:
+    enabled: false # Phase 2에서는 비활성화

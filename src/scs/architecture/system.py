@@ -325,42 +325,6 @@ class SCSSystem(nn.Module):
         else:
             # 추론 모드: 기존 동적 생성 방식
             return self._forward_inference(input_schedule, max_clk)
-            
-            # 출력 처리
-            acc_activity = self._get_acc_activity(current_spikes)
-            
-            if not output_started and self.output_timing.should_start_output(clk, acc_activity):
-                self.output_interface.start_generation()
-                output_started = True
-            
-            if output_started:
-                output_spikes = current_spikes[self.output_node]
-                token_logits = self.output_interface.generate_token_at_clk(output_spikes)
-                generated_tokens.append(token_logits)
-                
-                output_confidence = torch.softmax(token_logits, dim=-1).max().item()
-                if self.output_timing.should_end_output(clk, acc_activity, output_confidence):
-                    self.output_interface.end_generation()
-                    break
-            
-            # 이전 상태 업데이트
-            self.previous_spikes = {k: v.clone() for k, v in current_spikes.items()}
-        
-        # 출력 토큰 생성
-        if generated_tokens:
-            output_tokens = torch.stack(generated_tokens, dim=0)
-        else:
-            output_tokens = torch.zeros(1, self.output_interface.vocab_size, device=self.device)
-        
-        processing_info = {
-            "processing_clk": self.current_clk + 1,
-            "output_started": output_started,
-            "tokens_generated": len(generated_tokens),
-            "convergence_achieved": clk < max_clk - 1,
-            "final_acc_activity": acc_activity if 'acc_activity' in locals() else 0.0
-        }
-        
-        return output_tokens, processing_info
     
     def _forward_training(
         self,
@@ -514,6 +478,17 @@ class SCSSystem(nn.Module):
         token_id = input_sequence[clk:clk+1]  # [1]
         return self.input_interface(token_id)  # [H, W]
     
+    def _get_external_input_at_clk(
+        self,
+        input_schedule: Dict[int, torch.Tensor],  # CLK -> 토큰 매핑
+        clk: int
+    ) -> Optional[torch.Tensor]:
+        """추론 시 특정 CLK에서의 외부 입력 처리 (딕셔너리 스케줄)"""
+        if clk not in input_schedule:
+            return None
+        
+        token_tensor = input_schedule[clk]  # 이미 텐서 형태
+        return self.input_interface(token_tensor)  # [H, W]
     
     def _phase1_compute_spikes(self) -> Dict[str, torch.Tensor]:
         """Phase 1: 현재 막전위 기준 스파이크 계산"""

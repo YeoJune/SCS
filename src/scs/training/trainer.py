@@ -1,6 +1,6 @@
 # src/scs/training/trainer.py
 """
-SCS 학습 시스템
+SCS 배치 처리 최적화 학습 시스템
 """
 
 import torch
@@ -11,7 +11,7 @@ from tqdm import tqdm
 import logging
 
 from .loss import SCSLoss
-from .metrics import SCSMetrics
+from .metric import SCSMetrics
 
 
 @dataclass
@@ -25,26 +25,36 @@ class TrainingConfig:
     save_every: int = 10
     early_stopping_patience: int = 20
     device: str = "cuda"
+    max_clk_training: int = 100  # 학습 시 고정 CLK
+    pad_token_id: int = 0  # 패딩 토큰 ID
 
 
 class SCSTrainer:
-    """SCS 학습 시스템"""
+    """SCS 배치 처리 최적화 학습 시스템"""
     
     def __init__(
         self,
         model: torch.nn.Module,
         config: TrainingConfig,
         loss_fn: Optional[SCSLoss] = None,
-        optimizer: Optional[torch.optim.Optimizer] = None
+        optimizer: Optional[torch.optim.Optimizer] = None,
+        scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
+        tokenizer: Optional[Any] = None
     ):
         self.model = model
         self.config = config
-        self.loss_fn = loss_fn or SCSLoss()
+        
+        # 손실 함수 (pad_token_id 포함)
+        self.loss_fn = loss_fn or SCSLoss(pad_token_id=config.pad_token_id)
+        
+        # 최적화기와 스케줄러
         self.optimizer = optimizer or torch.optim.Adam(
             model.parameters(), 
             lr=config.learning_rate,
             weight_decay=config.weight_decay
         )
+        self.scheduler = scheduler
+        self.tokenizer = tokenizer
         
         self.device = config.device
         self.model.to(self.device)
@@ -70,12 +80,10 @@ class SCSTrainer:
             'train_loss': [],
             'train_accuracy': [],
             'val_loss': [],
-            'val_accuracy': [],
-            'convergence_rate': [],
-            'processing_efficiency': []
+            'val_accuracy': []
         }
         
-        self.logger.info(f"학습 시작: {self.config.epochs} 에포크")
+        self.logger.info(f"배치 처리 학습 시작: {self.config.epochs} 에포크")
         
         for epoch in range(self.config.epochs):
             self.current_epoch = epoch
@@ -84,8 +92,6 @@ class SCSTrainer:
             train_metrics = self._train_epoch(train_loader)
             history['train_loss'].append(train_metrics['loss'])
             history['train_accuracy'].append(train_metrics['accuracy'])
-            history['convergence_rate'].append(train_metrics['convergence_rate'])
-            history['processing_efficiency'].append(train_metrics['processing_efficiency'])
             
             # 검증
             if val_loader and epoch % self.config.eval_every == 0:
@@ -108,126 +114,124 @@ class SCSTrainer:
         return history
     
     def _train_epoch(self, train_loader: DataLoader) -> Dict[str, float]:
-        """한 에포크 학습"""
+        """한 에포크 배치 학습"""
         self.model.train()
         
         total_loss = 0.0
         total_accuracy = 0.0
-        total_convergence = 0.0
-        total_efficiency = 0.0
-        num_samples = 0
+        num_batches = 0
         
         progress_bar = tqdm(train_loader, desc=f"Epoch {self.current_epoch}")
         
         for batch in progress_bar:
-            # 배치 처리
+            # 배치 처리 (for 루프 제거!)
             batch_loss, batch_metrics = self._train_batch(batch)
             
             total_loss += batch_loss
             total_accuracy += batch_metrics['accuracy']
-            total_convergence += batch_metrics['convergence_rate']
-            total_efficiency += batch_metrics['processing_efficiency']
-            num_samples += 1
+            num_batches += 1
             
             progress_bar.set_postfix({
-                'loss': batch_loss,
-                'acc': batch_metrics['accuracy']
+                'loss': f"{batch_loss:.4f}",
+                'acc': f"{batch_metrics['accuracy']:.4f}"
             })
         
         return {
-            'loss': total_loss / num_samples,
-            'accuracy': total_accuracy / num_samples,
-            'convergence_rate': total_convergence / num_samples,
-            'processing_efficiency': total_efficiency / num_samples
+            'loss': total_loss / num_batches,
+            'accuracy': total_accuracy / num_batches
         }
     
-    def _train_batch(self, batch: Dict[str, Any]) -> tuple:
-        """배치 학습"""
-        input_schedules = batch['input_schedules']
-        target_tokens = batch['target_tokens']
-        batch_size = target_tokens.shape[0]
+    def _train_batch(self, batch: Dict[str, torch.Tensor]) -> tuple:
+        """진정한 배치 학습 - GPU 병렬 처리 활용"""
+        # 1. 데이터 준비 및 디바이스로 이동
+        input_tokens = batch['input_tokens'].to(self.device)
+        target_tokens = batch['target_tokens'].to(self.device) 
+        attention_mask = batch['attention_mask'].to(self.device)
         
-        batch_loss = 0.0
-        batch_metrics = {
-            'accuracy': 0.0,
-            'convergence_rate': 0.0,
-            'processing_efficiency': 0.0
-        }
-        
+        # 2. 그래디언트 초기화
         self.optimizer.zero_grad()
         
-        # 배치 내 각 샘플 처리
-        for i in range(batch_size):
-            # 샘플별 입력 스케줄 준비
-            input_schedule = {
-                clk: tokens[i].item() 
-                for clk, tokens in input_schedules.items()
-            }
-            target = target_tokens[i]
-            
-            # Forward pass
-            outputs, processing_info = self.model(input_schedule)
-            
-            # 손실 계산
-            loss = self.loss_fn(outputs, target, processing_info)
-            batch_loss += loss.item()
-            
-            # 역전파
-            loss.backward()
-            
-            # 메트릭 계산
-            batch_metrics['accuracy'] += SCSMetrics.accuracy(outputs, target)
-            batch_metrics['convergence_rate'] += SCSMetrics.convergence_rate(processing_info)
-            batch_metrics['processing_efficiency'] += SCSMetrics.processing_efficiency(processing_info)
+        # 3. Forward Pass (모델에 배치 전체를 전달)
+        # 모델의 forward는 내부적으로 CLK 루프를 돌고 최종 로짓 [B, seq_len, vocab_size]를 반환
+        output_logits, processing_info = self.model(
+            input_schedule=input_tokens,
+            max_clk=self.config.max_clk_training,  # YAML 설정에서 가져온 고정 CLK
+            training=True,
+            target_schedule=target_tokens,
+            attention_mask=attention_mask
+        )
         
-        # 그래디언트 클리핑
+        # 4. 손실 계산 (수정된 loss_fn 사용)
+        loss = self.loss_fn(output_logits, target_tokens, processing_info)
+        
+        # 5. Backward Pass (배치 전체에 대해 한 번만 수행)
+        loss.backward()
+        
+        # 6. 그래디언트 클리핑
         if self.config.gradient_clip_norm > 0:
             torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(), 
                 self.config.gradient_clip_norm
             )
         
-        # 옵티마이저 스텝
+        # 7. 파라미터 업데이트
         self.optimizer.step()
-        
-        # 평균 계산
-        batch_loss /= batch_size
-        for key in batch_metrics:
-            batch_metrics[key] /= batch_size
-        
-        return batch_loss, batch_metrics
+        if self.scheduler:
+            self.scheduler.step()
+            
+        # 8. 메트릭 계산 (정확도)
+        with torch.no_grad():
+            accuracy = SCSMetrics.accuracy(
+                output_logits, 
+                target_tokens, 
+                pad_token_id=self.config.pad_token_id
+            )
+            
+        return loss.item(), {'accuracy': accuracy}
+    
     
     def _validate_epoch(self, val_loader: DataLoader) -> Dict[str, float]:
-        """검증"""
+        """검증 - 상세 분석을 위해 배치 크기 1로 처리"""
         self.model.eval()
         
         total_loss = 0.0
         total_accuracy = 0.0
+        total_comprehensive = 0.0
         num_samples = 0
         
         with torch.no_grad():
             for batch in val_loader:
-                input_schedules = batch['input_schedules']
-                target_tokens = batch['target_tokens']
-                batch_size = target_tokens.shape[0]
+                # 검증 시에는 배치 크기 1로 각 샘플을 상세 분석
+                batch_size = batch['input_tokens'].size(0)
                 
                 for i in range(batch_size):
-                    input_schedule = {
-                        clk: tokens[i].item() 
-                        for clk, tokens in input_schedules.items()
-                    }
-                    target = target_tokens[i]
+                    # 단일 샘플 추출
+                    single_input = batch['input_tokens'][i:i+1].to(self.device)
+                    single_target = batch['target_tokens'][i:i+1].to(self.device)
+                    single_mask = batch['attention_mask'][i:i+1].to(self.device)
                     
-                    outputs, processing_info = self.model(input_schedule)
-                    loss = self.loss_fn(outputs, target, processing_info)
+                    # forward 메서드에서 training=False로 호출하여 추론 경로 사용
+                    outputs, processing_info = self.model(
+                        input_schedule=single_input.squeeze(0),
+                        training=False  # 추론 모드로 상세 메트릭 수집
+                    )
+                    
+                    # 손실 및 메트릭 계산
+                    loss = self.loss_fn(
+                        outputs.unsqueeze(0) if outputs.dim() == 1 else outputs,
+                        single_target.squeeze(0) if single_target.dim() == 1 else single_target,
+                        processing_info
+                    )
                     
                     total_loss += loss.item()
-                    total_accuracy += SCSMetrics.accuracy(outputs, target)
+                    total_accuracy += SCSMetrics.accuracy(outputs, single_target.squeeze(0))
+                    total_comprehensive += SCSMetrics.comprehensive_score(processing_info)
                     num_samples += 1
         
         return {
             'loss': total_loss / num_samples,
-            'accuracy': total_accuracy / num_samples
+            'accuracy': total_accuracy / num_samples,
+            'comprehensive_score': total_comprehensive / num_samples
         }
     
     def _should_early_stop(self, val_loss: float) -> bool:
@@ -249,6 +253,8 @@ class SCSTrainer:
             'best_loss': self.best_loss,
             'config': self.config
         }
+        if self.scheduler:
+            checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()
         torch.save(checkpoint, f"{save_path}/checkpoint_epoch_{epoch}.pt")
     
     def _log_progress(self, epoch: int, metrics: Dict[str, float]):
@@ -256,43 +262,73 @@ class SCSTrainer:
         self.logger.info(
             f"에포크 {epoch}: "
             f"손실={metrics['loss']:.4f}, "
-            f"정확도={metrics['accuracy']:.4f}, "
-            f"수렴율={metrics['convergence_rate']:.4f}, "
-            f"효율성={metrics['processing_efficiency']:.4f}"
+            f"정확도={metrics['accuracy']:.4f}"
         )
     
     def evaluate(self, test_loader: DataLoader) -> Dict[str, float]:
-        """테스트 평가"""
+        """테스트 평가 - 모든 상세 메트릭 분석"""
         self.model.eval()
         
         total_loss = 0.0
         total_accuracy = 0.0
         total_comprehensive = 0.0
+        total_convergence = 0.0
+        total_efficiency = 0.0
         num_samples = 0
         
         with torch.no_grad():
             for batch in test_loader:
-                input_schedules = batch['input_schedules']
-                target_tokens = batch['target_tokens']
-                batch_size = target_tokens.shape[0]
+                batch_size = batch['input_tokens'].size(0)
                 
                 for i in range(batch_size):
-                    input_schedule = {
-                        clk: tokens[i].item() 
-                        for clk, tokens in input_schedules.items()
-                    }
-                    target = target_tokens[i]
+                    # 단일 샘플로 상세 분석
+                    single_input = batch['input_tokens'][i:i+1].to(self.device)
+                    single_target = batch['target_tokens'][i:i+1].to(self.device)
                     
-                    outputs, processing_info = self.model(input_schedule)
-                    loss = self.loss_fn(outputs, target, processing_info)
+                    outputs, processing_info = self.model(
+                        input_schedule=single_input.squeeze(0),
+                        training=False
+                    )
+                    
+                    loss = self.loss_fn(
+                        outputs.unsqueeze(0) if outputs.dim() == 1 else outputs,
+                        single_target.squeeze(0) if single_target.dim() == 1 else single_target,
+                        processing_info
+                    )
                     
                     total_loss += loss.item()
-                    total_accuracy += SCSMetrics.accuracy(outputs, target)
+                    total_accuracy += SCSMetrics.accuracy(outputs, single_target.squeeze(0))
                     total_comprehensive += SCSMetrics.comprehensive_score(processing_info)
+                    total_convergence += SCSMetrics.convergence_rate(processing_info)
+                    total_efficiency += SCSMetrics.processing_efficiency(processing_info)
                     num_samples += 1
         
         return {
             'test_loss': total_loss / num_samples,
             'test_accuracy': total_accuracy / num_samples,
-            'comprehensive_score': total_comprehensive / num_samples
+            'comprehensive_score': total_comprehensive / num_samples,
+            'convergence_rate': total_convergence / num_samples,
+            'processing_efficiency': total_efficiency / num_samples
         }
+
+
+class GradualUnfreezingScheduler:
+    """점진적 언프리징 스케줄러"""
+    
+    def __init__(self, model, unfreezing_schedule: Dict[int, List[str]]):
+        self.model = model
+        self.schedule = unfreezing_schedule
+        
+        # 초기에는 모든 파라미터 고정
+        for param in self.model.parameters():
+            param.requires_grad = False
+    
+    def step(self, epoch: int):
+        """에포크에 따라 점진적으로 언프리징"""
+        if epoch in self.schedule:
+            modules_to_unfreeze = self.schedule[epoch]
+            for module_name in modules_to_unfreeze:
+                module = getattr(self.model, module_name, None)
+                if module:
+                    for param in module.parameters():
+                        param.requires_grad = True

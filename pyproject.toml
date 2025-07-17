@@ -1,18 +1,20 @@
+# pyproject.toml
+
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "scs"
+name = "scs-research" # 프로젝트 이름 변경
 version = "0.1.0"
 description = "Spike-Based Cognitive System: A Bio-Inspired Dynamic Computing Architecture"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.8"
 authors = [
-    {name = "YeoJune", email = "joyyoj1@naver.com"}
+    {name = "YeoJoon", email = "joyyoj1@naver.com"}
 ]
-keywords = ["spiking neural networks", "cognitive architecture", "semantic reasoning", "neuromomorphic computing"]
+keywords = ["spiking neural networks", "cognitive architecture", "semantic reasoning", "neuromorphic computing"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
@@ -21,73 +23,51 @@ classifiers = [
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
 dependencies = [
     # Core ML frameworks
     "torch>=1.12.0",
-    "torchvision>=0.13.0",
     "numpy>=1.21.0",
     
     # NLP and data processing
     "transformers>=4.20.0",
-    "tokenizers>=0.12.0",
     "datasets>=2.0.0",
-    "nltk>=3.7",
     
     # Configuration and experiment management
     "PyYAML>=6.0",
-    "hydra-core>=1.2.0",
-    "wandb>=0.13.0",
-    "tensorboard>=2.9.0",
-    
-    # Scientific computing and visualization
-    "scipy>=1.8.0",
-    "matplotlib>=3.5.0",
-    "seaborn>=0.11.0",
-    "plotly>=5.0.0",
+    "wandb", # wandb 버전은 보통 최신을 따름
     
     # Utilities
     "tqdm>=4.64.0",
     "rich>=12.0.0",
-    "click>=8.0.0",
-    "jsonlines>=3.0.0",
-    
-    # Testing and quality
-    "pytest>=7.0.0",
-    "pytest-cov>=3.0.0",
-    "black>=22.0.0",
-    "isort>=5.10.0",
-    "flake8>=4.0.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "jupyter>=1.0.0",
-    "ipykernel>=6.0.0",
-    "pre-commit>=2.0.0",
-    "mypy>=0.950",
-]
-
-neuromorphic = [
-    "snntorch>=0.6.0",
-    "norse>=0.0.7",
+    "jupyter",
+    "ipykernel",
+    "pre-commit",
+    "mypy",
+    "pytest",
+    "pytest-cov",
+    "black",
+    "isort",
+    "flake8",
 ]
 
 analysis = [
-    "networkx>=2.8.0",
-    "scikit-learn>=1.1.0",
-    "umap-learn>=0.5.0",
-    "tsne>=0.3.0",
+    "matplotlib",
+    "seaborn",
+    "plotly",
+    "scikit-learn",
+    "networkx",
+    "umap-learn",
 ]
 
 [project.urls]
-Homepage = "https://github.com/[your-username]/SCS"
-Documentation = "https://github.com/[your-username]/SCS/tree/main/docs"
-Repository = "https://github.com/[your-username]/SCS"
-Issues = "https://github.com/[your-username]/SCS/issues"
+Repository = "https://github.com/YeoJune/SCS"
 
 [project.scripts]
 scs = "scs.cli:main"
@@ -95,66 +75,14 @@ scs = "scs.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.setuptools.package-data]
-scs = ["configs/*.yaml", "data/*.json"]
+# configs/는 패키지 데이터가 아니므로 이 섹션은 비워둠
 
-# Testing configuration
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = "test_*.py"
-python_classes = "Test*"
-python_functions = "test_*"
-addopts = "--cov=src/scs --cov-report=html --cov-report=term-missing"
-
-# Code formatting
 [tool.black]
 line-length = 88
-target-version = ['py38']
-include = '\.pyi?$'
-extend-exclude = '''
-/(
-  # directories
-  \.eggs
-  | \.git
-  | \.hg
-  | \.mypy_cache
-  | \.tox
-  | \.venv
-  | build
-  | dist
-)/
-'''
 
 [tool.isort]
 profile = "black"
-multi_line_output = 3
-line_length = 88
-known_first_party = ["scs"]
 
-# Type checking
 [tool.mypy]
 python_version = "3.8"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = true
-disallow_incomplete_defs = true
-check_untyped_defs = true
-disallow_untyped_decorators = true
-no_implicit_optional = true
-warn_redundant_casts = true
-warn_unused_ignores = true
-warn_no_return = true
-warn_unreachable = true
-strict_equality = true
-
-[[tool.mypy.overrides]]
-module = [
-    "torch.*",
-    "transformers.*",
-    "datasets.*",
-    "wandb.*",
-    "matplotlib.*",
-    "seaborn.*",
-    "plotly.*",
-]
-ignore_missing_imports = true
+ignore_missing_imports = true # 단순화를 위해 외부 라이브러리 타입 에러는 무시

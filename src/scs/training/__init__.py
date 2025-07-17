@@ -2,7 +2,7 @@
 """
 SCS 학습 시스템
 
-문서 명세 기반 계층적 학습 전략 구현
+배치 처리 최적화된 계층적 학습 전략 구현
 """
 
 from .trainer import (
@@ -12,13 +12,14 @@ from .trainer import (
 )
 
 from .loss import (
+    SCSLoss,
     SpikingLoss,
     NeuromodulationLoss,
-    MultiObjectiveLoss,
-    SCSMetrics
+    MultiObjectiveLoss
 )
 
-from .optimizer import (
+from .metric import (
+    SCSMetrics,
     SCSOptimizer,
     KHopBackpropagation,
     AdaptiveLearningRateScheduler,
@@ -28,16 +29,17 @@ from .optimizer import (
 __all__ = [
     # 메인 학습 시스템
     "SCSTrainer",
-    "TrainingConfig",
+    "TrainingConfig", 
     "GradualUnfreezingScheduler",
     
-    # 손실 함수 및 메트릭
+    # 손실 함수 시스템 (배치 처리 지원)
+    "SCSLoss",
     "SpikingLoss",
     "NeuromodulationLoss", 
     "MultiObjectiveLoss",
-    "SCSMetrics",
     
-    # 최적화 시스템
+    # 메트릭 및 최적화 시스템
+    "SCSMetrics",
     "SCSOptimizer",
     "KHopBackpropagation",
     "AdaptiveLearningRateScheduler",

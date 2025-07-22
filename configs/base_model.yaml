@@ -60,7 +60,7 @@ connectivity:
   # 지역적 연결
   local:
     max_distance: 5
-    connection_prob: 0.1
+    # connection_prob: 0.1  # LocalConnectivity에서 사용하지 않음 (distance_tau를 대신 사용)
 
   # 축삭 연결
   axonal:

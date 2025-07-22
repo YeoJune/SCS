@@ -83,11 +83,11 @@ class ModelBuilder:
                 nodes[region_name] = SpikeNode(
                     grid_height=grid_height,
                     grid_width=grid_width,
-                    threshold=config["spike_dynamics"]["threshold"],
+                    spike_threshold=config["spike_dynamics"]["threshold"],  # threshold -> spike_threshold
                     refractory_base=config["spike_dynamics"]["refractory_base"],
                     refractory_adaptive_factor=config["spike_dynamics"]["refractory_adaptive_factor"],
                     decay_rate=region_config["decay_rate"],
-                    distance_tau=region_config["distance_tau"],
+                    # distance_tau는 SpikeNode에 없음 - LocalConnectivity용으로 보임
                     surrogate_beta=config["spike_dynamics"]["surrogate_beta"],
                     ema_alpha=config["spike_dynamics"]["ema_alpha"],
                     device=device
@@ -97,8 +97,9 @@ class ModelBuilder:
                 local_connections[region_name] = LocalConnectivity(
                     grid_height=grid_height,
                     grid_width=grid_width,
+                    distance_tau=region_config["distance_tau"],  # distance_tau는 LocalConnectivity에서 사용
                     max_distance=config["connectivity"]["local"]["max_distance"],
-                    connection_prob=config["connectivity"]["local"]["connection_prob"],
+                    # connection_prob는 LocalConnectivity에서 사용하지 않음
                     device=device
                 )
             
@@ -132,15 +133,19 @@ class ModelBuilder:
             
             input_interface = InputInterface(
                 vocab_size=io_config["input_interface"]["vocab_size"],
+                grid_height=node_grid_sizes["PFC"][0],  # PFC 노드를 입력 노드로 가정
+                grid_width=node_grid_sizes["PFC"][1],
                 embedding_dim=io_config["input_interface"]["embedding_dim"],
                 max_seq_len=io_config["input_interface"]["max_seq_len"],
                 num_heads=io_config["input_interface"]["num_heads"],
-                positional_encoding=io_config["input_interface"]["positional_encoding"],
+                use_positional_encoding=io_config["input_interface"]["positional_encoding"],  # positional_encoding -> use_positional_encoding
                 device=device
             )
             
             output_interface = OutputInterface(
                 vocab_size=io_config["output_interface"]["vocab_size"],
+                grid_height=node_grid_sizes["PFC"][0],  # PFC 노드를 출력 노드로 가정
+                grid_width=node_grid_sizes["PFC"][1],
                 embedding_dim=io_config["output_interface"]["embedding_dim"],
                 max_output_len=io_config["output_interface"]["max_output_len"],
                 num_heads=io_config["output_interface"]["num_heads"],

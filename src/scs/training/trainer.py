@@ -194,6 +194,15 @@ class SCSTrainer:
         """검증 - 상세 분석을 위해 배치 크기 1로 처리"""
         self.model.eval()
         
+        # 데이터로더가 비어있는 경우 체크
+        if len(val_loader) == 0:
+            self.logger.warning("Validation loader is empty")
+            return {
+                'loss': float('inf'),
+                'accuracy': 0.0,
+                'comprehensive_score': 0.0
+            }
+        
         total_loss = 0.0
         total_accuracy = 0.0
         total_comprehensive = 0.0
@@ -229,9 +238,9 @@ class SCSTrainer:
                     num_samples += 1
         
         return {
-            'loss': total_loss / num_samples,
-            'accuracy': total_accuracy / num_samples,
-            'comprehensive_score': total_comprehensive / num_samples
+            'loss': total_loss / max(num_samples, 1),
+            'accuracy': total_accuracy / max(num_samples, 1),
+            'comprehensive_score': total_comprehensive / max(num_samples, 1)
         }
     
     def _should_early_stop(self, val_loss: float) -> bool:
@@ -269,6 +278,17 @@ class SCSTrainer:
         """테스트 평가 - 모든 상세 메트릭 분석"""
         self.model.eval()
         
+        # 데이터로더가 비어있는 경우 체크
+        if len(test_loader) == 0:
+            self.logger.warning("Test loader is empty")
+            return {
+                'test_loss': float('inf'),
+                'test_accuracy': 0.0,
+                'comprehensive_score': 0.0,
+                'convergence_rate': 0.0,
+                'processing_efficiency': 0.0
+            }
+        
         total_loss = 0.0
         total_accuracy = 0.0
         total_comprehensive = 0.0
@@ -304,11 +324,11 @@ class SCSTrainer:
                     num_samples += 1
         
         return {
-            'test_loss': total_loss / num_samples,
-            'test_accuracy': total_accuracy / num_samples,
-            'comprehensive_score': total_comprehensive / num_samples,
-            'convergence_rate': total_convergence / num_samples,
-            'processing_efficiency': total_efficiency / num_samples
+            'test_loss': total_loss / max(num_samples, 1),
+            'test_accuracy': total_accuracy / max(num_samples, 1),
+            'comprehensive_score': total_comprehensive / max(num_samples, 1),
+            'convergence_rate': total_convergence / max(num_samples, 1),
+            'processing_efficiency': total_efficiency / max(num_samples, 1)
         }
 
 

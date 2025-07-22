@@ -69,8 +69,22 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
     try:
         # 2. 데이터 로더 생성
         tokenizer = SCSTokenizer(config["data_loading"]["tokenizer"]["name"])
-        train_loader = create_dataloader(dataset_name=config["task"]["dataset_name"], split="train", batch_size=config["data_loading"]["batch_size"], max_length=config["data_loading"]["tokenizer"]["max_length"], tokenizer=tokenizer)
-        val_loader = create_dataloader(dataset_name=config["task"]["dataset_name"], split="validation", batch_size=1, max_length=config["data_loading"]["tokenizer"]["max_length"], tokenizer=tokenizer)
+        
+        # 데이터셋 이름 가져오기 - config 형식에 따라 다른 위치 확인
+        dataset_name = None
+        if "task" in config and "dataset_name" in config["task"]:
+            dataset_name = config["task"]["dataset_name"]
+        elif "data" in config and "dataset_name" in config["data"]:
+            dataset_name = config["data"]["dataset_name"]  
+        elif "dataset_name" in config:
+            dataset_name = config["dataset_name"]
+        else:
+            # base_model.yaml 같은 경우 기본값 사용
+            dataset_name = "datatune/LogiQA2.0"
+            logger.warning(f"dataset_name not found in config, using default: {dataset_name}")
+        
+        train_loader = create_dataloader(dataset_name=dataset_name, split="train", batch_size=config["data_loading"]["batch_size"], max_length=config["data_loading"]["tokenizer"]["max_length"], tokenizer=tokenizer)
+        val_loader = create_dataloader(dataset_name=dataset_name, split="validation", batch_size=1, max_length=config["data_loading"]["tokenizer"]["max_length"], tokenizer=tokenizer)
 
         # 3. 모델 인스턴스화
         config["io_system"]["input_interface"]["vocab_size"] = tokenizer.vocab_size
@@ -81,14 +95,32 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
         # 4. 학습 시스템 구성
         pad_token_id = tokenizer.tokenizer.pad_token_id
         
-        # learning config 매핑 (base_learning_rate -> learning_rate)
-        learning_config = config["learning"].copy()
-        if "base_learning_rate" in learning_config and "learning_rate" not in learning_config:
-            learning_config["learning_rate"] = learning_config.pop("base_learning_rate")
+        # config 매핑 - base_model.yaml은 "learning", phase2는 "training" 사용
+        raw_config = config.get("learning", config.get("training", {})).copy()
         
-        training_config = TrainingConfig(pad_token_id=pad_token_id, device=device, **learning_config)
+        # 파라미터 이름 정규화
+        if "base_learning_rate" in raw_config:
+            raw_config["learning_rate"] = raw_config.pop("base_learning_rate")
+        if "max_grad_norm" in raw_config:
+            raw_config["gradient_clip_norm"] = raw_config.pop("max_grad_norm")
+        if "eval_every_n_epochs" in raw_config:
+            raw_config["eval_every"] = raw_config.pop("eval_every_n_epochs")
+        if "save_every_n_epochs" in raw_config:
+            raw_config["save_every"] = raw_config.pop("save_every_n_epochs")
+        
+        # TrainingConfig가 허용하는 파라미터만 필터링
+        valid_params = {
+            "epochs", "learning_rate", "weight_decay", "gradient_clip_norm",
+            "eval_every", "save_every", "early_stopping_patience", "max_clk_training"
+        }
+        filtered_config = {k: v for k, v in raw_config.items() if k in valid_params}
+        
+        training_config = TrainingConfig(pad_token_id=pad_token_id, device=device, **filtered_config)
         loss_fn = MultiObjectiveLoss(pad_token_id=pad_token_id)
-        optimizer = OptimizerFactory.create(optimizer_type=config["learning"].get("optimizer", "adamw").lower(), model=model, config=training_config)
+        
+        # 옵티마이저 타입 가져오기
+        optimizer_type = raw_config.get("optimizer", "adamw").lower()
+        optimizer = OptimizerFactory.create(optimizer_type=optimizer_type, model=model, config=training_config)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=training_config.epochs)
         
         # 5. 트레이너 생성 및 학습
@@ -97,7 +129,7 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
 
         # 6. 최종 평가
         logger.info("최종 평가 시작...")
-        test_loader = create_dataloader(dataset_name=config["task"]["dataset_name"], split="test", batch_size=1, max_length=config["data_loading"]["tokenizer"]["max_length"], tokenizer=tokenizer)
+        test_loader = create_dataloader(dataset_name=dataset_name, split="test", batch_size=1, max_length=config["data_loading"]["tokenizer"]["max_length"], tokenizer=tokenizer)
         test_results = trainer.evaluate(test_loader)
         save_config(test_results, experiment_dir / "results.yaml")
 
@@ -120,7 +152,21 @@ def evaluate_mode(args: argparse.Namespace):
     try:
         # 2. 데이터 및 모델 로드
         tokenizer = SCSTokenizer(config["data_loading"]["tokenizer"]["name"])
-        test_loader = create_dataloader(dataset_name=config["task"]["dataset_name"], split="test", batch_size=1, max_length=config["data_loading"]["tokenizer"]["max_length"], tokenizer=tokenizer)
+        
+        # 데이터셋 이름 가져오기 - config 형식에 따라 다른 위치 확인
+        dataset_name = None
+        if "task" in config and "dataset_name" in config["task"]:
+            dataset_name = config["task"]["dataset_name"]
+        elif "data" in config and "dataset_name" in config["data"]:
+            dataset_name = config["data"]["dataset_name"]  
+        elif "dataset_name" in config:
+            dataset_name = config["dataset_name"]
+        else:
+            # base_model.yaml 같은 경우 기본값 사용
+            dataset_name = "datatune/LogiQA2.0"
+            logger.warning(f"dataset_name not found in config, using default: {dataset_name}")
+        
+        test_loader = create_dataloader(dataset_name=dataset_name, split="test", batch_size=1, max_length=config["data_loading"]["tokenizer"]["max_length"], tokenizer=tokenizer)
         
         config["io_system"]["input_interface"]["vocab_size"] = tokenizer.vocab_size
         config["io_system"]["output_interface"]["vocab_size"] = tokenizer.vocab_size
@@ -132,12 +178,27 @@ def evaluate_mode(args: argparse.Namespace):
         # 3. 트레이너 생성 및 평가
         pad_token_id = tokenizer.tokenizer.pad_token_id
         
-        # learning config 매핑 (base_learning_rate -> learning_rate)
-        learning_config = config["learning"].copy()
-        if "base_learning_rate" in learning_config and "learning_rate" not in learning_config:
-            learning_config["learning_rate"] = learning_config.pop("base_learning_rate")
+        # config 매핑 - base_model.yaml은 "learning", phase2는 "training" 사용
+        raw_config = config.get("learning", config.get("training", {})).copy()
         
-        training_config = TrainingConfig(pad_token_id=pad_token_id, device=device, **learning_config)
+        # 파라미터 이름 정규화
+        if "base_learning_rate" in raw_config:
+            raw_config["learning_rate"] = raw_config.pop("base_learning_rate")
+        if "max_grad_norm" in raw_config:
+            raw_config["gradient_clip_norm"] = raw_config.pop("max_grad_norm")
+        if "eval_every_n_epochs" in raw_config:
+            raw_config["eval_every"] = raw_config.pop("eval_every_n_epochs")
+        if "save_every_n_epochs" in raw_config:
+            raw_config["save_every"] = raw_config.pop("save_every_n_epochs")
+        
+        # TrainingConfig가 허용하는 파라미터만 필터링
+        valid_params = {
+            "epochs", "learning_rate", "weight_decay", "gradient_clip_norm",
+            "eval_every", "save_every", "early_stopping_patience", "max_clk_training"
+        }
+        filtered_config = {k: v for k, v in raw_config.items() if k in valid_params}
+        
+        training_config = TrainingConfig(pad_token_id=pad_token_id, device=device, **filtered_config)
         trainer = SCSTrainer(model=model, config=training_config, tokenizer=tokenizer)
         results = trainer.evaluate(test_loader)
         

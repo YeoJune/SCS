@@ -15,13 +15,15 @@ logger = logging.getLogger(__name__)
 class DataProcessor:
     """범용 데이터 전처리 프로세서"""
     
-    def __init__(self, tokenizer: SCSTokenizer):
-        self.tokenizer = tokenizer
+    def __init__(self, tokenizer: Optional[SCSTokenizer] = None):
+        self.tokenizer = tokenizer or SCSTokenizer()
     
     def create_dataset(
         self, 
         dataset_name: str, 
         split: str = "train",
+        tokenizer: Optional[SCSTokenizer] = None,
+        max_length: int = 256,
         max_samples: Optional[int] = None
     ):
         """
@@ -30,17 +32,22 @@ class DataProcessor:
         Args:
             dataset_name: HuggingFace 데이터셋 이름
             split: 데이터 분할 (train/validation/test)
+            tokenizer: 토크나이저 (None이면 기본값 사용)
+            max_length: 최대 길이
             max_samples: 최대 샘플 수 (None이면 전체)
         
         Returns:
             Dataset 객체
         """
+        # 토크나이저가 제공되지 않으면 self.tokenizer 사용
+        effective_tokenizer = tokenizer or self.tokenizer
+        
         logger.info(f"Creating dataset: {dataset_name} ({split})")
         
         try:
             dataset = create_dataset(
                 dataset_name=dataset_name,
-                tokenizer=self.tokenizer,
+                tokenizer=effective_tokenizer,
                 split=split,
                 max_samples=max_samples
             )

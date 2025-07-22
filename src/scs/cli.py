@@ -69,8 +69,8 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
     try:
         # 2. 데이터 로더 생성
         tokenizer = SCSTokenizer(config["data_loading"]["tokenizer"]["name"])
-        train_loader = create_dataloader(dataset_name=config["task"]["dataset_name"], task_type=config["task"]["type"], split="train", batch_size=config["data_loading"]["batch_size"], max_length=config["data_loading"]["tokenizer"]["max_length"])
-        val_loader = create_dataloader(dataset_name=config["task"]["dataset_name"], task_type=config["task"]["type"], split="validation", batch_size=1, max_length=config["data_loading"]["tokenizer"]["max_length"])
+        train_loader = create_dataloader(dataset_name=config["task"]["dataset_name"], split="train", batch_size=config["data_loading"]["batch_size"], max_length=config["data_loading"]["tokenizer"]["max_length"], tokenizer=tokenizer)
+        val_loader = create_dataloader(dataset_name=config["task"]["dataset_name"], split="validation", batch_size=1, max_length=config["data_loading"]["tokenizer"]["max_length"], tokenizer=tokenizer)
 
         # 3. 모델 인스턴스화
         config["io_system"]["input_interface"]["vocab_size"] = tokenizer.vocab_size
@@ -91,7 +91,7 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
 
         # 6. 최종 평가
         logger.info("최종 평가 시작...")
-        test_loader = create_dataloader(dataset_name=config["task"]["dataset_name"], task_type=config["task"]["type"], split="test", batch_size=1, max_length=config["data"]["tokenizer"]["max_length"])
+        test_loader = create_dataloader(dataset_name=config["task"]["dataset_name"], split="test", batch_size=1, max_length=config["data_loading"]["tokenizer"]["max_length"], tokenizer=tokenizer)
         test_results = trainer.evaluate(test_loader)
         save_config(test_results, experiment_dir / "results.yaml")
 
@@ -114,7 +114,7 @@ def evaluate_mode(args: argparse.Namespace):
     try:
         # 2. 데이터 및 모델 로드
         tokenizer = SCSTokenizer(config["data_loading"]["tokenizer"]["name"])
-        test_loader = create_dataloader(dataset_name=config["task"]["dataset_name"], task_type=config["task"]["type"], split="test", batch_size=1, max_length=config["data_loading"]["tokenizer"]["max_length"])
+        test_loader = create_dataloader(dataset_name=config["task"]["dataset_name"], split="test", batch_size=1, max_length=config["data_loading"]["tokenizer"]["max_length"], tokenizer=tokenizer)
         
         config["io_system"]["input_interface"]["vocab_size"] = tokenizer.vocab_size
         config["io_system"]["output_interface"]["vocab_size"] = tokenizer.vocab_size

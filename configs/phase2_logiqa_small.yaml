@@ -1,4 +1,12 @@
-# configs/phase2_logiqa_small.yaml
+# configs/phas# 태스크 설정
+task:
+  name: "LogiQA"
+  type: "reasoning" # DataProcessor가 process_reasoning을 호출하도록 지시
+  dataset_name: "datatune/LogiQA2.0" # 🔧 FIX: 작동하는 데이터셋으로 변경
+  max_samples:
+    train: 500 # 빠른 테스트를 위해 제한
+    validation: 100
+    test: 100_small.yaml
 # Phase 2: LogiQA 추론 능력 검증 (Small-Scale)
 
 # 기본 설정 상속
@@ -16,7 +24,7 @@ experiment:
 task:
   name: "LogiQA"
   type: "reasoning" # DataProcessor가 process_reasoning을 호출하도록 지시
-  dataset_name: "lucasmccabe/logiqa" # Hugging Face 데이터셋 ID
+  dataset_name: "datatune/LogiQA2.0" # Hugging Face 데이터셋 ID
   max_samples:
     train: 500 # 빠른 테스트를 위해 제한
     validation: 100
@@ -56,12 +64,12 @@ training:
   learning_rate: 5e-4
   batch_size: 4 # QA/추론 태스크는 작은 배치가 안정적
   max_clk_training: 150 # 작은 모델이므로 CLK 수를 약간 늘려줌
-  
+
   # 최적화 설정
   optimizer: "adamw"
   weight_decay: 0.01
   warmup_steps: 100
-  
+
   # 평가 설정
   eval_every_n_epochs: 5
   save_every_n_epochs: 10
@@ -74,7 +82,7 @@ data:
     max_length: 256 # LogiQA는 컨텍스트가 길 수 있음
     padding: true
     truncation: true
-  
+
   # 데이터 전처리 설정
   preprocessing:
     lowercase: true
@@ -86,13 +94,13 @@ data:
 metrics:
   primary: "accuracy"
   additional: ["f1", "precision", "recall"]
-  
+
 # 실험 추적 설정
 tracking:
   use_wandb: true
   wandb_project: "SCS_LogiQA"
   wandb_tags: ["phase2", "logiqa", "small", "reasoning"]
-  
+
   # 저장할 메트릭
   log_metrics: ["loss", "accuracy", "f1"]
   log_frequency: 10 # 매 10 스텝마다
@@ -103,9 +111,9 @@ analysis:
     enabled: true
     save_spike_patterns: true
     analyze_connectivity: true
-  
+
   representation_analysis:
     enabled: false # Phase 2에서는 비활성화
-    
+
   ablation_study:
     enabled: false # Phase 2에서는 비활성화

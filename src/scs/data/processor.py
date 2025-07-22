@@ -90,7 +90,7 @@ class DataProcessor:
     
     def _process_logiqa(self, dataset_name: str, split: str = "train") -> List[Dict[str, Any]]:
         """LogiQA 전용 처리"""
-        dataset = load_dataset("lucasmccabe/logiqa", split=split)
+        dataset = load_dataset("lucasmccabe/logiqa")
         
         processed = []
         

@@ -110,19 +110,29 @@ class LogiQADataset(BaseDataset):
     def _process_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
         """LogiQA 아이템 처리"""
         try:
+            import json
+            
+            # text 필드에서 JSON 파싱
+            raw_text = item.get('text', '').strip()
+            if not raw_text:
+                return None
+            
+            # JSON 파싱
+            data = json.loads(raw_text)
+            
             # 필수 필드 확인
-            text = item.get('text', '').strip()
-            question = item.get('question', '').strip()
-            options = item.get('options', [])
-            answer = item.get('answer', 0)
+            context = data.get('text', '').strip()
+            question = data.get('question', '').strip()
+            options = data.get('options', [])
+            answer = data.get('answer', 0)
             
             if not question or not options or len(options) < 2:
                 return None
             
             # 입력 텍스트 구성
             input_parts = []
-            if text:
-                input_parts.append(f"Context: {text}")
+            if context:
+                input_parts.append(f"Context: {context}")
             input_parts.append(f"Question: {question}")
             
             # 선택지 추가
@@ -140,8 +150,8 @@ class LogiQADataset(BaseDataset):
                 'input_text': " ".join(input_parts),
                 'target_text': target_text,
                 'metadata': {
-                    'id': item.get('id', idx),
-                    'context': text,
+                    'id': data.get('id', idx),
+                    'context': context,
                     'question': question,
                     'options': options,
                     'answer': answer,
@@ -190,17 +200,28 @@ class MultiDataset(BaseDataset):
     def _process_logiqa_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
         """LogiQA 아이템 처리"""
         try:
-            text = item.get('text', '').strip()
-            question = item.get('question', '').strip()
-            options = item.get('options', [])
-            answer = item.get('answer', 0)
+            import json
+            
+            # text 필드에서 JSON 파싱
+            raw_text = item.get('text', '').strip()
+            if not raw_text:
+                return None
+            
+            # JSON 파싱
+            data = json.loads(raw_text)
+            
+            # 필수 필드 확인
+            context = data.get('text', '').strip()
+            question = data.get('question', '').strip()
+            options = data.get('options', [])
+            answer = data.get('answer', 0)
             
             if not question:
                 return None
             
             input_parts = ["Answer the question:"]
-            if text:
-                input_parts.append(f"Context: {text}")
+            if context:
+                input_parts.append(f"Context: {context}")
             input_parts.append(f"Question: {question}")
             
             if options:
@@ -221,7 +242,8 @@ class MultiDataset(BaseDataset):
                 'target_text': target_text,
                 'metadata': {'task_type': 'reasoning', 'index': idx}
             }
-        except:
+        except Exception as e:
+            logger.warning(f"Failed to process LogiQA item {idx}: {e}")
             return None
     
     def _process_nli_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:

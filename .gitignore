@@ -149,6 +149,7 @@ experiments/*/model_*.pt
 experiments/*/wandb/
 experiments/*/tensorboard/
 experiments/*/checkpoints/
+experiments
 
 # IDE specific files
 .vscode/

@@ -12,7 +12,6 @@ from .trainer import (
 )
 
 from .loss import (
-    SCSLoss,
     SpikingLoss,
     NeuromodulationLoss,
     MultiObjectiveLoss
@@ -33,7 +32,6 @@ __all__ = [
     "GradualUnfreezingScheduler",
     
     # 손실 함수 시스템 (배치 처리 지원)
-    "SCSLoss",
     "SpikingLoss",
     "NeuromodulationLoss", 
     "MultiObjectiveLoss",

@@ -68,21 +68,21 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
 
     try:
         # 2. 데이터 로더 생성
-        tokenizer = SCSTokenizer(config["data"]["tokenizer"]["name"])
-        train_loader = create_dataloader(dataset_name=config["task"]["dataset_name"], task_type=config["task"]["type"], split="train", batch_size=config["training"]["batch_size"], max_length=config["data"]["tokenizer"]["max_length"])
-        val_loader = create_dataloader(dataset_name=config["task"]["dataset_name"], task_type=config["task"]["type"], split="validation", batch_size=1, max_length=config["data"]["tokenizer"]["max_length"])
+        tokenizer = SCSTokenizer(config["data_loading"]["tokenizer"]["name"])
+        train_loader = create_dataloader(dataset_name=config["task"]["dataset_name"], task_type=config["task"]["type"], split="train", batch_size=config["data_loading"]["batch_size"], max_length=config["data_loading"]["tokenizer"]["max_length"])
+        val_loader = create_dataloader(dataset_name=config["task"]["dataset_name"], task_type=config["task"]["type"], split="validation", batch_size=1, max_length=config["data_loading"]["tokenizer"]["max_length"])
 
         # 3. 모델 인스턴스화
-        config["model"]["io_system"]["input_interface"]["vocab_size"] = tokenizer.vocab_size
-        config["model"]["io_system"]["output_interface"]["vocab_size"] = tokenizer.vocab_size
+        config["io_system"]["input_interface"]["vocab_size"] = tokenizer.vocab_size
+        config["io_system"]["output_interface"]["vocab_size"] = tokenizer.vocab_size
         model = ModelBuilder.build_scs_from_config(config, device=device)
         logger.info(f"모델 매개변수: {sum(p.numel() for p in model.parameters()):,}")
 
         # 4. 학습 시스템 구성
         pad_token_id = tokenizer.tokenizer.pad_token_id
-        training_config = TrainingConfig(pad_token_id=pad_token_id, device=device, **config["training"])
+        training_config = TrainingConfig(pad_token_id=pad_token_id, device=device, **config["learning"])
         loss_fn = MultiObjectiveLoss(pad_token_id=pad_token_id)
-        optimizer = OptimizerFactory.create(optimizer_type=config["training"].get("optimizer", "adamw").lower(), model=model, config=training_config)
+        optimizer = OptimizerFactory.create(optimizer_type=config["learning"].get("optimizer", "adamw").lower(), model=model, config=training_config)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=training_config.epochs)
         
         # 5. 트레이너 생성 및 학습
@@ -113,11 +113,11 @@ def evaluate_mode(args: argparse.Namespace):
     
     try:
         # 2. 데이터 및 모델 로드
-        tokenizer = SCSTokenizer(config["data"]["tokenizer"]["name"])
-        test_loader = create_dataloader(dataset_name=config["task"]["dataset_name"], task_type=config["task"]["type"], split="test", batch_size=1, max_length=config["data"]["tokenizer"]["max_length"])
+        tokenizer = SCSTokenizer(config["data_loading"]["tokenizer"]["name"])
+        test_loader = create_dataloader(dataset_name=config["task"]["dataset_name"], task_type=config["task"]["type"], split="test", batch_size=1, max_length=config["data_loading"]["tokenizer"]["max_length"])
         
-        config["model"]["io_system"]["input_interface"]["vocab_size"] = tokenizer.vocab_size
-        config["model"]["io_system"]["output_interface"]["vocab_size"] = tokenizer.vocab_size
+        config["io_system"]["input_interface"]["vocab_size"] = tokenizer.vocab_size
+        config["io_system"]["output_interface"]["vocab_size"] = tokenizer.vocab_size
         model = ModelBuilder.build_scs_from_config(config, device=device)
         
         checkpoint = torch.load(checkpoint_path, map_location=device)
@@ -125,7 +125,7 @@ def evaluate_mode(args: argparse.Namespace):
         
         # 3. 트레이너 생성 및 평가
         pad_token_id = tokenizer.tokenizer.pad_token_id
-        training_config = TrainingConfig(pad_token_id=pad_token_id, device=device, **config["training"])
+        training_config = TrainingConfig(pad_token_id=pad_token_id, device=device, **config["learning"])
         trainer = SCSTrainer(model=model, config=training_config, tokenizer=tokenizer)
         results = trainer.evaluate(test_loader)
         

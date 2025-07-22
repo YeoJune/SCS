@@ -80,12 +80,33 @@ class AxonalConnections(nn.Module):
                 continue
             
             if mask_key in self.excitatory_masks:
-                E = self.excitatory_masks[mask_key]  # [H, W]
+                E = self.excitatory_masks[mask_key]  # [H_source, W_source]
                 modulated_spikes = E * source_spikes - 0.5 * (1 - E) * source_spikes
             else:
                 modulated_spikes = source_spikes
             
-            weight = self.connection_weights[weight_key]  # [H, W]
+            weight = self.connection_weights[weight_key]  # [H_target, W_target]
+            
+            # 다중 스케일 연결 처리: source와 target 그리드 크기가 다를 수 있음
+            if modulated_spikes.shape[-2:] != weight.shape:
+                # source 그리드를 target 그리드 크기로 변환
+                if len(modulated_spikes.shape) == 3:  # [B, H, W]
+                    # 배치 차원이 있는 경우
+                    modulated_spikes = torch.nn.functional.interpolate(
+                        modulated_spikes.unsqueeze(1),  # [B, 1, H, W]
+                        size=weight.shape,  # (H_target, W_target)
+                        mode='bilinear',
+                        align_corners=False
+                    ).squeeze(1)  # [B, H_target, W_target]
+                else:  # [H, W]
+                    # 단일 샘플인 경우
+                    modulated_spikes = torch.nn.functional.interpolate(
+                        modulated_spikes.unsqueeze(0).unsqueeze(0),  # [1, 1, H, W]
+                        size=weight.shape,  # (H_target, W_target)
+                        mode='bilinear',
+                        align_corners=False
+                    ).squeeze(0).squeeze(0)  # [H_target, W_target]
+            
             axonal_signal = modulated_spikes * weight
             
             if target not in axonal_inputs:

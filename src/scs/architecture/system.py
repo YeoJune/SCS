@@ -41,28 +41,27 @@ class AxonalConnections(nn.Module):
     def _initialize_connections(self):
         """연결 가중치와 흥분성/억제성 마스크 초기화"""
         for source, target, weight_scale in self.connection_pairs:
-            if target not in self.node_grid_sizes:
+            if source not in self.node_grid_sizes or target not in self.node_grid_sizes:
                 continue
             
-            target_h, target_w = self.node_grid_sizes[target]
+            source_h, source_w = self.node_grid_sizes[source]
             
+            # 연결 가중치는 source 크기로 생성 (modulated_spikes와 곱셈하기 위해)
             weight = nn.Parameter(
-                torch.randn(target_h, target_w, device=self.device) * weight_scale
+                torch.randn(source_h, source_w, device=self.device) * weight_scale
             )
             self.connection_weights[f"{source}→{target}"] = weight
             
-            if source in self.node_grid_sizes:
-                source_h, source_w = self.node_grid_sizes[source]
-                mask_key = f"E_{source}"
+            # 흥분성/억제성 마스크: source 크기
+            mask_key = f"E_{source}"
+            if mask_key not in self.excitatory_masks:
+                excitatory_mask = torch.rand(
+                    source_h, source_w, device=self.device
+                ) < self.excitatory_ratio
                 
-                if mask_key not in self.excitatory_masks:
-                    excitatory_mask = torch.rand(
-                        source_h, source_w, device=self.device
-                    ) < self.excitatory_ratio
-                    
-                    self.excitatory_masks[mask_key] = nn.Parameter(
-                        excitatory_mask.float(), requires_grad=False
-                    )
+                self.excitatory_masks[mask_key] = nn.Parameter(
+                    excitatory_mask.float(), requires_grad=False
+                )
     
     def forward(self, node_spikes: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """축삭 연결을 통한 신호 전송 (배치 지원)"""
@@ -85,29 +84,32 @@ class AxonalConnections(nn.Module):
             else:
                 modulated_spikes = source_spikes
             
-            weight = self.connection_weights[weight_key]  # [H_target, W_target]
+            # Step 1: source 크기 가중치와 곱셈
+            weight = self.connection_weights[weight_key]  # [H_source, W_source]
+            weighted_signal = modulated_spikes * weight  # [B, H_source, W_source] or [H_source, W_source]
             
-            # 다중 스케일 연결 처리: source와 target 그리드 크기가 다를 수 있음
-            if modulated_spikes.shape[-2:] != weight.shape:
-                # source 그리드를 target 그리드 크기로 변환
-                if len(modulated_spikes.shape) == 3:  # [B, H, W]
-                    # 배치 차원이 있는 경우
-                    modulated_spikes = torch.nn.functional.interpolate(
-                        modulated_spikes.unsqueeze(1),  # [B, 1, H, W]
-                        size=weight.shape,  # (H_target, W_target)
+            # Step 2: target 크기로 변환 (필요시)
+            target_h, target_w = self.node_grid_sizes[target]
+            
+            if weighted_signal.shape[-2:] != (target_h, target_w):
+                # interpolation으로 크기 변환
+                if len(weighted_signal.shape) == 3:  # [B, H_source, W_source]
+                    axonal_signal = torch.nn.functional.interpolate(
+                        weighted_signal.unsqueeze(1),  # [B, 1, H, W]
+                        size=(target_h, target_w),
                         mode='bilinear',
                         align_corners=False
-                    ).squeeze(1)  # [B, H_target, W_target]
-                else:  # [H, W]
-                    # 단일 샘플인 경우
-                    modulated_spikes = torch.nn.functional.interpolate(
-                        modulated_spikes.unsqueeze(0).unsqueeze(0),  # [1, 1, H, W]
-                        size=weight.shape,  # (H_target, W_target)
+                    ).squeeze(1)  # [B, target_h, target_w]
+                else:  # [H_source, W_source]
+                    axonal_signal = torch.nn.functional.interpolate(
+                        weighted_signal.unsqueeze(0).unsqueeze(0),  # [1, 1, H, W]
+                        size=(target_h, target_w),
                         mode='bilinear',
                         align_corners=False
-                    ).squeeze(0).squeeze(0)  # [H_target, W_target]
-            
-            axonal_signal = modulated_spikes * weight
+                    ).squeeze(0).squeeze(0)  # [target_h, target_w]
+            else:
+                # 같은 크기면 그대로 사용
+                axonal_signal = weighted_signal
             
             if target not in axonal_inputs:
                 axonal_inputs[target] = axonal_signal

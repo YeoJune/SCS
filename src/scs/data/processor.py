@@ -64,6 +64,9 @@ class DataProcessor:
     
     def process_reasoning(self, dataset_name: str, split: str = "train") -> List[Dict[str, Any]]:
         """추론 태스크 처리"""
+        if dataset_name == "lucasmccabe/logiqa":
+            return self._process_logiqa(dataset_name, split)
+        
         dataset = load_dataset(dataset_name, split=split)
         processed = []
         
@@ -80,6 +83,50 @@ class DataProcessor:
                 'input': input_text,
                 'target': target_text,
                 'metadata': item
+            })
+        
+        return processed
+    
+    def _process_logiqa(self, dataset_name: str, split: str = "train") -> List[Dict[str, Any]]:
+        """LogiQA 전용 처리"""
+        dataset = load_dataset(dataset_name, split=split)
+        processed = []
+        
+        for item in dataset:
+            # LogiQA 필드 매핑 (최신 형식)
+            context = item.get('context', '').strip()
+            question = item.get('query', item.get('question', '')).strip()
+            options = item.get('options', item.get('choices', []))
+            correct_option = item.get('correct_option', item.get('answer', 0))
+            
+            # 입력 텍스트 구성
+            input_parts = ["추론:"]
+            if context:
+                input_parts.append(f"상황: {context}")
+            input_parts.append(f"질문: {question}")
+            
+            if options and len(options) >= 2:
+                options_text = " ".join([f"{chr(65+i)}) {opt.strip()}" 
+                                       for i, opt in enumerate(options)])
+                input_parts.append(f"선택지: {options_text}")
+            
+            input_text = " ".join(input_parts)
+            
+            # 정답 처리 (A, B, C, D 형식)
+            if isinstance(correct_option, int) and 0 <= correct_option < len(options):
+                target_text = chr(65 + correct_option)  # 0->A, 1->B, etc.
+            else:
+                target_text = "A"  # 기본값
+            
+            processed.append({
+                'input': input_text,
+                'target': target_text,
+                'metadata': {
+                    'context': context,
+                    'question': question,
+                    'options': options,
+                    'correct_option': correct_option
+                }
             })
         
         return processed

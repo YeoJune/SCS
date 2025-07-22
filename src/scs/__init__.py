@@ -17,8 +17,8 @@ from .training import (
 
 # Data 모듈
 from .data import (
-    SCSTokenizer, SCSDataset, DataProcessor,
-    SCSDataLoader, create_dataloader
+    SCSTokenizer, BaseDataset, LogiQADataset, MultiDataset, 
+    create_dataset, DataProcessor, SCSDataLoader, create_dataloader
 )
 
 __version__ = "0.1.0"
@@ -32,6 +32,6 @@ __all__ = [
     "SpikingLoss", "NeuromodulationLoss", "MultiObjectiveLoss", "SCSMetrics",
     "SCSOptimizer", "KHopBackpropagation", "AdaptiveLearningRateScheduler", 
     "OptimizerFactory",
-    "SCSTokenizer", "SCSDataset", "DataProcessor",
-    "SCSDataLoader", "create_dataloader"
+    "SCSTokenizer", "BaseDataset", "LogiQADataset", "MultiDataset", 
+    "create_dataset", "DataProcessor", "SCSDataLoader", "create_dataloader"
 ]

@@ -4,13 +4,16 @@ SCS 데이터 처리 모듈
 """
 
 from .tokenizer import SCSTokenizer
-from .dataset import SCSDataset
+from .dataset import BaseDataset, LogiQADataset, MultiDataset, create_dataset
 from .processor import DataProcessor
 from .dataloader import SCSDataLoader, create_dataloader
 
 __all__ = [
     "SCSTokenizer",
-    "SCSDataset", 
+    "BaseDataset",
+    "LogiQADataset", 
+    "MultiDataset",
+    "create_dataset",
     "DataProcessor",
     "SCSDataLoader",
     "create_dataloader"

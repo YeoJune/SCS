@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader, Dataset
 from typing import Iterator, Dict, Any, List, Optional
 
 from .tokenizer import SCSTokenizer
-from .dataset import SCSDataset
+from .dataset import BaseDataset, create_dataset
 from .processor import DataProcessor
 
 
@@ -75,31 +75,29 @@ class SCSDataLoader:
     def __init__(
         self,
         dataset_name: str,
-        task_type: str,
         split: str = "train",
         batch_size: int = 8,
         shuffle: bool = True,
         max_length: int = 128,
-        num_workers: int = 0
+        num_workers: int = 0,
+        processor=None,
+        tokenizer=None
     ):
-        # 토크나이저 생성
-        tokenizer = SCSTokenizer()
+        # 토크나이저 생성 (인자로 받지 않으면 기본 생성)
+        if tokenizer is None:
+            tokenizer = SCSTokenizer()
         
-        # 데이터 프로세서 생성
-        processor = DataProcessor(tokenizer)
+        # 데이터 프로세서 생성 (인자로 받지 않으면 기본 생성)
+        if processor is None:
+            processor = DataProcessor()
         
-        # 태스크별 데이터 처리
-        if task_type == "classification":
-            data = processor.process_classification(dataset_name, split)
-        elif task_type == "qa":
-            data = processor.process_qa(dataset_name, split)
-        elif task_type == "reasoning":
-            data = processor.process_reasoning(dataset_name, split)
-        else:
-            raise ValueError(f"Unknown task type: {task_type}")
-        
-        # 데이터셋 생성
-        self.dataset = SCSDataset(data, tokenizer, max_length)
+        # 데이터셋 생성 - 새로운 방식 사용
+        self.dataset = processor.create_dataset(
+            dataset_name=dataset_name,
+            split=split,
+            tokenizer=tokenizer,
+            max_length=max_length
+        )
         
         # PyTorch DataLoader 생성
         self.dataloader = DataLoader(
@@ -125,21 +123,23 @@ class SCSDataLoader:
 
 def create_dataloader(
     dataset_name: str,
-    task_type: str,
     split: str = "train",
     batch_size: int = 8,
     shuffle: bool = True,
     max_length: int = 128,
-    num_workers: int = 0
+    num_workers: int = 0,
+    processor=None,
+    tokenizer=None
 ) -> SCSDataLoader:
     """SCS 배치 데이터 로더 생성"""
     
     return SCSDataLoader(
         dataset_name=dataset_name,
-        task_type=task_type,
         split=split,
         batch_size=batch_size,
         shuffle=shuffle,
         max_length=max_length,
-        num_workers=num_workers
+        num_workers=num_workers,
+        processor=processor,
+        tokenizer=tokenizer
     )

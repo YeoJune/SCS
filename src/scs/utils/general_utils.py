@@ -118,7 +118,7 @@ class ModelBuilder:
             # 3. Multi-scale Grid 연결 생성
             multi_scale_config = config["connectivity"]["multi_scale_grid"]
             multi_scale_grid = MultiScaleGrid(
-                node_grid_sizes=node_grid_sizes,
+                node_list=list(node_grid_sizes.keys()),  # node_grid_sizes -> node_list
                 fine_spacing=multi_scale_config["fine"]["spacing"],
                 fine_weight=multi_scale_config["fine"]["weight"],
                 medium_spacing=multi_scale_config["medium"]["spacing"],
@@ -131,10 +131,19 @@ class ModelBuilder:
             # 4. 입출력 인터페이스 생성
             io_config = config["io_system"]
             
+            # 입출력 노드 결정 (config에서 설정하거나 기본값 사용)
+            input_node = config.get("input_node", "PFC")
+            output_node = config.get("output_node", "PFC")
+            
+            if input_node not in node_grid_sizes:
+                raise ValueError(f"Input node '{input_node}'이 brain_regions에 정의되지 않음")
+            if output_node not in node_grid_sizes:
+                raise ValueError(f"Output node '{output_node}'이 brain_regions에 정의되지 않음")
+            
             input_interface = InputInterface(
                 vocab_size=io_config["input_interface"]["vocab_size"],
-                grid_height=node_grid_sizes["PFC"][0],  # PFC 노드를 입력 노드로 가정
-                grid_width=node_grid_sizes["PFC"][1],
+                grid_height=node_grid_sizes[input_node][0],
+                grid_width=node_grid_sizes[input_node][1],
                 embedding_dim=io_config["input_interface"]["embedding_dim"],
                 max_seq_len=io_config["input_interface"]["max_seq_len"],
                 num_heads=io_config["input_interface"]["num_heads"],
@@ -144,8 +153,8 @@ class ModelBuilder:
             
             output_interface = OutputInterface(
                 vocab_size=io_config["output_interface"]["vocab_size"],
-                grid_height=node_grid_sizes["PFC"][0],  # PFC 노드를 출력 노드로 가정
-                grid_width=node_grid_sizes["PFC"][1],
+                grid_height=node_grid_sizes[output_node][0],
+                grid_width=node_grid_sizes[output_node][1],
                 embedding_dim=io_config["output_interface"]["embedding_dim"],
                 max_output_len=io_config["output_interface"]["max_output_len"],
                 num_heads=io_config["output_interface"]["num_heads"],
@@ -175,8 +184,8 @@ class ModelBuilder:
                 input_interface=input_interface,
                 output_interface=output_interface,
                 output_timing=output_timing,
-                input_node="PFC",  # 기본값, config에서 오버라이드 가능
-                output_node="PFC", # 기본값, config에서 오버라이드 가능
+                input_node=input_node,   # config에서 결정된 입력 노드
+                output_node=output_node, # config에서 결정된 출력 노드
                 device=device
             )
             

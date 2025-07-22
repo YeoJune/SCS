@@ -89,9 +89,30 @@ class DataProcessor:
         return processed
     
     def _process_logiqa(self, dataset_name: str, split: str = "train") -> List[Dict[str, Any]]:
-        """LogiQA 전용 처리"""
-        # 핵심: data_dir 파라미터로 HuggingFace Hub에서 직접 로드
-        dataset = load_dataset("lucasmccabe/logiqa", data_dir=None, split=split)
+        """LogiQA 전용 처리 - 최신 버전 지원"""
+        
+        # 데이터셋 소스 결정 (LogiQA 2.0 우선, 1.0 백업)
+        sources = [
+            ("csitfun/LogiQA2.0", "logiqa"),      # LogiQA 2.0 MRC (15,708개)
+            ("lucasmccabe/logiqa", None),         # LogiQA 1.0 (8,678개)
+        ]
+        
+        dataset = None
+        for repo_id, config_name in sources:
+            try:
+                if config_name:
+                    dataset = load_dataset(repo_id, config_name, split=split)
+                else:
+                    dataset = load_dataset(repo_id, split=split)
+                print(f"✅ 로드 성공: {repo_id} {config_name or ''} - {len(dataset)}개")
+                break
+            except Exception as e:
+                print(f"❌ {repo_id} 실패: {str(e)[:50]}...")
+                continue
+        
+        if dataset is None:
+            raise RuntimeError("LogiQA 데이터셋 로드 실패")
+        
         processed = []
         
         for idx, item in enumerate(dataset):

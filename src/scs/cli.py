@@ -115,6 +115,24 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
         }
         filtered_config = {k: v for k, v in raw_config.items() if k in valid_params}
         
+        # 타입 변환 - YAML에서 문자열로 로드된 숫자 값들을 적절한 타입으로 변환
+        if "learning_rate" in filtered_config:
+            filtered_config["learning_rate"] = float(filtered_config["learning_rate"])
+        if "weight_decay" in filtered_config:
+            filtered_config["weight_decay"] = float(filtered_config["weight_decay"])
+        if "gradient_clip_norm" in filtered_config:
+            filtered_config["gradient_clip_norm"] = float(filtered_config["gradient_clip_norm"])
+        if "epochs" in filtered_config:
+            filtered_config["epochs"] = int(filtered_config["epochs"])
+        if "eval_every" in filtered_config:
+            filtered_config["eval_every"] = int(filtered_config["eval_every"])
+        if "save_every" in filtered_config:
+            filtered_config["save_every"] = int(filtered_config["save_every"])
+        if "early_stopping_patience" in filtered_config:
+            filtered_config["early_stopping_patience"] = int(filtered_config["early_stopping_patience"])
+        if "max_clk_training" in filtered_config:
+            filtered_config["max_clk_training"] = int(filtered_config["max_clk_training"])
+        
         training_config = TrainingConfig(pad_token_id=pad_token_id, device=device, **filtered_config)
         loss_fn = MultiObjectiveLoss(pad_token_id=pad_token_id)
         
@@ -197,6 +215,24 @@ def evaluate_mode(args: argparse.Namespace):
             "eval_every", "save_every", "early_stopping_patience", "max_clk_training"
         }
         filtered_config = {k: v for k, v in raw_config.items() if k in valid_params}
+        
+        # 타입 변환 - YAML에서 문자열로 로드된 숫자 값들을 적절한 타입으로 변환
+        if "learning_rate" in filtered_config:
+            filtered_config["learning_rate"] = float(filtered_config["learning_rate"])
+        if "weight_decay" in filtered_config:
+            filtered_config["weight_decay"] = float(filtered_config["weight_decay"])
+        if "gradient_clip_norm" in filtered_config:
+            filtered_config["gradient_clip_norm"] = float(filtered_config["gradient_clip_norm"])
+        if "epochs" in filtered_config:
+            filtered_config["epochs"] = int(filtered_config["epochs"])
+        if "eval_every" in filtered_config:
+            filtered_config["eval_every"] = int(filtered_config["eval_every"])
+        if "save_every" in filtered_config:
+            filtered_config["save_every"] = int(filtered_config["save_every"])
+        if "early_stopping_patience" in filtered_config:
+            filtered_config["early_stopping_patience"] = int(filtered_config["early_stopping_patience"])
+        if "max_clk_training" in filtered_config:
+            filtered_config["max_clk_training"] = int(filtered_config["max_clk_training"])
         
         training_config = TrainingConfig(pad_token_id=pad_token_id, device=device, **filtered_config)
         trainer = SCSTrainer(model=model, config=training_config, tokenizer=tokenizer)

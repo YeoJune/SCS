@@ -149,6 +149,12 @@ class OptimizerFactory:
                 lr=config.learning_rate,
                 weight_decay=config.weight_decay
             )
+        elif optimizer_type == "adamw":
+            return torch.optim.AdamW(
+                model.parameters(),
+                lr=config.learning_rate,
+                weight_decay=config.weight_decay
+            )
         elif optimizer_type == "sgd":
             return torch.optim.SGD(
                 model.parameters(),

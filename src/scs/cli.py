@@ -80,7 +80,13 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
 
         # 4. 학습 시스템 구성
         pad_token_id = tokenizer.tokenizer.pad_token_id
-        training_config = TrainingConfig(pad_token_id=pad_token_id, device=device, **config["learning"])
+        
+        # learning config 매핑 (base_learning_rate -> learning_rate)
+        learning_config = config["learning"].copy()
+        if "base_learning_rate" in learning_config and "learning_rate" not in learning_config:
+            learning_config["learning_rate"] = learning_config.pop("base_learning_rate")
+        
+        training_config = TrainingConfig(pad_token_id=pad_token_id, device=device, **learning_config)
         loss_fn = MultiObjectiveLoss(pad_token_id=pad_token_id)
         optimizer = OptimizerFactory.create(optimizer_type=config["learning"].get("optimizer", "adamw").lower(), model=model, config=training_config)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=training_config.epochs)
@@ -125,7 +131,13 @@ def evaluate_mode(args: argparse.Namespace):
         
         # 3. 트레이너 생성 및 평가
         pad_token_id = tokenizer.tokenizer.pad_token_id
-        training_config = TrainingConfig(pad_token_id=pad_token_id, device=device, **config["learning"])
+        
+        # learning config 매핑 (base_learning_rate -> learning_rate)
+        learning_config = config["learning"].copy()
+        if "base_learning_rate" in learning_config and "learning_rate" not in learning_config:
+            learning_config["learning_rate"] = learning_config.pop("base_learning_rate")
+        
+        training_config = TrainingConfig(pad_token_id=pad_token_id, device=device, **learning_config)
         trainer = SCSTrainer(model=model, config=training_config, tokenizer=tokenizer)
         results = trainer.evaluate(test_loader)
         

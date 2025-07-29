@@ -1,5 +1,10 @@
 # configs/base_model.yaml
-# SCS 기본 모델 설정
+# SCS 기본 모델 설정 - 새로운 선언적 조립 구조
+
+# 시스템 역할 정의 (새로 추가)
+system_roles:
+  input_node: "PFC"
+  output_node: "PFC"
 
 # 시스템 설정
 system:
@@ -17,33 +22,25 @@ system:
   gradient_checkpointing: false
   mixed_precision: false
 
-# 뇌 영역별 설정
+# 뇌 영역별 설정 (새로운 형식: grid_size 배열 사용)
 brain_regions:
   PFC:
-    grid_height: 32
-    grid_width: 16
-    total_neurons: 512
+    grid_size: [32, 16] # [height, width]
     decay_rate: 0.95 # 긴 지속성 (작업 기억)
     distance_tau: 1.5 # 빠른 감쇠
 
   ACC:
-    grid_height: 16
-    grid_width: 16
-    total_neurons: 256
+    grid_size: [16, 16] # [height, width]
     decay_rate: 0.88 # 빠른 반응 (갈등 감지)
     distance_tau: 2.0
 
   IPL:
-    grid_height: 24
-    grid_width: 16
-    total_neurons: 384
+    grid_size: [24, 16] # [height, width]
     decay_rate: 0.92 # 중간 지속성 (관계 연합)
     distance_tau: 2.5
 
   MTL:
-    grid_height: 16
-    grid_width: 16
-    total_neurons: 256
+    grid_size: [16, 16] # [height, width]
     decay_rate: 0.97 # 장기 기억
     distance_tau: 3.0 # 넓은 연결
 
@@ -60,22 +57,42 @@ connectivity:
   # 지역적 연결
   local:
     max_distance: 5
-    # connection_prob: 0.1  # LocalConnectivity에서 사용하지 않음 (distance_tau를 대신 사용)
 
-  # 축삭 연결
-  axonal:
-    excitatory_ratio: 0.8 # 80% 흥분성, 20% 억제성
-    connections:
-      - { source: "PFC", target: "ACC", weight_scale: 0.8 }
-      - { source: "PFC", target: "IPL", weight_scale: 0.6 }
-      - { source: "ACC", target: "MTL", weight_scale: 0.7 }
-      - { source: "IPL", target: "MTL", weight_scale: 0.5 }
+# 축삭 연결 설정 (새로운 최상위 섹션)
+axonal_connections:
+  excitatory_ratio: 0.8 # 80% 흥분성, 20% 억제성
+  connections:
+    - source: "PFC"
+      target: "ACC"
+      kernel_size: 3
+      stride: 1
+      padding: 1 # (kernel_size - 1) / 2 = (3-1)/2 = 1 (출력 크기 유지)
+      dilation: 1
+      weight_scale: 0.8
 
-  # Multi-scale Grid 연결
-  multi_scale_grid:
-    fine: { spacing: 2, weight: 0.5 }
-    medium: { spacing: 3, weight: 0.3 }
-    coarse: { spacing: 5, weight: 0.2 }
+    - source: "PFC"
+      target: "IPL"
+      kernel_size: 5
+      stride: 1
+      padding: 2 # (kernel_size - 1) / 2 = (5-1)/2 = 2
+      dilation: 1
+      weight_scale: 0.6
+
+    - source: "ACC"
+      target: "MTL"
+      kernel_size: 3
+      stride: 1
+      padding: 1
+      dilation: 2 # 넓은 범위의 희소 연결
+      weight_scale: 0.7
+
+    - source: "IPL"
+      target: "MTL"
+      kernel_size: 1 # 1x1 conv는 위치별 가중치 조절 효과
+      stride: 1
+      padding: 0
+      dilation: 1
+      weight_scale: 0.5
 
 # 입출력 시스템
 io_system:

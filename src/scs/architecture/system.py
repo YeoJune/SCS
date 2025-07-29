@@ -13,7 +13,7 @@ from .io import InputInterface, OutputInterface
 
 class AxonalConnections(nn.Module):
     """
-    축삭 연결 행렬 관리
+    축삭 연결 - Conv2d 기반의 모든 연결 통합 처리
     
     문서 명세:
     I_axon^(target)(t) = (A^source→target)^T · [E ⊙ s^source(t) - 0.5 · (1-E) ⊙ s^source(t)]
@@ -21,163 +21,124 @@ class AxonalConnections(nn.Module):
     
     def __init__(
         self,
-        connection_pairs: List[Tuple[str, str, float]],
-        node_grid_sizes: Dict[str, Tuple[int, int]],
+        connections: List[Dict[str, Any]],  # 설정 파일에서 읽은 연결 정보
         excitatory_ratio: float = 0.8,
         device: str = "cuda"
     ):
         super().__init__()
         
-        self.connection_pairs = connection_pairs
-        self.node_grid_sizes = node_grid_sizes
+        self.connections = connections
         self.excitatory_ratio = excitatory_ratio
         self.device = device
         
-        self.connection_weights = nn.ParameterDict()
+        # Conv2d 레이어들을 저장할 ModuleDict
+        self.conv_layers = nn.ModuleDict()
+        # 흥분성/억제성 마스크들을 저장할 ParameterDict
         self.excitatory_masks = nn.ParameterDict()
         
         self._initialize_connections()
     
     def _initialize_connections(self):
-        """연결 가중치와 흥분성/억제성 마스크 초기화"""
-        for source, target, weight_scale in self.connection_pairs:
-            if source not in self.node_grid_sizes or target not in self.node_grid_sizes:
-                continue
+        """Conv2d 기반 연결 초기화"""
+        for conn in self.connections:
+            source = conn["source"]
+            target = conn["target"]
+            kernel_size = conn["kernel_size"]
+            stride = conn.get("stride", 1)
+            padding = conn.get("padding", 0)
+            dilation = conn.get("dilation", 1)
+            weight_scale = conn["weight_scale"]
             
-            source_h, source_w = self.node_grid_sizes[source]
-            
-            # 연결 가중치는 source 크기로 생성 (modulated_spikes와 곱셈하기 위해)
-            weight = nn.Parameter(
-                torch.randn(source_h, source_w, device=self.device) * weight_scale
+            # Conv2d 레이어 생성
+            conv_key = f"{source}→{target}"
+            conv_layer = nn.Conv2d(
+                in_channels=1,
+                out_channels=1,
+                kernel_size=kernel_size,
+                stride=stride,
+                padding=padding,
+                dilation=dilation,
+                bias=False,
+                device=self.device
             )
-            self.connection_weights[f"{source}→{target}"] = weight
             
-            # 흥분성/억제성 마스크: source 크기
+            # 가중치 초기화
+            torch.nn.init.normal_(conv_layer.weight, mean=0.0, std=weight_scale)
+            
+            self.conv_layers[conv_key] = conv_layer
+            
+            # 흥분성/억제성 마스크: source 기반으로 생성 (한 번만)
             mask_key = f"E_{source}"
             if mask_key not in self.excitatory_masks:
-                excitatory_mask = torch.rand(
-                    source_h, source_w, device=self.device
-                ) < self.excitatory_ratio
-                
-                self.excitatory_masks[mask_key] = nn.Parameter(
-                    excitatory_mask.float(), requires_grad=False
-                )
+                # 마스크는 나중에 소스 스파이크 크기에 맞춰 생성됨
+                # 여기서는 플래그만 설정
+                self.excitatory_masks[mask_key] = None
+    
+    def _get_or_create_mask(self, source: str, source_shape: torch.Size) -> torch.Tensor:
+        """소스에 대한 흥분성/억제성 마스크 생성 또는 반환"""
+        mask_key = f"E_{source}"
+        
+        if self.excitatory_masks[mask_key] is None:
+            # 배치 차원을 제외한 실제 그리드 크기 사용
+            if len(source_shape) == 3:  # [B, H, W]
+                mask_shape = source_shape[1:]  # [H, W]
+            else:  # [H, W]
+                mask_shape = source_shape
+            
+            excitatory_mask = torch.rand(
+                mask_shape, device=self.device
+            ) < self.excitatory_ratio
+            
+            self.excitatory_masks[mask_key] = nn.Parameter(
+                excitatory_mask.float(), requires_grad=False
+            )
+        
+        return self.excitatory_masks[mask_key]
     
     def forward(self, node_spikes: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """축삭 연결을 통한 신호 전송 (배치 지원)"""
+        """Conv2d 기반 축삭 연결 처리 (배치 지원)"""
         axonal_inputs = {}
         
-        for source, target, _ in self.connection_pairs:
+        for conn in self.connections:
+            source = conn["source"]
+            target = conn["target"]
+            
             if source not in node_spikes:
                 continue
             
             source_spikes = node_spikes[source]  # [B, H, W] 또는 [H, W]
-            weight_key = f"{source}→{target}"
-            mask_key = f"E_{source}"
+            conv_key = f"{source}→{target}"
             
-            if weight_key not in self.connection_weights:
+            if conv_key not in self.conv_layers:
                 continue
             
-            if mask_key in self.excitatory_masks:
-                E = self.excitatory_masks[mask_key]  # [H_source, W_source]
-                modulated_spikes = E * source_spikes - 0.5 * (1 - E) * source_spikes
-            else:
-                modulated_spikes = source_spikes
+            # 흥분성/억제성 조절 (컨볼루션 전에 적용)
+            E = self._get_or_create_mask(source, source_spikes.shape)
+            modulated_spikes = E * source_spikes - 0.5 * (1 - E) * source_spikes
             
-            # Step 1: source 크기 가중치와 곱셈
-            weight = self.connection_weights[weight_key]  # [H_source, W_source]
-            weighted_signal = modulated_spikes * weight  # [B, H_source, W_source] or [H_source, W_source]
+            # Conv2d 입력 형식으로 변환: [B, 1, H, W] 또는 [1, H, W]
+            if len(modulated_spikes.shape) == 3:  # [B, H, W]
+                conv_input = modulated_spikes.unsqueeze(1)  # [B, 1, H, W]
+            else:  # [H, W]
+                conv_input = modulated_spikes.unsqueeze(0).unsqueeze(0)  # [1, 1, H, W]
             
-            # Step 2: target 크기로 변환 (필요시)
-            target_h, target_w = self.node_grid_sizes[target]
+            # Conv2d 연산 수행
+            conv_layer = self.conv_layers[conv_key]
+            conv_output = conv_layer(conv_input)  # [B, 1, H_out, W_out] 또는 [1, 1, H_out, W_out]
             
-            if weighted_signal.shape[-2:] != (target_h, target_w):
-                # interpolation으로 크기 변환
-                if len(weighted_signal.shape) == 3:  # [B, H_source, W_source]
-                    axonal_signal = torch.nn.functional.interpolate(
-                        weighted_signal.unsqueeze(1),  # [B, 1, H, W]
-                        size=(target_h, target_w),
-                        mode='bilinear',
-                        align_corners=False
-                    ).squeeze(1)  # [B, target_h, target_w]
-                else:  # [H_source, W_source]
-                    axonal_signal = torch.nn.functional.interpolate(
-                        weighted_signal.unsqueeze(0).unsqueeze(0),  # [1, 1, H, W]
-                        size=(target_h, target_w),
-                        mode='bilinear',
-                        align_corners=False
-                    ).squeeze(0).squeeze(0)  # [target_h, target_w]
-            else:
-                # 같은 크기면 그대로 사용
-                axonal_signal = weighted_signal
+            # 원래 차원으로 복원
+            if len(modulated_spikes.shape) == 3:  # 배치 모드
+                axonal_signal = conv_output.squeeze(1)  # [B, H_out, W_out]
+            else:  # 단일 샘플 모드
+                axonal_signal = conv_output.squeeze(0).squeeze(0)  # [H_out, W_out]
             
+            # 타겟 노드에 신호 누적
             if target not in axonal_inputs:
                 axonal_inputs[target] = axonal_signal
             else:
                 axonal_inputs[target] += axonal_signal
         
         return axonal_inputs
-
-
-class MultiScaleGrid(nn.Module):
-    """
-    Multi-scale Grid 연결
-    
-    문서 명세:
-    - Fine scale: 간격 2, 가중치 0.5
-    - Medium scale: 간격 3, 가중치 0.3  
-    - Coarse scale: 간격 5, 가중치 0.2
-    """
-    
-    def __init__(
-        self,
-        node_list: List[str],
-        fine_spacing: int = 2,
-        fine_weight: float = 0.5,
-        medium_spacing: int = 3,
-        medium_weight: float = 0.3,
-        coarse_spacing: int = 5,
-        coarse_weight: float = 0.2,
-        device: str = "cuda"
-    ):
-        super().__init__()
-        
-        self.node_list = node_list
-        self.device = device
-        
-        self.scales = {
-            "fine": {"spacing": fine_spacing, "weight": fine_weight},
-            "medium": {"spacing": medium_spacing, "weight": medium_weight},
-            "coarse": {"spacing": coarse_spacing, "weight": coarse_weight}
-        }
-        
-        self.scale_weights = nn.ParameterDict()
-        for scale_name, config in self.scales.items():
-            self.scale_weights[scale_name] = nn.Parameter(
-                torch.tensor(config["weight"], device=device)
-            )
-    
-    def forward(self, node_spikes: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """Multi-scale Grid 연결 계산 (배치 지원)"""
-        grid_inputs = {node: torch.zeros_like(node_spikes[node]) 
-                      for node in self.node_list if node in node_spikes}
-        
-        for scale_name, config in self.scales.items():
-            spacing = config["spacing"]
-            weight = self.scale_weights[scale_name]
-            
-            for i in range(len(self.node_list)):
-                for j in range(len(self.node_list)):
-                    if abs(i - j) != spacing:
-                        continue
-                    
-                    src_node = self.node_list[i]
-                    dst_node = self.node_list[j]
-                    
-                    if src_node in node_spikes and dst_node in grid_inputs:
-                        grid_inputs[dst_node] += node_spikes[src_node] * weight
-        
-        return grid_inputs
 
 
 class AdaptiveOutputTiming:
@@ -244,7 +205,6 @@ class SCSSystem(nn.Module):
         nodes: Dict[str, SpikeNode],
         local_connections: Dict[str, LocalConnectivity],
         axonal_connections: AxonalConnections,
-        multi_scale_grid: MultiScaleGrid,
         input_interface: InputInterface,
         output_interface: OutputInterface,
         output_timing: AdaptiveOutputTiming,
@@ -263,7 +223,6 @@ class SCSSystem(nn.Module):
         self.nodes = nn.ModuleDict(nodes)
         self.local_connections = nn.ModuleDict(local_connections)
         self.axonal_connections = axonal_connections
-        self.multi_scale_grid = multi_scale_grid
         self.input_interface = input_interface
         self.output_interface = output_interface
         self.output_timing = output_timing
@@ -526,9 +485,8 @@ class SCSSystem(nn.Module):
         external_input: Optional[torch.Tensor],
         current_spikes: Dict[str, torch.Tensor]
     ):
-        """Phase 2: 입력 통합 및 상태 업데이트"""
+        """Phase 2: 입력 통합 및 상태 업데이트 (MultiScaleGrid 제거됨)"""
         axonal_inputs = self.axonal_connections(self.previous_spikes)
-        grid_inputs = self.multi_scale_grid(self.previous_spikes)
         
         for node_name, node in self.nodes.items():
             internal_input = self.local_connections[node_name](
@@ -536,16 +494,6 @@ class SCSSystem(nn.Module):
             )
             
             axonal_input = axonal_inputs.get(node_name)
-            grid_input = grid_inputs.get(node_name)
-            
-            total_axonal = None
-            if axonal_input is not None:
-                total_axonal = axonal_input
-            if grid_input is not None:
-                if total_axonal is not None:
-                    total_axonal += grid_input
-                else:
-                    total_axonal = grid_input
             
             # 특정 노드에만 외부 입력 제공
             node_external_input = external_input if node_name == self.input_node else None
@@ -553,7 +501,7 @@ class SCSSystem(nn.Module):
             node.update_state(
                 external_input=node_external_input,
                 internal_input=internal_input,
-                axonal_input=total_axonal
+                axonal_input=axonal_input
             )
     
     def _phase3_post_spike_processing(self, current_spikes: Dict[str, torch.Tensor]):

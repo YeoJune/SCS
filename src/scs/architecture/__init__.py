@@ -1,4 +1,3 @@
-# src/scs/architecture/__init__.py
 """
 SCS 아키텍처 모듈
 
@@ -10,7 +9,6 @@ from .io import InputInterface, OutputInterface
 from .system import (
     SCSSystem, 
     AxonalConnections, 
-    MultiScaleGrid,
     AdaptiveOutputTiming
 )
 
@@ -26,6 +24,5 @@ __all__ = [
     # 시스템 구성요소
     "SCSSystem",
     "AxonalConnections",
-    "MultiScaleGrid",
     "AdaptiveOutputTiming"
 ]

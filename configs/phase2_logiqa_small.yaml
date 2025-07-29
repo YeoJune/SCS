@@ -1,12 +1,4 @@
-# configs/phas# 태스크 설정
-task:
-  name: "LogiQA"
-  type: "reasoning" # DataProcessor가 process_reasoning을 호출하도록 지시
-  dataset_name: "datatune/LogiQA2.0" # 🔧 FIX: 작동하는 데이터셋으로 변경
-  max_samples:
-    train: 500 # 빠른 테스트를 위해 제한
-    validation: 100
-    test: 100_small.yaml
+# configs/phase2_logiqa_small.yaml
 # Phase 2: LogiQA 추론 능력 검증 (Small-Scale)
 
 # 기본 설정 상속
@@ -20,6 +12,11 @@ experiment:
   phase: 2
   expected_runtime: "30-60분"
 
+# 시스템 역할 정의 (base_model에서 상속하되 필요시 오버라이드)
+system_roles:
+  input_node: "PFC"
+  output_node: "PFC"
+
 # 태스크 설정
 task:
   name: "LogiQA"
@@ -31,32 +28,59 @@ task:
     test: 100
 
 # 모델 설정 (Small 구성으로 오버라이드)
-model:
-  brain_regions:
-    PFC:
-      grid_height: 16
-      grid_width: 8
-      total_neurons: 128
-      decay_rate: 0.95
-      distance_tau: 1.5
-    ACC:
-      grid_height: 8
-      grid_width: 8
-      total_neurons: 64
-      decay_rate: 0.88
-      distance_tau: 2.0
-    IPL:
-      grid_height: 12
-      grid_width: 8
-      total_neurons: 96
-      decay_rate: 0.92
-      distance_tau: 2.5
-    MTL:
-      grid_height: 8
-      grid_width: 8
-      total_neurons: 64
-      decay_rate: 0.97
-      distance_tau: 3.0
+brain_regions:
+  PFC:
+    grid_size: [16, 8] # [height, width] - 작은 크기
+    decay_rate: 0.95
+    distance_tau: 1.5
+  ACC:
+    grid_size: [8, 8] # [height, width] - 작은 크기
+    decay_rate: 0.88
+    distance_tau: 2.0
+  IPL:
+    grid_size: [12, 8] # [height, width] - 작은 크기
+    decay_rate: 0.92
+    distance_tau: 2.5
+  MTL:
+    grid_size: [8, 8] # [height, width] - 작은 크기
+    decay_rate: 0.97
+    distance_tau: 3.0
+
+# 축삭 연결 설정 (작은 모델에 맞게 조정)
+axonal_connections:
+  excitatory_ratio: 0.8
+  connections:
+    - source: "PFC"
+      target: "ACC"
+      kernel_size: 3
+      stride: 1
+      padding: 1
+      dilation: 1
+      weight_scale: 0.8
+
+    - source: "PFC"
+      target: "IPL"
+      kernel_size: 3 # 작은 모델이므로 kernel_size 축소
+      stride: 1
+      padding: 1
+      dilation: 1
+      weight_scale: 0.6
+
+    - source: "ACC"
+      target: "MTL"
+      kernel_size: 3
+      stride: 1
+      padding: 1
+      dilation: 1 # 작은 모델이므로 dilation 축소
+      weight_scale: 0.7
+
+    - source: "IPL"
+      target: "MTL"
+      kernel_size: 1
+      stride: 1
+      padding: 0
+      dilation: 1
+      weight_scale: 0.5
 
 # 학습 설정
 training:

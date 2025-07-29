@@ -46,23 +46,23 @@ brain_regions:
     decay_rate: 0.97
     distance_tau: 3.0
 
-# 축삭 연결 설정 (작은 모델에 맞게 조정)
+# 축삭 연결 설정 (차원 호환성 수정 완료)
 axonal_connections:
   excitatory_ratio: 0.8
   connections:
     - source: "PFC"
       target: "ACC"
-      kernel_size: 3
+      kernel_size: 9
       stride: 1
-      padding: 1
+      padding: 0
       dilation: 1
       weight_scale: 0.8
 
     - source: "PFC"
       target: "IPL"
-      kernel_size: 3 # 작은 모델이므로 kernel_size 축소
+      kernel_size: 5
       stride: 1
-      padding: 1
+      padding: 0
       dilation: 1
       weight_scale: 0.6
 
@@ -71,12 +71,12 @@ axonal_connections:
       kernel_size: 3
       stride: 1
       padding: 1
-      dilation: 1 # 작은 모델이므로 dilation 축소
+      dilation: 1
       weight_scale: 0.7
 
     - source: "IPL"
       target: "MTL"
-      kernel_size: 1
+      kernel_size: 5
       stride: 1
       padding: 0
       dilation: 1

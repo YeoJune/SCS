@@ -113,6 +113,54 @@ axonal_connections:
       weight_scale: 0.8
 ```
 
+### Axonal Connection Constraints
+
+SCS uses Conv2d operations for all axonal connections, which provides flexibility but requires careful attention to output dimensions. **When multiple sources connect to the same target node, all connection outputs must match the target node's grid size exactly** for proper signal summation.
+
+The output size follows the standard Conv2d formula:
+
+```
+Output_Size = floor((Input_Size + 2*Padding - Dilation*(Kernel_Size - 1) - 1) / Stride + 1)
+```
+
+#### Configuration Examples
+
+**Same-sized nodes (straightforward case):**
+
+```yaml
+brain_regions:
+  ACC: { grid_size: [8, 8] }
+  MTL: { grid_size: [8, 8] }
+
+connections:
+  - source: "ACC"
+    target: "MTL"
+    kernel_size: 3
+    stride: 1
+    padding: 1 # (kernel_size - 1) / 2 maintains size
+```
+
+**Different-sized nodes (requires calculation):**
+
+```yaml
+brain_regions:
+  IPL: { grid_size: [12, 8] }
+  MTL: { grid_size: [8, 8] }
+
+connections:
+  - source: "IPL"
+    target: "MTL"
+    kernel_size: 5
+    stride: 1
+    padding: 0 # Calculated to produce [8, 8] output
+```
+
+**Best practice:** Always validate your configuration before training:
+
+```bash
+scs --mode validate --config your_config.yaml
+```
+
 ## Project Structure
 
 ```

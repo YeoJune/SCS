@@ -125,16 +125,6 @@ class InputInterface(nn.Module):
         
         return external_input
         
-        # 3. 시퀀스-격자 크로스 어텐션 (벡터화)
-        attended_grid = self._apply_sequence_to_grid_attention(
-            token_embeds, grid_embeds, attention_mask
-        )
-        
-        # 4. 막전위 패턴 생성 (벡터화)
-        external_input = self._generate_membrane_potential(attended_grid)
-        
-        return external_input
-    
     def _compute_token_embeddings(self, token_ids: torch.Tensor) -> torch.Tensor:
         """
         토큰 시퀀스 임베딩 계산 (배치 지원)

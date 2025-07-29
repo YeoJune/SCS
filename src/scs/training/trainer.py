@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 from tqdm import tqdm
 import logging
+from pathlib import Path
 
 from .loss import SCSLoss
 from .metric import SCSMetrics
@@ -243,6 +244,9 @@ class SCSTrainer:
     
     def _save_checkpoint(self, save_path: str, epoch: int):
         """체크포인트 저장"""
+        save_dir = Path(save_path)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        
         checkpoint = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),

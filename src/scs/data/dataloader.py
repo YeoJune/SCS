@@ -81,7 +81,8 @@ class SCSDataLoader:
         max_length: int = 128,
         num_workers: int = 0,
         processor=None,
-        tokenizer=None
+        tokenizer=None,
+        max_samples=None,
     ):
         # 토크나이저 생성 (인자로 받지 않으면 기본 생성)
         if tokenizer is None:
@@ -96,7 +97,8 @@ class SCSDataLoader:
             dataset_name=dataset_name,
             split=split,
             tokenizer=tokenizer,
-            max_length=max_length
+            max_length=max_length,
+            max_samples=max_samples
         )
         
         # PyTorch DataLoader 생성
@@ -129,7 +131,8 @@ def create_dataloader(
     max_length: int = 128,
     num_workers: int = 0,
     processor=None,
-    tokenizer=None
+    tokenizer=None,
+    max_samples=None
 ) -> SCSDataLoader:
     """SCS 배치 데이터 로더 생성"""
     
@@ -141,5 +144,6 @@ def create_dataloader(
         max_length=max_length,
         num_workers=num_workers,
         processor=processor,
-        tokenizer=tokenizer
+        tokenizer=tokenizer,
+        max_samples=max_samples
     )

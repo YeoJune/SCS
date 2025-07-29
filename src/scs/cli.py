@@ -326,19 +326,25 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
         tokenizer = SCSTokenizer(config["data_loading"]["tokenizer"]["name"])
         dataset_name = get_dataset_name_from_config(config, logger)
         
+        task_config = config.get("task", {})
+        max_samples_config = task_config.get("max_samples", {})
+
         train_loader = create_dataloader(
             dataset_name=dataset_name, 
             split="train", 
             batch_size=config["data_loading"]["batch_size"], 
             max_length=config["data_loading"]["tokenizer"]["max_length"], 
-            tokenizer=tokenizer
+            tokenizer=tokenizer,
+            max_samples=max_samples_config.get("train", None)
         )
+
         val_loader = create_dataloader(
             dataset_name=dataset_name, 
             split="validation", 
             batch_size=1, 
             max_length=config["data_loading"]["tokenizer"]["max_length"], 
-            tokenizer=tokenizer
+            tokenizer=tokenizer,
+            max_samples=max_samples_config.get("validation", None)
         )
         logger.info(f"✅ 데이터 로더 생성 완료 (데이터셋: {dataset_name})")
 
@@ -389,7 +395,8 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
             split="test", 
             batch_size=1, 
             max_length=config["data_loading"]["tokenizer"]["max_length"], 
-            tokenizer=tokenizer
+            tokenizer=tokenizer,
+            max_samples=max_samples_config.get("test", None)
         )
         test_results = trainer.evaluate(test_loader)
         save_config(test_results, experiment_dir / "results.yaml")

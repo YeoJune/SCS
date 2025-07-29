@@ -1,5 +1,4 @@
 # configs/phase2_logiqa_small.yaml
-# Phase 2: LogiQA 추론 능력 검증 (Small-Scale)
 
 # 기본 설정 상속
 defaults:
@@ -7,12 +6,12 @@ defaults:
 
 # 실험 메타정보
 experiment:
-  name: "Phase2_LogiQA_Small"
-  description: "LogiQA 데이터셋을 통한 기본 추론 능력 검증 (작은 규모)"
+  name: "Phase2_LogiQA_Large"
+  description: "LogiQA 데이터셋을 통한 추론 능력 검증 (큰 규모)"
   phase: 2
-  expected_runtime: "30-60분"
+  expected_runtime: "90-180분"
 
-# 시스템 역할 정의 (base_model에서 상속하되 필요시 오버라이드)
+# 시스템 역할 정의
 system_roles:
   input_node: "PFC"
   output_node: "PFC"
@@ -20,85 +19,84 @@ system_roles:
 # 태스크 설정
 task:
   name: "LogiQA"
-  type: "reasoning" # DataProcessor가 process_reasoning을 호출하도록 지시
-  dataset_name: "datatune/LogiQA2.0" # Hugging Face 데이터셋 ID
+  type: "reasoning"
+  dataset_name: "datatune/LogiQA2.0"
   max_samples:
-    train: 500 # 빠른 테스트를 위해 제한
+    train: 500
     validation: 100
     test: 100
 
-# 모델 설정 (Small 구성으로 오버라이드 - 차원 호환성 완벽 수정)
+# 모델 설정
 brain_regions:
   PFC:
-    grid_size: [8, 8] # 작은 정사각형으로 통일
+    grid_size: [64, 64]
     decay_rate: 0.95
     distance_tau: 1.5
   ACC:
-    grid_size: [8, 8] # 모든 노드 크기 통일로 호환성 확보
+    grid_size: [64, 64]
     decay_rate: 0.88
     distance_tau: 2.0
   IPL:
-    grid_size: [8, 8] # 모든 노드 크기 통일
+    grid_size: [64, 64]
     decay_rate: 0.92
     distance_tau: 2.5
   MTL:
-    grid_size: [8, 8] # 모든 노드 크기 통일
+    grid_size: [64, 64]
     decay_rate: 0.97
     distance_tau: 3.0
 
-# 축삭 연결 설정 (모든 노드가 8x8로 통일되어 완벽 호환)
+# 축삭 연결 설정
 axonal_connections:
   excitatory_ratio: 0.8
   connections:
-    # PFC [8, 8] → ACC [8, 8]
     - source: "PFC"
       target: "ACC"
-      kernel_size: 3 # (8 + 2 - 3) / 1 + 1 = 8 ✓
+      kernel_size: 3
       stride: 1
-      padding: 1 # (kernel_size - 1) / 2 = 1
+      padding: 1
       dilation: 1
       weight_scale: 0.8
 
-    # PFC [8, 8] → IPL [8, 8]
     - source: "PFC"
       target: "IPL"
-      kernel_size: 5 # (8 + 4 - 5) / 1 + 1 = 8 ✓
+      kernel_size: 5
       stride: 1
-      padding: 2 # (kernel_size - 1) / 2 = 2
+      padding: 2
       dilation: 1
       weight_scale: 0.6
 
-    # ACC [8, 8] → MTL [8, 8]
     - source: "ACC"
       target: "MTL"
-      kernel_size: 3 # (8 + 2 - 3) / 1 + 1 = 8 ✓
+      kernel_size: 3
       stride: 1
       padding: 1
-      dilation: 1 # 작은 모델에서는 dilation=1로 단순화
+      dilation: 1
       weight_scale: 0.7
 
-    # IPL [8, 8] → MTL [8, 8]
     - source: "IPL"
       target: "MTL"
-      kernel_size: 1 # (8 + 0 - 1) / 1 + 1 = 8 ✓
+      kernel_size: 1
       stride: 1
       padding: 0
       dilation: 1
       weight_scale: 0.5
 
+# I/O 인터페이스 설정
+io_system:
+  input_interface:
+    max_seq_len: 256
+  output_interface:
+    max_output_len: 256
+
 # 학습 설정
 training:
-  epochs: 20 # 빠른 검증을 위해 단축
+  epochs: 20
   learning_rate: 5e-4
-  batch_size: 4 # QA/추론 태스크는 작은 배치가 안정적
-  max_clk_training: 150 # 작은 모델이므로 CLK 수를 약간 늘려줌
-
-  # 최적화 설정
+  batch_size: 1
+  max_clk_training: 150
   optimizer: "adamw"
   weight_decay: 0.01
   warmup_steps: 100
-
-  # 평가 설정
   eval_every_n_epochs: 5
   save_every_n_epochs: 10
   early_stopping_patience: 5
@@ -107,16 +105,16 @@ training:
 data:
   tokenizer:
     name: "bert-base-uncased"
-    max_length: 256 # LogiQA는 컨텍스트가 길 수 있음
+    max_length: 256
     padding: true
     truncation: true
 
-  # 데이터 전처리 설정
-  preprocessing:
-    lowercase: true
-    remove_punctuation: false # 논리 관계에 중요
-    max_context_length: 200
-    max_question_length: 50
+# 데이터 전처리 설정
+preprocessing:
+  lowercase: true
+  remove_punctuation: false
+  max_context_length: 200
+  max_question_length: 50
 
 # 평가 메트릭
 metrics:
@@ -127,11 +125,11 @@ metrics:
 tracking:
   use_wandb: true
   wandb_project: "SCS_LogiQA"
-  wandb_tags: ["phase2", "logiqa", "small", "reasoning"]
+  wandb_tags: ["phase2", "logiqa", "large", "reasoning"]
 
-  # 저장할 메트릭
-  log_metrics: ["loss", "accuracy", "f1"]
-  log_frequency: 10 # 매 10 스텝마다
+# 저장할 메트릭
+log_metrics: ["loss", "accuracy", "f1"]
+log_frequency: 10
 
 # 분석 설정
 analysis:
@@ -139,9 +137,7 @@ analysis:
     enabled: true
     save_spike_patterns: true
     analyze_connectivity: true
-
   representation_analysis:
-    enabled: false # Phase 2에서는 비활성화
-
+    enabled: false
   ablation_study:
-    enabled: false # Phase 2에서는 비활성화
+    enabled: false

@@ -138,13 +138,8 @@ class LogiQADataset(BaseDataset):
             # 선택지 추가
             options_text = " ".join([f"{chr(65+i)}) {opt.strip()}" 
                                    for i, opt in enumerate(options)])
-            input_parts.append(f"Options: {options_text}")
-            
-            # 정답 처리
-            if isinstance(answer, int) and 0 <= answer < len(options):
-                target_text = chr(65 + answer)  # 0->A, 1->B, etc.
-            else:
-                target_text = "A"  # 기본값
+            # input_parts.append(f"Options: {options_text}")
+            target_text = options[answer].strip()  # 실제 답 텍스트
             
             return {
                 'input_text': " ".join(input_parts),
@@ -225,15 +220,15 @@ class MultiDataset(BaseDataset):
             input_parts.append(f"Question: {question}")
             
             if options:
-                options_text = " ".join([f"{chr(65+i)}) {opt}" 
-                                       for i, opt in enumerate(options)])
-                input_parts.append(f"Options: {options_text}")
+                # options_text = " ".join([f"{chr(65+i)}) {opt}" 
+                #                        for i, opt in enumerate(options)])
+                # input_parts.append(f"Options: {options_text}")
                 
                 # 정답 처리
                 if isinstance(answer, int) and 0 <= answer < len(options):
-                    target_text = chr(65 + answer)
+                    target_text = options[answer].strip()  # 실제 답 텍스트
                 else:
-                    target_text = "A"
+                    target_text = "unknown"
             else:
                 target_text = "unknown"
             

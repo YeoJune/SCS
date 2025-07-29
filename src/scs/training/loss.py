@@ -41,11 +41,6 @@ class SCSLoss(nn.Module):
             targets: 정답 토큰 [B, seq_len]
             processing_info: 처리 정보 딕셔너리
         """
-        # 차원 정규화
-        if outputs.dim() == 2:  # [seq_len, vocab_size] → [1, seq_len, vocab_size]
-            outputs = outputs.unsqueeze(0)
-        if targets.dim() == 1:   # [seq_len] → [1, seq_len] 
-            targets = targets.unsqueeze(0)
         batch_size, seq_len, vocab_size = outputs.shape
         
         # 1. 기본 분류 손실 (Teacher Forcing에 대한 Cross-Entropy)

@@ -191,47 +191,44 @@ class SCSTrainer:
     
     
     def _validate_epoch(self, val_loader: DataLoader) -> Dict[str, float]:
-        """검증 - 상세 분석을 위해 배치 크기 1로 처리"""
+        """검증 - 배치 처리"""
         self.model.eval()
         
         total_loss = 0.0
         total_accuracy = 0.0
-        total_comprehensive = 0.0
-        num_samples = 0
+        num_batches = 0
         
         with torch.no_grad():
             for batch in val_loader:
-                # 검증 시에는 배치 크기 1로 각 샘플을 상세 분석
-                batch_size = batch['input_tokens'].size(0)
+                # 🎯 배치 전체를 한번에 처리
+                input_tokens = batch['input_tokens'].to(self.device)
+                target_tokens = batch['target_tokens'].to(self.device)
+                attention_mask = batch['attention_mask'].to(self.device)
                 
-                for i in range(batch_size):
-                    # 단일 샘플 추출
-                    single_input = batch['input_tokens'][i:i+1].to(self.device)
-                    single_target = batch['target_tokens'][i:i+1].to(self.device)
-                    single_mask = batch['attention_mask'][i:i+1].to(self.device)
-                    
-                    # forward 메서드에서 training=False로 호출하여 추론 경로 사용
-                    outputs, processing_info = self.model(
-                        input_schedule=single_input.squeeze(0),
-                        training=False  # 추론 모드로 상세 메트릭 수집
-                    )
-                    
-                    # 손실 및 메트릭 계산
-                    loss = self.loss_fn(
-                        outputs.unsqueeze(0) if outputs.dim() == 1 else outputs,
-                        single_target.squeeze(0) if single_target.dim() == 1 else single_target,
-                        processing_info
-                    )
-                    
-                    total_loss += loss.item()
-                    total_accuracy += SCSMetrics.accuracy(outputs, single_target.squeeze(0))
-                    total_comprehensive += SCSMetrics.comprehensive_score(processing_info)
-                    num_samples += 1
+                # 학습과 동일한 방식으로 배치 처리
+                output_logits, processing_info = self.model(
+                    input_schedule=input_tokens,
+                    max_clk=self.config.max_clk_training,
+                    training=True,
+                    target_schedule=target_tokens,
+                    attention_mask=attention_mask
+                )
+                
+                # 배치 단위 손실 및 메트릭 계산
+                batch_loss = self.loss_fn(output_logits, target_tokens, processing_info)
+                batch_accuracy = SCSMetrics.accuracy(
+                    output_logits, 
+                    target_tokens, 
+                    pad_token_id=self.config.pad_token_id
+                )
+                
+                total_loss += batch_loss.item()
+                total_accuracy += batch_accuracy
+                num_batches += 1
         
         return {
-            'loss': total_loss / num_samples,
-            'accuracy': total_accuracy / num_samples,
-            'comprehensive_score': total_comprehensive / num_samples
+            'loss': total_loss / num_batches,
+            'accuracy': total_accuracy / num_batches
         }
     
     def _should_early_stop(self, val_loss: float) -> bool:

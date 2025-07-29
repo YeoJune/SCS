@@ -27,56 +27,60 @@ task:
     validation: 100
     test: 100
 
-# 모델 설정 (Small 구성으로 오버라이드)
+# 모델 설정 (Small 구성으로 오버라이드 - 차원 호환성 완벽 수정)
 brain_regions:
   PFC:
-    grid_size: [16, 8] # [height, width] - 작은 크기
+    grid_size: [8, 8] # 작은 정사각형으로 통일
     decay_rate: 0.95
     distance_tau: 1.5
   ACC:
-    grid_size: [8, 8] # [height, width] - 작은 크기
+    grid_size: [8, 8] # 모든 노드 크기 통일로 호환성 확보
     decay_rate: 0.88
     distance_tau: 2.0
   IPL:
-    grid_size: [12, 8] # [height, width] - 작은 크기
+    grid_size: [8, 8] # 모든 노드 크기 통일
     decay_rate: 0.92
     distance_tau: 2.5
   MTL:
-    grid_size: [8, 8] # [height, width] - 작은 크기
+    grid_size: [8, 8] # 모든 노드 크기 통일
     decay_rate: 0.97
     distance_tau: 3.0
 
-# 축삭 연결 설정 (차원 호환성 수정 완료)
+# 축삭 연결 설정 (모든 노드가 8x8로 통일되어 완벽 호환)
 axonal_connections:
   excitatory_ratio: 0.8
   connections:
+    # PFC [8, 8] → ACC [8, 8]
     - source: "PFC"
       target: "ACC"
-      kernel_size: 9
+      kernel_size: 3 # (8 + 2 - 3) / 1 + 1 = 8 ✓
       stride: 1
-      padding: 0
+      padding: 1 # (kernel_size - 1) / 2 = 1
       dilation: 1
       weight_scale: 0.8
 
+    # PFC [8, 8] → IPL [8, 8]
     - source: "PFC"
       target: "IPL"
-      kernel_size: 5
+      kernel_size: 5 # (8 + 4 - 5) / 1 + 1 = 8 ✓
       stride: 1
-      padding: 0
+      padding: 2 # (kernel_size - 1) / 2 = 2
       dilation: 1
       weight_scale: 0.6
 
+    # ACC [8, 8] → MTL [8, 8]
     - source: "ACC"
       target: "MTL"
-      kernel_size: 3
+      kernel_size: 3 # (8 + 2 - 3) / 1 + 1 = 8 ✓
       stride: 1
       padding: 1
-      dilation: 1
+      dilation: 1 # 작은 모델에서는 dilation=1로 단순화
       weight_scale: 0.7
 
+    # IPL [8, 8] → MTL [8, 8]
     - source: "IPL"
       target: "MTL"
-      kernel_size: 5
+      kernel_size: 1 # (8 + 0 - 1) / 1 + 1 = 8 ✓
       stride: 1
       padding: 0
       dilation: 1

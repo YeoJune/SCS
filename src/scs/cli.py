@@ -406,11 +406,32 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
             tokenizer=tokenizer,
             max_samples=max_samples_config.get("test", None)
         )
-        test_results = trainer.evaluate(test_loader)
-        save_config(test_results, experiment_dir / "results.yaml")
+        
+        # 예시 저장 개수 설정 (config에서 가져오거나 기본값 10)
+        save_examples = config.get('evaluation', {}).get('save_examples', 10)
+        
+        test_results = trainer.evaluate(test_loader, save_examples=save_examples)
+        
+        # 결과 저장 (evaluate_mode와 동일한 형식)
+        results_path = experiment_dir / f"final_results_{datetime.now().strftime('%Y%m%d_%H%M')}.yaml"
+        save_config(test_results, results_path)
         
         logger.info("🎉 학습 및 평가가 성공적으로 완료되었습니다!")
+        logger.info("📊 최종 평가 결과:")
+        for key, value in test_results.items():
+            if key not in ['examples']:  # 예시는 너무 길어서 제외
+                if isinstance(value, float):
+                    logger.info(f"   - {key}: {value:.4f}")
+                else:
+                    logger.info(f"   - {key}: {value}")
+        
+        logger.info(f"💾 저장된 예시 개수: {test_results['num_examples_saved']}")
         logger.info(f"📂 결과 저장 위치: {experiment_dir}")
+        logger.info(f"📊 최종 결과 파일: {results_path}")
+
+        # 기존 results.yaml도 호환성을 위해 유지 (간단한 버전)
+        simple_results = {k: v for k, v in test_results.items() if k not in ['examples']}
+        save_config(simple_results, experiment_dir / "results.yaml")
 
     except Exception as e:
         logger.error(f"❌ 학습 중 치명적인 오류 발생: {e}", exc_info=True)
@@ -546,7 +567,7 @@ def evaluate_mode(args: argparse.Namespace):
         
         model = load_model_with_checkpoint(config, checkpoint_path, device, logger)
         logger.info("✅ 모델 복원 완료")
-        
+
         # 6. 트레이너 생성 및 평가
         logger.info("📈 평가 실행 중...")
         pad_token_id = tokenizer.tokenizer.pad_token_id

@@ -267,7 +267,7 @@ class SCSTrainer:
         )
     
     def evaluate(self, test_loader: DataLoader) -> Dict[str, float]:
-        """테스트 평가 - 모든 상세 메트릭 분석"""
+        """테스트 평가 - 배치 처리로 일관성 유지"""
         self.model.eval()
         
         total_loss = 0.0
@@ -275,41 +275,50 @@ class SCSTrainer:
         total_comprehensive = 0.0
         total_convergence = 0.0
         total_efficiency = 0.0
-        num_samples = 0
+        num_batches = 0
         
         with torch.no_grad():
             for batch in test_loader:
-                batch_size = batch['input_tokens'].size(0)
+                # 배치 전체를 한번에 처리 (학습/검증과 동일한 방식)
+                input_tokens = batch['input_tokens'].to(self.device)
+                target_tokens = batch['target_tokens'].to(self.device)
+                attention_mask = batch['attention_mask'].to(self.device)
                 
-                for i in range(batch_size):
-                    # 단일 샘플로 상세 분석
-                    single_input = batch['input_tokens'][i:i+1].to(self.device)
-                    single_target = batch['target_tokens'][i:i+1].to(self.device)
-                    
-                    outputs, processing_info = self.model(
-                        input_schedule=single_input.squeeze(0),
-                        training=False
-                    )
-                    
-                    loss = self.loss_fn(
-                        outputs.unsqueeze(0) if outputs.dim() == 1 else outputs,
-                        single_target.squeeze(0) if single_target.dim() == 1 else single_target,
-                        processing_info
-                    )
-                    
-                    total_loss += loss.item()
-                    total_accuracy += SCSMetrics.accuracy(outputs, single_target.squeeze(0))
-                    total_comprehensive += SCSMetrics.comprehensive_score(processing_info)
-                    total_convergence += SCSMetrics.convergence_rate(processing_info)
-                    total_efficiency += SCSMetrics.processing_efficiency(processing_info)
-                    num_samples += 1
+                # 배치 단위로 모델 실행
+                output_logits, processing_info = self.model(
+                    input_schedule=input_tokens,
+                    max_clk=self.config.max_clk_training,
+                    training=False,  # 평가 모드
+                    target_schedule=target_tokens,
+                    attention_mask=attention_mask
+                )
+                
+                # 배치 단위 손실 및 메트릭 계산
+                batch_loss = self.loss_fn(output_logits, target_tokens, processing_info)
+                batch_accuracy = SCSMetrics.accuracy(
+                    output_logits, 
+                    target_tokens, 
+                    pad_token_id=self.config.pad_token_id
+                )
+                
+                # 상세 메트릭들도 배치 단위로 계산
+                batch_comprehensive = SCSMetrics.comprehensive_score(processing_info)
+                batch_convergence = SCSMetrics.convergence_rate(processing_info)
+                batch_efficiency = SCSMetrics.processing_efficiency(processing_info)
+                
+                total_loss += batch_loss.item()
+                total_accuracy += batch_accuracy
+                total_comprehensive += batch_comprehensive
+                total_convergence += batch_convergence
+                total_efficiency += batch_efficiency
+                num_batches += 1
         
         return {
-            'test_loss': total_loss / num_samples,
-            'test_accuracy': total_accuracy / num_samples,
-            'comprehensive_score': total_comprehensive / num_samples,
-            'convergence_rate': total_convergence / num_samples,
-            'processing_efficiency': total_efficiency / num_samples
+            'test_loss': total_loss / num_batches,
+            'test_accuracy': total_accuracy / num_batches,
+            'comprehensive_score': total_comprehensive / num_batches,
+            'convergence_rate': total_convergence / num_batches,
+            'processing_efficiency': total_efficiency / num_batches
         }
 
 

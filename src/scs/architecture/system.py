@@ -96,7 +96,7 @@ class AxonalConnections(nn.Module):
         return self.excitatory_masks[mask_key]
     
     def forward(self, node_spikes: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """Conv2d 기반 축삭 연결 처리 (배치 지원)"""
+        """Conv2d 기반 축삭 연결 처리 (배치 일관성 보장)"""
         axonal_inputs = {}
         
         for conn in self.connections:
@@ -106,31 +106,29 @@ class AxonalConnections(nn.Module):
             if source not in node_spikes:
                 continue
             
-            source_spikes = node_spikes[source]  # [B, H, W] 또는 [H, W]
+            source_spikes = node_spikes[source]  # [B, H, W]
             conv_key = f"{source}→{target}"
             
             if conv_key not in self.conv_layers:
                 continue
             
+            # 입력을 배치 형태로 정규화
+            if source_spikes.dim() == 2:  # [H, W] -> [1, H, W]
+                source_spikes = source_spikes.unsqueeze(0)
+            
             # 흥분성/억제성 조절 (컨볼루션 전에 적용)
             E = self._get_or_create_mask(source, source_spikes.shape)
             modulated_spikes = E * source_spikes - 0.5 * (1 - E) * source_spikes
             
-            # Conv2d 입력 형식으로 변환: [B, 1, H, W] 또는 [1, H, W]
-            if len(modulated_spikes.shape) == 3:  # [B, H, W]
-                conv_input = modulated_spikes.unsqueeze(1)  # [B, 1, H, W]
-            else:  # [H, W]
-                conv_input = modulated_spikes.unsqueeze(0).unsqueeze(0)  # [1, 1, H, W]
+            # Conv2d 입력 형식으로 변환: [B, 1, H, W]
+            conv_input = modulated_spikes.unsqueeze(1)  # [B, 1, H, W]
             
             # Conv2d 연산 수행
             conv_layer = self.conv_layers[conv_key]
-            conv_output = conv_layer(conv_input)  # [B, 1, H_out, W_out] 또는 [1, 1, H_out, W_out]
+            conv_output = conv_layer(conv_input)  # [B, 1, H_out, W_out]
             
-            # 원래 차원으로 복원
-            if len(modulated_spikes.shape) == 3:  # 배치 모드
-                axonal_signal = conv_output.squeeze(1)  # [B, H_out, W_out]
-            else:  # 단일 샘플 모드
-                axonal_signal = conv_output.squeeze(0).squeeze(0)  # [H_out, W_out]
+            # 원래 차원으로 복원 (항상 배치 형태 유지)
+            axonal_signal = conv_output.squeeze(1)  # [B, H_out, W_out]
             
             # 타겟 노드에 신호 누적
             if target not in axonal_inputs:
@@ -230,83 +228,48 @@ class SCSSystem(nn.Module):
         self.previous_spikes = {}
         self._initialize_previous_spikes()
     
-    def _initialize_previous_spikes(self, batch_size: Optional[int] = None):
-        """이전 스파이크 상태 초기화 (배치 지원)
-        
-        Args:
-            batch_size: 배치 크기. None이면 단일 샘플 [H, W], 
-                       int면 배치 [B, H, W]
-        """
+    def _initialize_previous_spikes(self, batch_size: int = 1):
+        """이전 스파이크 상태 초기화 (항상 배치)"""
         for node_name, node in self.nodes.items():
-            if batch_size is None:
-                # 단일 샘플: [H, W]
-                self.previous_spikes[node_name] = torch.zeros(
-                    node.grid_height, node.grid_width, device=self.device
-                )
-            else:
-                # 배치: [B, H, W]
-                self.previous_spikes[node_name] = torch.zeros(
-                    batch_size, node.grid_height, node.grid_width, device=self.device
-                )
+            self.previous_spikes[node_name] = torch.zeros(
+                batch_size, node.grid_height, node.grid_width, device=self.device
+            )
     
     def forward(
         self,
         input_schedule: Optional[torch.Tensor] = None,  # [B, seq_len] or [seq_len] or Dict[int, torch.Tensor]
         max_clk: Optional[int] = None,
-        training: bool = False,  # 학습 모드 플래그
-        target_schedule: Optional[torch.Tensor] = None,  # [B, seq_len] 학습용 타겟
-        attention_mask: Optional[torch.Tensor] = None    # [B, seq_len] 패딩 마스크
+        training: bool = False,
+        target_schedule: Optional[torch.Tensor] = None,  # [B, seq_len] or [seq_len]
+        attention_mask: Optional[torch.Tensor] = None    # [B, seq_len] or [seq_len]
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
         """
-        전체 시스템 처리 (배치 지원)
-        
-        문서 명세 구현:
-        1. Phase 1: 현재 막전위로부터 스파이크 계산
-        2. Phase 2: 입력 통합 및 상태 업데이트  
-        3. Phase 3: 스파이크 후처리 및 휴지기 업데이트
-        4. CLK 증가: 전역 시계 동기화
-        
-        Args:
-            input_schedule: 입력 토큰
-                - 학습 시: [B, seq_len] 패딩된 배치 텐서
-                - 추론 시: [seq_len] 단일 시퀀스 또는 Dict[int, torch.Tensor] CLK 스케줄
-            max_clk: 최대 CLK 수
-            training: 학습 모드 여부
-            target_schedule: [B, seq_len] 학습용 타겟 (학습 시에만 사용)
-            attention_mask: [B, seq_len] 패딩 마스크 (True=유효, False=패딩)
-            
-        Returns:
-            output_tokens: 생성된 토큰 로짓
-                - 학습 시: [B, seq_len, vocab_size] 
-                - 추론 시: [seq_len, vocab_size]
-            processing_info: 처리 정보 딕셔너리
+        전체 시스템 처리 (항상 배치 출력)
         """
         if max_clk is None:
             max_clk = self.output_timing.max_processing_clk
         
-        # 배치 크기 결정
-        batch_size = None
-        if training and input_schedule is not None:
+        # 입력을 배치 형태로 정규화
+        batch_size = 1
+        if input_schedule is not None and not isinstance(input_schedule, dict):
             if input_schedule.dim() == 2:  # [B, seq_len]
                 batch_size = input_schedule.shape[0]
-                seq_len = input_schedule.shape[1]
             else:  # [seq_len] -> [1, seq_len]
                 input_schedule = input_schedule.unsqueeze(0)
                 if attention_mask is not None:
                     attention_mask = attention_mask.unsqueeze(0)
                 if target_schedule is not None:
                     target_schedule = target_schedule.unsqueeze(0)
-                batch_size = 1
-                seq_len = input_schedule.shape[1]
+        
+        if target_schedule is not None and target_schedule.dim() == 1:
+            target_schedule = target_schedule.unsqueeze(0)
         
         self.reset_state(batch_size)
         
         if training:
-            # 학습 모드: Teacher Forcing 사용
             return self._forward_training(input_schedule, target_schedule, attention_mask, max_clk)
         else:
-            # 추론 모드: 기존 동적 생성 방식
-            return self._forward_inference(input_schedule, max_clk)
+            return self._forward_inference(input_schedule, max_clk, batch_size)
     
     def _forward_training(
         self,
@@ -361,28 +324,26 @@ class SCSSystem(nn.Module):
     
     def _forward_inference(
         self,
-        input_schedule: Optional[torch.Tensor],  # [seq_len] or Dict[int, torch.Tensor]
-        max_clk: int
+        input_schedule: Optional[torch.Tensor],  # [B, seq_len] or Dict[int, torch.Tensor]
+        max_clk: int,
+        batch_size: int
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
-        """추론 모드 forward pass (기존 동적 생성 방식)"""
-        # 기존 코드 유지
+        """추론 모드 forward pass (항상 배치 출력)"""
         output_started = False
         generated_tokens = []
         
         for clk in range(max_clk):
             self.current_clk = clk
             
-            # Phase 1: 스파이크 계산
+            # Phase 1-3 동일
             current_spikes = self._phase1_compute_spikes()
             
-            # Phase 2: 상태 업데이트
             if isinstance(input_schedule, dict):
-                external_input = self._get_external_input_at_clk(input_schedule, clk)
+                external_input = self._get_external_input_at_clk(input_schedule, clk, batch_size)
             else:
                 external_input = self._get_external_input_sequence(input_schedule, clk)
-            self._phase2_update_states(external_input, current_spikes)
             
-            # Phase 3: 후처리
+            self._phase2_update_states(external_input, current_spikes)
             self._phase3_post_spike_processing(current_spikes)
             
             # 출력 처리
@@ -393,34 +354,35 @@ class SCSSystem(nn.Module):
                 output_started = True
             
             if output_started:
-                output_spikes = current_spikes[self.output_node]
-                token_logits = self.output_interface.generate_token_at_clk(output_spikes)
+                output_spikes = current_spikes[self.output_node]  # [B, H, W]
+                token_logits = self.output_interface.generate_token_at_clk(output_spikes)  # [B, vocab_size]
                 generated_tokens.append(token_logits)
                 
-                output_confidence = torch.softmax(token_logits, dim=-1).max().item()
+                # confidence 계산 (배치의 첫 번째 샘플 기준)
+                output_confidence = torch.softmax(token_logits[0], dim=-1).max().item()
                 if self.output_timing.should_end_output(clk, acc_activity, output_confidence):
                     self.output_interface.end_generation()
                     break
             
-            # 이전 상태 업데이트
             self.previous_spikes = {k: v.clone() for k, v in current_spikes.items()}
         
-        # 출력 토큰 생성
+        # 출력 토큰 생성 (항상 배치 형태)
         if generated_tokens:
-            output_tokens = torch.stack(generated_tokens, dim=0)
+            output_tokens = torch.stack(generated_tokens, dim=1)  # [B, seq_len, vocab_size]
         else:
-            output_tokens = torch.zeros(1, self.output_interface.vocab_size, device=self.device)
+            output_tokens = torch.zeros(batch_size, 1, self.output_interface.vocab_size, device=self.device)
         
         processing_info = {
             "processing_clk": self.current_clk + 1,
             "output_started": output_started,
             "tokens_generated": len(generated_tokens),
-            "convergence_achieved": clk < max_clk - 1,
-            "final_acc_activity": acc_activity if 'acc_activity' in locals() else 0.0
+            "convergence_achieved": clk < max_clk - 1 if 'clk' in locals() else False,
+            "final_acc_activity": acc_activity if 'acc_activity' in locals() else 0.0,
+            "batch_size": batch_size
         }
         
         return output_tokens, processing_info
-    
+
     def _get_external_input_training(
         self,
         input_schedule: torch.Tensor,      # [B, seq_len]
@@ -429,15 +391,15 @@ class SCSSystem(nn.Module):
         seq_len: int
     ) -> Optional[torch.Tensor]:
         """학습 시 특정 CLK에서의 외부 입력 처리 (배치)"""
-        # CLK를 시퀀스 인덱스로 매핑 (간단한 선형 매핑)
+        # CLK를 시퀀스 인덱스로 매핑
         if clk >= seq_len:
             return None
         
-        token_ids = input_schedule[:, clk]  # [B] 현재 CLK의 토큰들
+        token_ids = input_schedule[:, clk:clk+1]  # [B, 1] 현재 CLK의 토큰들
         
         # 패딩 마스크 적용
         if attention_mask is not None:
-            valid_mask = attention_mask[:, clk]  # [B]
+            valid_mask = attention_mask[:, clk:clk+1]  # [B, 1]
             # 패딩된 위치는 0으로 설정
             token_ids = token_ids * valid_mask.long()
         
@@ -445,32 +407,45 @@ class SCSSystem(nn.Module):
         if (token_ids == 0).all():
             return None
         
-        # InputInterface를 통해 배치 처리
-        return self.input_interface(token_ids)  # [B, H, W]
+        # InputInterface를 통해 배치 처리 (squeeze 제거하여 일관성 유지)
+        return self.input_interface(token_ids.squeeze(-1))  # [B] -> [B, H, W]
     
     def _get_external_input_sequence(
         self,
-        input_sequence: Optional[torch.Tensor],  # [seq_len]
+        input_sequence: Optional[torch.Tensor],  # [B, seq_len] (이미 배치화됨)
         clk: int
     ) -> Optional[torch.Tensor]:
-        """추론 시 시퀀스에서의 외부 입력 처리"""
-        if input_sequence is None or clk >= input_sequence.shape[0]:
+        """추론 시 시퀀스에서의 외부 입력 처리 (배치 출력)"""
+        if input_sequence is None or clk >= input_sequence.shape[1]:
             return None
         
-        token_id = input_sequence[clk:clk+1]  # [1]
-        return self.input_interface(token_id)  # [H, W]
+        token_id = input_sequence[:, clk:clk+1]  # [B, 1]
+        return self.input_interface(token_id.squeeze(-1))  # [B] -> [B, H, W]
     
     def _get_external_input_at_clk(
         self,
-        input_schedule: Dict[int, torch.Tensor],  # CLK -> 토큰 매핑
-        clk: int
+        input_schedule: Dict[int, torch.Tensor],
+        clk: int,
+        batch_size: int
     ) -> Optional[torch.Tensor]:
-        """추론 시 특정 CLK에서의 외부 입력 처리 (딕셔너리 스케줄)"""
+        """추론 시 특정 CLK에서의 외부 입력 처리 (배치 출력)"""
         if clk not in input_schedule:
             return None
         
-        token_tensor = input_schedule[clk]  # 이미 텐서 형태
-        return self.input_interface(token_tensor)  # [H, W]
+        token_tensor = input_schedule[clk]  # 다양한 형태 가능
+        
+        # 차원별 처리
+        if token_tensor.dim() == 0:  # 스칼라: tensor(5)
+            token_tensor = token_tensor.unsqueeze(0)  # [1]
+        elif token_tensor.dim() == 1:  # 1차원: [seq_len]
+            token_tensor = token_tensor.unsqueeze(0)  # [1, seq_len]
+        # token_tensor.dim() == 2면 이미 [B, seq_len] 형태
+        
+        # seq_len > 1인 경우 첫 번째 토큰만 사용 (CLK 기반이므로)
+        if token_tensor.shape[1] > 1:
+            token_tensor = token_tensor[:, 0:1]  # [B, 1]
+        
+        return self.input_interface(token_tensor.squeeze(-1))  # [B] -> [B, H, W]
     
     def _phase1_compute_spikes(self) -> Dict[str, torch.Tensor]:
         """Phase 1: 현재 막전위 기준 스파이크 계산"""
@@ -519,12 +494,8 @@ class SCSSystem(nn.Module):
         acc_activities = [node_spikes[name].mean().item() for name in acc_nodes]
         return sum(acc_activities) / len(acc_activities)
     
-    def reset_state(self, batch_size: Optional[int] = None):
-        """전체 시스템 상태 초기화 (배치 지원)
-        
-        Args:
-            batch_size: 배치 크기. None이면 단일 샘플, int면 배치
-        """
+    def reset_state(self, batch_size: int = 1):
+        """전체 시스템 상태 초기화 (항상 배치)"""
         self.current_clk = 0
         self.output_timing.reset()
         

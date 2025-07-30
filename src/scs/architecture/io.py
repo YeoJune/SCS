@@ -77,53 +77,41 @@ class InputInterface(nn.Module):
         attention_mask: Optional[torch.Tensor] = None  # [B, seq_len] or [seq_len] or None
     ) -> Optional[torch.Tensor]:
         """
-        토큰 시퀀스를 단일 노드의 2차원 격자 막전위로 변환 (배치 지원)
-        
-        문서 명세 구현:
-        V_input(t) = Attention(Q_grid, K_sequence, V_sequence)
-        벡터화: 토큰 시퀀스가 2차원 격자 전체에 공간적 패턴 생성
+        토큰 시퀀스를 단일 노드의 2차원 격자 막전위로 변환 (항상 배치 출력)
         
         Args:
             token_ids: 토큰 시퀀스 [B, seq_len] (배치) 또는 [seq_len] (단일), None이면 입력 없음
             attention_mask: 어텐션 마스크 [B, seq_len] 또는 [seq_len] (True=유효, False=패딩)
             
         Returns:
-            external_input: [B, H, W] (배치) 또는 [H, W] (단일), None이면 입력 없음
+            external_input: 항상 [B, H, W] 형태, None이면 입력 없음
         """
         if token_ids is None or token_ids.numel() == 0:
             return None
             
-        # 배치 차원 확인 및 정규화
+        # 단일 샘플을 배치 형태로 정규화
         if token_ids.dim() == 1:
-            # 단일 샘플을 배치 형태로 변환
             token_ids = token_ids.unsqueeze(0)  # [1, seq_len]
             if attention_mask is not None:
                 attention_mask = attention_mask.unsqueeze(0)  # [1, seq_len]
-            single_sample = True
-        else:
-            single_sample = False
             
         batch_size, seq_len = token_ids.shape
         
-        # 1. 토큰 시퀀스 임베딩 (벡터화)
+        # 토큰 시퀀스 임베딩
         token_embeds = self._compute_token_embeddings(token_ids)
         
-        # 2. 격자 임베딩 준비 (벡터화)
+        # 격자 임베딩 준비
         grid_embeds = self._prepare_grid_embeddings(batch_size)
         
-        # 3. 시퀀스-격자 크로스 어텐션 (벡터화)
+        # 시퀀스-격자 크로스 어텐션
         attended_grid = self._apply_sequence_to_grid_attention(
             token_embeds, grid_embeds, attention_mask
         )
         
-        # 4. 막전위 패턴 생성 (벡터화)
+        # 막전위 패턴 생성
         external_input = self._generate_membrane_potential(attended_grid, batch_size)
         
-        # 단일 샘플인 경우 배치 차원 제거
-        if single_sample:
-            external_input = external_input.squeeze(0)  # [H, W]
-        
-        return external_input
+        return external_input  # 항상 [B, H, W]
         
     def _compute_token_embeddings(self, token_ids: torch.Tensor) -> torch.Tensor:
         """
@@ -313,37 +301,44 @@ class OutputInterface(nn.Module):
     
     def generate_token_at_clk(self, grid_spikes: torch.Tensor) -> torch.Tensor:
         """
-        특정 CLK에서 다음 토큰 하나 생성
+        특정 CLK에서 다음 토큰 하나 생성 (배치 지원)
         
         Args:
-            grid_spikes: SCS 노드의 스파이크 패턴 [H, W]
+            grid_spikes: SCS 노드의 스파이크 패턴 [B, H, W] 또는 [H, W]
             
         Returns:
-            next_token_logits: 다음 토큰 로짓 [vocab_size]
+            next_token_logits: 다음 토큰 로짓 [B, vocab_size]
         """
         if not self.is_generating:
             raise RuntimeError("generate_token_at_clk 호출 전에 start_generation() 필요")
         
-        # 1. SCS 스파이크를 디코더 memory로 변환
-        memory = self._create_memory_from_spikes(grid_spikes)
+        # 입력을 배치 형태로 정규화
+        if grid_spikes.dim() == 2:  # [H, W] -> [1, H, W]
+            grid_spikes = grid_spikes.unsqueeze(0)
         
-        # 2. 현재까지 생성된 토큰들로 입력 준비
-        current_tokens = torch.tensor(self.generated_tokens, device=self.device)
-        current_embeds = self._prepare_target_embeddings(current_tokens)
+        batch_size = grid_spikes.shape[0]
         
-        # 3. 자기회귀 마스크 생성
-        current_len = current_tokens.shape[0]
+        # SCS 스파이크를 디코더 memory로 변환
+        memory = self._create_memory_from_spikes_batch(grid_spikes)
+        
+        # 현재까지 생성된 토큰들로 입력 준비
+        current_tokens = torch.tensor(self.generated_tokens, device=grid_spikes.device)
+        current_tokens = current_tokens.unsqueeze(0).expand(batch_size, -1)  # [B, current_len]
+        current_embeds = self._prepare_target_embeddings_batch(current_tokens)
+        
+        # 자기회귀 마스크 생성
+        current_len = current_tokens.shape[1]
         tgt_mask = self._generate_square_subsequent_mask(current_len)
         
-        # 4. 디코더 실행
+        # 디코더 실행
         decoder_output = self.transformer_decoder(
             tgt=current_embeds,
             memory=memory,
             tgt_mask=tgt_mask
         )
         
-        # 5. 마지막 위치의 로짓만 사용 (다음 토큰 예측)
-        next_token_logits = self.final_projection(decoder_output[0, -1, :])  # [vocab_size]
+        # 마지막 위치의 로짓만 사용 (다음 토큰 예측)
+        next_token_logits = self.final_projection(decoder_output[:, -1, :])  # [B, vocab_size]
         
         return next_token_logits
     
@@ -367,39 +362,70 @@ class OutputInterface(nn.Module):
     
     def forward(
         self,
-        grid_spikes: torch.Tensor,                        # [H, W], SCS의 스파이크 상태
-        target_tokens: Optional[torch.Tensor] = None      # [seq_len], 학습 시 사용할 타겟 시퀀스
+        grid_spikes: torch.Tensor,                        # [B, H, W] 또는 [H, W]
+        target_tokens: Optional[torch.Tensor] = None      # [B, seq_len] 또는 [seq_len]
     ) -> torch.Tensor:
         """
-        SCS 컨텍스트를 기반으로 로짓 생성 (표준 PyTorch forward)
-        
-        문서 명세 구현:
-        - 학습 모드 (self.training=True): Teacher forcing으로 전체 시퀀스 로짓 반환
-        - 평가 모드 (self.training=False): 첫 번째 토큰 로짓만 반환 (추론은 generate 메서드 사용)
+        SCS 컨텍스트를 기반으로 로짓 생성 (항상 배치 출력)
         
         Args:
-            grid_spikes: SCS 노드의 스파이크 패턴 [H, W]
-            target_tokens: 학습 시 정답 시퀀스 [seq_len] (학습 모드에서 필수)
+            grid_spikes: SCS 노드의 스파이크 패턴 [B, H, W] 또는 [H, W]
+            target_tokens: 학습 시 정답 시퀀스 [B, seq_len] 또는 [seq_len]
             
         Returns:
-            로짓 텐서:
-            - 학습 모드: [seq_len, vocab_size]
-            - 평가 모드: [1, vocab_size] (BOS 토큰 기준 첫 예측)
+            로짓 텐서: [B, seq_len, vocab_size]
         """
-        # 1. SCS 스파이크를 디코더 memory로 변환 (벡터화)
-        memory = self._create_memory_from_spikes(grid_spikes)
+        # 입력을 배치 형태로 정규화
+        if grid_spikes.dim() == 2:  # [H, W] -> [1, H, W]
+            grid_spikes = grid_spikes.unsqueeze(0)
         
-        if self.training:
+        if target_tokens is not None and target_tokens.dim() == 1:  # [seq_len] -> [1, seq_len]
+            target_tokens = target_tokens.unsqueeze(0)
+        
+        batch_size = grid_spikes.shape[0]
+        
+        # SCS 스파이크를 디코더 memory로 변환
+        memory = self._create_memory_from_spikes_batch(grid_spikes)
+        
+        if self.training and target_tokens is not None:
             # 학습 모드: Teacher Forcing
-            if target_tokens is None:
-                raise ValueError("target_tokens는 학습 모드에서 필수입니다")
-            return self._train_forward(memory, target_tokens)
+            return self._train_forward_batch(memory, target_tokens)
         else:
-            # 평가 모드: BOS 토큰으로 첫 번째 예측만 수행
-            # 실제 시퀀스 생성은 generate() 메서드를 사용
-            bos_token = torch.tensor([1], device=grid_spikes.device)  # BOS 토큰 ID = 1
-            return self._train_forward(memory, bos_token)
+            # 평가 모드: BOS 토큰으로 첫 번째 예측
+            bos_tokens = torch.ones(batch_size, 1, dtype=torch.long, device=grid_spikes.device)
+            return self._train_forward_batch(memory, bos_tokens)
     
+    def _train_forward_batch(self, memory: torch.Tensor, target_tokens: torch.Tensor) -> torch.Tensor:
+        """
+        배치 Teacher Forcing forward pass
+        
+        Args:
+            memory: [B, 1, embedding_dim]
+            target_tokens: [B, seq_len]
+            
+        Returns:
+            output_logits: [B, seq_len, vocab_size]
+        """
+        seq_len = target_tokens.shape[1]
+        
+        # 타겟 토큰 임베딩 준비
+        target_embeds = self._prepare_target_embeddings_batch(target_tokens)
+        
+        # 자기회귀 마스크 생성
+        tgt_mask = self._generate_square_subsequent_mask(seq_len)
+        
+        # 디코더 실행
+        decoder_output = self.transformer_decoder(
+            tgt=target_embeds,
+            memory=memory,
+            tgt_mask=tgt_mask
+        )
+        
+        # 최종 로짓 계산
+        output_logits = self.final_projection(decoder_output)
+        
+        return output_logits
+
     def forward_training(
         self,
         grid_spikes: torch.Tensor,                      # [B, max_clk, H, W]
@@ -475,25 +501,27 @@ class OutputInterface(nn.Module):
         
         return final_embeds
     
-
-    
-    def _create_memory_from_spikes(self, grid_spikes: torch.Tensor) -> torch.Tensor:
+    def _create_memory_from_spikes_batch(self, grid_spikes: torch.Tensor) -> torch.Tensor:
         """
-        격자 스파이크를 트랜스포머 디코더의 memory로 변환 (벡터화)
+        격자 스파이크를 트랜스포머 디코더의 memory로 변환 (배치 지원)
         
-        문서 명세: SCS의 의미적 표현을 디코더가 참조할 수 있는 형태로 변환
-        벡터화: 2D 격자를 flatten 후 한번에 임베딩
+        Args:
+            grid_spikes: [B, H, W]
+            
+        Returns:
+            memory: [B, 1, embedding_dim]
         """
-        # 2D 격자를 1D로 flatten (벡터화)
-        flat_spikes = grid_spikes.view(-1)  # [H*W]
+        batch_size = grid_spikes.shape[0]
         
-        # 임베딩 변환 (벡터화)
-        grid_embed = self.grid_to_embedding(flat_spikes)  # [embedding_dim]
+        # 2D 격자를 1D로 flatten
+        flat_spikes = grid_spikes.view(batch_size, -1)  # [B, H*W]
+        
+        # 임베딩 변환
+        grid_embed = self.grid_to_embedding(flat_spikes)  # [B, embedding_dim]
         grid_embed = self.layer_norm(grid_embed)
         
-        # 디코더 입력 형식에 맞게 차원 추가: [batch_size, seq_len, embedding_dim]
-        # SCS의 최종 상태는 길이가 1인 시퀀스로 간주
-        return grid_embed.unsqueeze(0).unsqueeze(0)  # [1, 1, embedding_dim]
+        # 디코더 입력 형식에 맞게 차원 추가
+        return grid_embed.unsqueeze(1)  # [B, 1, embedding_dim]
     
     def _prepare_target_embeddings(self, target_tokens: torch.Tensor) -> torch.Tensor:
         """

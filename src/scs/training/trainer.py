@@ -274,7 +274,7 @@ class SCSTrainer:
                 output_logits, processing_info = self.model(
                     input_schedule=input_tokens,
                     max_clk=self.config.max_clk_training,
-                    training=True,
+                    training=False,
                     target_schedule=target_tokens,
                     attention_mask=attention_mask
                 )
@@ -307,7 +307,7 @@ class SCSTrainer:
             return self.patience_counter >= self.config.early_stopping_patience
     
     def evaluate(self, test_loader: DataLoader) -> Dict[str, float]:
-        """테스트 평가 - 배치 처리로 일관성 유지"""
+        """테스트 평가 (배치 일관성 보장)"""
         self.model.eval()
         
         total_loss = 0.0
@@ -319,19 +319,22 @@ class SCSTrainer:
         
         with torch.no_grad():
             for batch in test_loader:
-                # 배치 전체를 한번에 처리 (학습/검증과 동일한 방식)
+                # 배치 전체를 한번에 처리
                 input_tokens = batch['input_tokens'].to(self.device)
                 target_tokens = batch['target_tokens'].to(self.device)
                 attention_mask = batch['attention_mask'].to(self.device)
                 
-                # 배치 단위로 모델 실행
+                # 배치 단위로 모델 실행 (항상 배치 출력 보장)
                 output_logits, processing_info = self.model(
                     input_schedule=input_tokens,
                     max_clk=self.config.max_clk_training,
-                    training=False,  # 평가 모드
+                    training=False,
                     target_schedule=target_tokens,
                     attention_mask=attention_mask
                 )
+                
+                # 출력은 항상 [B, seq_len, vocab_size] 형태로 보장됨
+                assert output_logits.dim() == 3, f"예상 차원 [B, seq_len, vocab_size], 실제: {output_logits.shape}"
                 
                 # 배치 단위 손실 및 메트릭 계산
                 batch_loss = self.loss_fn(output_logits, target_tokens, processing_info)

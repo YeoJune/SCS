@@ -310,7 +310,7 @@ class SCSTrainer:
                 output_logits, processing_info = self.model(
                     input_schedule=input_tokens,
                     max_clk=self.config.max_clk_training,
-                    training=True,  # ← 이것을 True로 변경
+                    training=False,
                     target_schedule=target_tokens,
                     attention_mask=attention_mask
                 )

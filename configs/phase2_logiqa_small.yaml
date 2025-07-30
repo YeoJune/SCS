@@ -124,7 +124,7 @@ training:
 # adaptive_output_timing 섹션 (추가 보장)
 adaptive_output_timing:
   min_processing_clk: 100
-  max_processing_clk: 500
+  max_processing_clk: 250
   convergence_threshold: 0.1
   confidence_threshold: 0.8
   stability_window: 10

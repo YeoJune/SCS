@@ -139,7 +139,7 @@ class AxonalConnections(nn.Module):
         return axonal_inputs
 
 class AdaptiveOutputTiming:
-    """적응적 출력 타이밍 제어"""
+    """적응적 출력 타이밍 제어 - 디버깅/테스트를 위한 임시 수정 포함"""
     
     def __init__(
         self,
@@ -149,7 +149,9 @@ class AdaptiveOutputTiming:
         confidence_threshold: float = 0.8,
         stability_window: int = 10,
         start_output_threshold: float = 0.5,
-        min_output_length: int = 10  # 새로 추가
+        min_output_length: int = 10,
+        # --- 디버깅을 위한 새로운 플래그 추가 ---
+        force_fixed_length: bool = True
     ):
         self.min_processing_clk = min_processing_clk
         self.max_processing_clk = max_processing_clk
@@ -157,12 +159,21 @@ class AdaptiveOutputTiming:
         self.confidence_threshold = confidence_threshold
         self.stability_window = stability_window
         self.start_output_threshold = start_output_threshold
-        self.min_output_length = min_output_length  # 새로 추가
+        self.min_output_length = min_output_length
+        
+        # --- 디버깅 플래그 ---
+        self.force_fixed_length = force_fixed_length
         
         self.acc_history = []
         
     def should_start_output(self, current_clk: int, acc_activity: float) -> bool:
         """출력 시작 시점 결정"""
+        # --- 임시 수정 ---
+        if self.force_fixed_length:
+            # 입력 시퀀스 처리 시간(min_processing_clk)이 지나면 즉시 출력을 시작하도록 강제
+            return current_clk >= self.min_processing_clk
+        
+        # 원래 로직
         if current_clk < self.min_processing_clk:
             return False
         return acc_activity > self.start_output_threshold
@@ -172,13 +183,18 @@ class AdaptiveOutputTiming:
         current_clk: int, 
         acc_activity: float, 
         output_confidence: float,
-        generated_length: int = 0  # 새로 추가
+        generated_length: int = 0
     ) -> bool:
-        """출력 종료 시점 결정 (최소 길이 보장)"""
+        """출력 종료 시점 결정"""
+        # --- 임시 수정 ---
+        if self.force_fixed_length:
+            # 절대 종료하지 않음 (외부 max_clk에 의해 제어됨)
+            return False
+            
+        # 원래 로직
         if current_clk >= self.max_processing_clk:
             return True
         
-        # 최소 길이 미달 시 계속 생성
         if generated_length < self.min_output_length:
             return False
         
@@ -202,7 +218,7 @@ class AdaptiveOutputTiming:
     def reset(self):
         """상태 초기화"""
         self.acc_history = []
-        
+
 class SCSSystem(nn.Module):
     """
     SCS 시스템: CLK 기반 동기화된 이산 spike 신호 처리

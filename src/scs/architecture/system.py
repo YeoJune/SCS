@@ -386,18 +386,23 @@ class SCSSystem(nn.Module):
         
         return output_logits, processing_info
     
+    
     def _forward_inference(
         self,
-        input_schedule: Optional[torch.Tensor],  # [B, seq_len] or Dict[int, torch.Tensor]
+        input_schedule: Optional[torch.Tensor],
         max_clk: int,
         batch_size: int
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
-        """추론 모드 forward pass (항상 배치 출력)"""
+        """추론 모드 forward pass (올바른 자기회귀 루프 적용)"""
         output_started = False
-        generated_tokens = []
+        # 이름 변경: 로짓을 저장하는 리스트임을 명확히 함
+        generated_logits_list = []
         
+        final_clk = 0 # 실제 종료된 clk를 기록하기 위한 변수
+
         for clk in range(max_clk):
             self.current_clk = clk
+            final_clk = clk # 루프가 돌 때마다 최종 clk 업데이트
             
             # Phase 1-3 동일
             current_spikes = self._phase1_compute_spikes()
@@ -410,37 +415,60 @@ class SCSSystem(nn.Module):
             self._phase2_update_states(external_input, current_spikes)
             self._phase3_post_spike_processing(current_spikes)
             
-            # 출력 처리
+            # 출력 처리 로직
             acc_activity = self._get_acc_activity(current_spikes)
             
             if not output_started and self.output_timing.should_start_output(clk, acc_activity):
-                self.output_interface.start_generation()
+                # BOS 토큰으로 생성 시작. 
+                # 안전하게 토크나이저의 bos_token_id를 사용하는 것이 이상적이지만, 
+                # OutputInterface에 접근할 수 없으므로 우선 1로 가정.
+                # (실제 프로젝트에서는 config 등을 통해 주입받는 것이 좋음)
+                self.output_interface.start_generation(bos_token_id=1) 
                 output_started = True
             
             if output_started:
-                output_spikes = current_spikes[self.output_node]  # [B, H, W]
-                token_logits = self.output_interface.generate_token_at_clk(output_spikes)  # [B, vocab_size]
-                generated_tokens.append(token_logits)
+                output_spikes = current_spikes[self.output_node]
                 
-                # confidence 계산 (배치의 첫 번째 샘플 기준)
+                # 1. 다음 토큰의 로짓을 생성합니다.
+                # [B, vocab_size] 형태 (현재 코드는 배치 1에 최적화 되어 있음)
+                token_logits = self.output_interface.generate_token_at_clk(output_spikes)
+                generated_logits_list.append(token_logits)
+                
+                # --- [핵심 수정] 자기회귀 루프의 연결고리 ---
+                # 2. 로짓에서 다음 토큰 ID를 결정합니다. (Greedy-Search 방식)
+                # 배치 처리를 고려하여, 배치 차원에서 argmax를 수행합니다.
+                next_token_ids = torch.argmax(token_logits, dim=-1) # [B] 형태의 텐서
+
+                # 3. 선택된 토큰 ID를 OutputInterface의 내부 상태에 추가합니다.
+                # 현재 시스템은 배치 크기 1에 맞춰져 있으므로 첫 번째 요소만 사용합니다.
+                # 만약 배치 추론을 지원하려면 이 부분의 수정이 필요합니다.
+                self.output_interface.add_generated_token(next_token_ids[0].item())
+                
+                # 4. 종료 조건 검사
+                # 생성된 토큰의 개수와 신뢰도를 기반으로 종료 여부 판단
+                generated_len = len(self.output_interface.get_generated_tokens())
                 output_confidence = torch.softmax(token_logits[0], dim=-1).max().item()
-                if self.output_timing.should_end_output(clk, acc_activity, output_confidence):
+                if self.output_timing.should_end_output(clk, acc_activity, output_confidence, generated_len):
                     self.output_interface.end_generation()
-                    break
+                    break # for 루프 탈출
             
             self.previous_spikes = {k: v.clone() for k, v in current_spikes.items()}
         
-        # 출력 토큰 생성 (항상 배치 형태)
-        if generated_tokens:
-            output_tokens = torch.stack(generated_tokens, dim=1)  # [B, seq_len, vocab_size]
+        # --- [수정] 최종 출력 텐서 생성 ---
+        if generated_logits_list:
+            # 리스트에 있는 [B, vocab_size] 텐서들을 dim=1을 기준으로 합쳐
+            # [B, seq_len, vocab_size] 텐서를 만듭니다.
+            output_tokens = torch.stack(generated_logits_list, dim=1)
         else:
-            output_tokens = torch.zeros(batch_size, 1, self.output_interface.vocab_size, device=self.device)
-        
+            # 생성된 것이 없으면 빈 텐서 대신 제로 텐서를 반환하여 다운스트림 오류 방지
+            output_tokens = torch.zeros(batch_size, 0, self.output_interface.vocab_size, device=self.device)
+
+        # --- [수정] 처리 정보 업데이트 ---
         processing_info = {
-            "processing_clk": self.current_clk + 1,
+            "processing_clk": final_clk + 1,
             "output_started": output_started,
-            "tokens_generated": len(generated_tokens),
-            "convergence_achieved": clk < max_clk - 1 if 'clk' in locals() else False,
+            "tokens_generated": len(generated_logits_list),
+            "convergence_achieved": final_clk < max_clk - 1,
             "final_acc_activity": acc_activity if 'acc_activity' in locals() else 0.0,
             "batch_size": batch_size
         }

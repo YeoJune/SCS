@@ -17,7 +17,7 @@ import torch
 # 이 파일은 패키지 내부에 있으므로, 상대/절대 경로로 모듈을 import 합니다.
 try:
     from scs.architecture import SCSSystem
-    from scs.training import SCSTrainer, TrainingConfig, MultiObjectiveLoss, OptimizerFactory
+    from scs.training import SCSTrainer, TrainingConfig, MultiObjectiveLoss, TimingLoss, OptimizerFactory
     from scs.data import create_dataloader, SCSTokenizer
     from scs.utils import (
         setup_logging, load_config, save_config, set_random_seed,

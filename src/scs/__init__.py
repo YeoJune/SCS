@@ -12,7 +12,7 @@ from .architecture import (
 # Training 모듈
 from .training import (
     SCSTrainer, TrainingConfig, GradualUnfreezingScheduler,
-    SpikingLoss, NeuromodulationLoss, MultiObjectiveLoss, SCSMetrics,
+    SpikingLoss, NeuromodulationLoss, MultiObjectiveLoss, TimingLoss, SCSMetrics,
     SCSOptimizer, KHopBackpropagation, AdaptiveLearningRateScheduler, OptimizerFactory
 )
 
@@ -39,7 +39,7 @@ __all__ = [
     
     # 학습 시스템
     "SCSTrainer", "TrainingConfig", "GradualUnfreezingScheduler",
-    "SpikingLoss", "NeuromodulationLoss", "MultiObjectiveLoss", "SCSMetrics",
+    "SpikingLoss", "NeuromodulationLoss", "MultiObjectiveLoss", "TimingLoss", "SCSMetrics",
     "SCSOptimizer", "KHopBackpropagation", "AdaptiveLearningRateScheduler", 
     "OptimizerFactory",
     

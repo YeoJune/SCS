@@ -14,7 +14,8 @@ from .trainer import (
 from .loss import (
     SpikingLoss,
     NeuromodulationLoss,
-    MultiObjectiveLoss
+    MultiObjectiveLoss,
+    TimingLoss
 )
 
 from .metric import (
@@ -35,6 +36,7 @@ __all__ = [
     "SpikingLoss",
     "NeuromodulationLoss", 
     "MultiObjectiveLoss",
+    "TimingLoss",
     
     # 메트릭 및 최적화 시스템
     "SCSMetrics",

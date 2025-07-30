@@ -546,7 +546,7 @@ def evaluate_mode(args: argparse.Namespace):
         
         model = load_model_with_checkpoint(config, checkpoint_path, device, logger)
         logger.info("✅ 모델 복원 완료")
-
+        
         # 6. 트레이너 생성 및 평가
         logger.info("📈 평가 실행 중...")
         pad_token_id = tokenizer.tokenizer.pad_token_id
@@ -555,7 +555,11 @@ def evaluate_mode(args: argparse.Namespace):
         
         training_config = TrainingConfig(pad_token_id=pad_token_id, device=device, **filtered_config)
         trainer = SCSTrainer(model=model, config=training_config, tokenizer=tokenizer)
-        results = trainer.evaluate(test_loader)
+        
+        # 예시 저장 개수 설정 (config에서 가져오거나 기본값 10)
+        save_examples = config.get('evaluation', {}).get('save_examples', 10)
+        
+        results = trainer.evaluate(test_loader, save_examples=save_examples)
         
         # 결과 저장 및 출력
         results_path = experiment_dir / f"eval_results_{datetime.now().strftime('%Y%m%d_%H%M')}.yaml"
@@ -564,8 +568,15 @@ def evaluate_mode(args: argparse.Namespace):
         logger.info("🎉 평가가 성공적으로 완료되었습니다!")
         logger.info("📊 평가 결과:")
         for key, value in results.items():
-            logger.info(f"   - {key}: {value:.4f}")
+            if key not in ['examples']:  # 예시는 너무 길어서 제외
+                if isinstance(value, float):
+                    logger.info(f"   - {key}: {value:.4f}")
+                else:
+                    logger.info(f"   - {key}: {value}")
+        
+        logger.info(f"💾 저장된 예시 개수: {results['num_examples_saved']}")
         logger.info(f"📂 결과 저장 위치: {results_path}")
+
 
     except Exception as e:
         logger.error(f"❌ 평가 중 오류 발생: {e}", exc_info=True)

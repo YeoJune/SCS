@@ -341,8 +341,16 @@ class SCSTrainer:
             self.patience_counter += 1
             return self.patience_counter >= self.config.early_stopping_patience
     
-    def evaluate(self, test_loader: DataLoader) -> Dict[str, float]:
-        """테스트 평가 (배치 일관성 보장)"""
+    def evaluate(self, test_loader: DataLoader, save_examples: int = 10) -> Dict[str, Any]:
+        """테스트 평가 (배치 일관성 보장 + 예시 저장)
+        
+        Args:
+            test_loader: 테스트 데이터 로더
+            save_examples: 저장할 예시 개수 (기본 10개)
+        
+        Returns:
+            평가 결과 + 예시 데이터
+        """
         self.model.eval()
         
         total_loss = 0.0
@@ -352,8 +360,11 @@ class SCSTrainer:
         total_efficiency = 0.0
         num_batches = 0
         
+        # 예시 데이터 수집용
+        saved_examples = []
+        
         with torch.no_grad():
-            for batch in test_loader:
+            for batch_idx, batch in enumerate(test_loader):
                 # 배치 전체를 한번에 처리
                 input_tokens = batch['input_tokens'].to(self.device)
                 target_tokens = batch['target_tokens'].to(self.device)
@@ -363,7 +374,7 @@ class SCSTrainer:
                 output_logits, processing_info = self.model(
                     input_schedule=input_tokens,
                     max_clk=self.config.max_clk_training,
-                    training=False,
+                    training=False,  # 실제 추론 모드로 평가
                     target_schedule=target_tokens,
                     attention_mask=attention_mask
                 )
@@ -390,15 +401,125 @@ class SCSTrainer:
                 total_convergence += batch_convergence
                 total_efficiency += batch_efficiency
                 num_batches += 1
+                
+                # --- 예시 데이터 수집 로직 ---
+                if len(saved_examples) < save_examples:
+                    examples_to_save = self._extract_examples_from_batch(
+                        batch, output_logits, processing_info, batch_accuracy
+                    )
+                    saved_examples.extend(examples_to_save)
+                    
+                    # 목표 개수에 도달하면 저장 중단
+                    if len(saved_examples) >= save_examples:
+                        saved_examples = saved_examples[:save_examples]
         
-        return {
+        # 전체 결과 구성
+        results = {
+            # 기존 메트릭들
             'test_loss': total_loss / num_batches,
             'test_accuracy': total_accuracy / num_batches,
             'comprehensive_score': total_comprehensive / num_batches,
             'convergence_rate': total_convergence / num_batches,
-            'processing_efficiency': total_efficiency / num_batches
+            'processing_efficiency': total_efficiency / num_batches,
+            
+            # 새로 추가: 예시 데이터
+            'examples': saved_examples,
+            'num_examples_saved': len(saved_examples),
+            'total_batches_evaluated': num_batches
         }
+        
+        return results
+    
+    def _extract_examples_from_batch(
+        self, 
+        batch: Dict[str, torch.Tensor], 
+        output_logits: torch.Tensor,
+        processing_info: Dict[str, Any],
+        batch_accuracy: float
+    ) -> List[Dict[str, Any]]:
+        """배치에서 예시 데이터 추출"""
+        examples = []
+        
+        # 배치 크기 확인
+        batch_size = output_logits.shape[0]
+        
+        for i in range(batch_size):
+            try:
+                # 1. 입력/타겟 텍스트 복원
+                input_text = self._decode_tokens_to_text(batch['input_tokens'][i])
+                target_text = self._decode_tokens_to_text(batch['target_tokens'][i])
+                
+                # 2. 생성된 텍스트 복원
+                generated_tokens = output_logits[i].argmax(dim=-1)  # [seq_len]
+                generated_text = self._decode_tokens_to_text(generated_tokens)
+                
+                # 3. 개별 샘플 정확도 계산
+                individual_accuracy = self._calculate_individual_accuracy(
+                    output_logits[i:i+1], 
+                    batch['target_tokens'][i:i+1]
+                )
+                
+                # 4. 처리 정보 추출
+                example_info = {
+                    'input_text': input_text,
+                    'target_text': target_text,
+                    'generated_text': generated_text,
+                    'accuracy': individual_accuracy,
+                    'processing_clk': processing_info.get('processing_clk', 'unknown'),
+                    'tokens_generated': processing_info.get('tokens_generated', 'unknown'),
+                    'convergence_achieved': processing_info.get('convergence_achieved', False),
+                    'batch_accuracy': batch_accuracy
+                }
+                
+                examples.append(example_info)
+                
+            except Exception as e:
+                self.logger.warning(f"예시 추출 중 오류 (배치 {i}): {e}")
+                continue
+        
+        return examples
 
+    def _decode_tokens_to_text(self, tokens: torch.Tensor) -> str:
+        """토큰을 텍스트로 변환"""
+        if self.tokenizer is None:
+            return f"tokens: {tokens.tolist()}"
+        
+        try:
+            # 패딩 토큰 제거
+            if hasattr(self.tokenizer, 'tokenizer'):
+                pad_token_id = self.tokenizer.tokenizer.pad_token_id
+            else:
+                pad_token_id = self.config.pad_token_id
+                
+            # 패딩이 아닌 토큰만 선택
+            valid_tokens = tokens[tokens != pad_token_id]
+            
+            # 토크나이저로 디코딩
+            if hasattr(self.tokenizer, 'decode'):
+                return self.tokenizer.decode(valid_tokens.tolist())
+            elif hasattr(self.tokenizer, 'tokenizer'):
+                return self.tokenizer.tokenizer.decode(valid_tokens.tolist(), skip_special_tokens=True)
+            else:
+                return f"tokens: {valid_tokens.tolist()}"
+                
+        except Exception as e:
+            self.logger.warning(f"토큰 디코딩 실패: {e}")
+            return f"decode_error: {tokens.tolist()}"
+
+    def _calculate_individual_accuracy(
+        self, 
+        output_logits: torch.Tensor,  # [1, seq_len, vocab_size]
+        target_tokens: torch.Tensor   # [1, seq_len]
+    ) -> float:
+        """개별 샘플의 정확도 계산"""
+        try:
+            return SCSMetrics.accuracy(
+                output_logits, 
+                target_tokens, 
+                pad_token_id=self.config.pad_token_id
+            )
+        except Exception:
+            return 0.0
 
 class GradualUnfreezingScheduler:
     """점진적 언프리징 스케줄러"""

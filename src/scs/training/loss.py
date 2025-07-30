@@ -41,16 +41,24 @@ class SCSLoss(nn.Module):
             targets: 정답 토큰 [B, seq_len]
             processing_info: 처리 정보 딕셔너리
         """
-        batch_size, seq_len, vocab_size = outputs.shape
+        batch_size, output_seq_len, vocab_size = outputs.shape
+        batch_size_t, target_seq_len = targets.shape
+        
+        # 배치 크기 일치 확인
+        assert batch_size == batch_size_t, f"Batch size mismatch: {batch_size} vs {batch_size_t}"
+        
+        # 길이 불일치 처리
+        if output_seq_len != target_seq_len:
+            min_len = min(output_seq_len, target_seq_len)
+            print(f"⚠️ Length mismatch: output={output_seq_len}, target={target_seq_len}, using min={min_len}")
+            outputs = outputs[:, :min_len, :]  # [B, min_len, vocab_size]
+            targets = targets[:, :min_len]     # [B, min_len]
         
         # 1. 기본 분류 손실 (Teacher Forcing에 대한 Cross-Entropy)
-        # 로짓과 타겟의 차원을 [B*seq_len, vocab_size]와 [B*seq_len]으로 맞춰줌
         base_loss = self.base_loss(outputs.view(-1, vocab_size), targets.view(-1))
         
-        # 2. 스파이크 정규화 (학습 시에는 단순화)
+        # 나머지 코드는 동일...
         spike_reg = self._spike_regularization(processing_info, outputs.device)
-        
-        # 3. 시간적 일관성
         temporal_loss = self._temporal_consistency(processing_info, outputs.device)
         
         return base_loss + self.spike_reg_weight * spike_reg + self.temporal_weight * temporal_loss

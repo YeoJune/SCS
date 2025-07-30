@@ -166,8 +166,9 @@ class TimingLoss(SCSLoss):
         # 1. 시작 시점 손실: target_start_clk에서 acc_activity가 임계값을 넘도록 유도
         if timing_info.get('start_conditions'):
             start_info = timing_info['start_conditions']
-            # acc_activity가 start_threshold보다 작으면 페널티 (Hinge Loss)
-            start_loss = torch.relu(self.start_threshold - start_info['acc_activity'])
+            # acc_activity를 tensor로 변환 후 relu 적용
+            acc_activity_tensor = torch.tensor(start_info['acc_activity'], device=device)
+            start_loss = torch.relu(self.start_threshold - acc_activity_tensor)
 
         # 2. 종료 시점 손실: target_end_clk에서 confidence가 임계값을 넘도록 유도
         if timing_info.get('end_conditions'):
@@ -175,6 +176,7 @@ class TimingLoss(SCSLoss):
             # confidence가 confidence_threshold보다 작으면 페널티
             if 'raw_confidence_batch' in end_info:
                 confidence_batch = end_info['raw_confidence_batch']
+                # 이미 tensor이므로 그대로 사용
                 end_loss = torch.relu(self.confidence_threshold - confidence_batch).mean()
             
         return start_loss + end_loss

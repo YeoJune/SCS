@@ -12,10 +12,21 @@ class SCSMetrics:
     
     @staticmethod
     def accuracy(outputs: torch.Tensor, targets: torch.Tensor, pad_token_id: int = None) -> float:
-        """정확도 계산 (배치 처리 지원)"""
+        """정확도 계산 (배치 처리 지원, 길이 불일치 처리)"""
         if outputs.dim() == 3:  # [B, seq_len, vocab_size]
-            batch_size, seq_len, vocab_size = outputs.shape
-            preds = outputs.argmax(dim=-1)  # [B, seq_len]
+            batch_size, output_seq_len, vocab_size = outputs.shape
+            batch_size_t, target_seq_len = targets.shape
+            
+            # 배치 크기 일치 확인
+            assert batch_size == batch_size_t, f"Batch size mismatch: {batch_size} vs {batch_size_t}"
+            
+            # 길이 불일치 처리
+            if output_seq_len != target_seq_len:
+                min_len = min(output_seq_len, target_seq_len)
+                outputs = outputs[:, :min_len, :]
+                targets = targets[:, :min_len]
+            
+            preds = outputs.argmax(dim=-1)  # [B, min_len]
             
             if pad_token_id is not None:
                 # 패딩 토큰 제외하고 정확도 계산
@@ -30,7 +41,7 @@ class SCSMetrics:
                 correct = (preds == targets).float()
                 return correct.mean().item()
         else:
-            # 단일 샘플 처리 (평가 시)
+            # 나머지 코드 동일...
             if outputs.dim() == 1:
                 pred = outputs.argmax().item()
                 target = targets.item()

@@ -367,7 +367,15 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
         filtered_config, raw_config = extract_and_normalize_training_config(config)
         
         training_config = TrainingConfig(pad_token_id=pad_token_id, device=device, **filtered_config)
-        loss_fn = MultiObjectiveLoss(pad_token_id=pad_token_id)
+        
+        # TimingLoss 사용
+        loss_fn = TimingLoss(
+            pad_token_id=pad_token_id,
+            length_penalty_weight=raw_config.get("length_penalty_weight", 0.0),
+            timing_weight=raw_config.get("timing_weight", 0.1),
+            start_threshold=raw_config.get("start_threshold", 0.5),
+            confidence_threshold=raw_config.get("confidence_threshold", 0.7)
+        )
         
         # 옵티마이저 생성
         optimizer_type = raw_config.get("optimizer", "adamw").lower()

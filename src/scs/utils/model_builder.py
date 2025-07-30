@@ -126,14 +126,15 @@ class ModelBuilder:
             )
             
             # --- 단계 4: 적응적 타이밍 객체 생성 ---
-            timing_config = config["timing"]
+            timing_config = config.get("adaptive_output_timing", config.get("timing", {}))
             output_timing = AdaptiveOutputTiming(
-                min_processing_clk=timing_config["min_processing_clk"],
-                max_processing_clk=timing_config["max_processing_clk"],
-                convergence_threshold=timing_config["convergence_threshold"],
-                confidence_threshold=timing_config["confidence_threshold"],
-                stability_window=timing_config["stability_window"],
-                start_output_threshold=timing_config["start_output_threshold"]
+                min_processing_clk=timing_config.get("min_processing_clk", 100),
+                max_processing_clk=timing_config.get("max_processing_clk", 500),
+                convergence_threshold=timing_config.get("convergence_threshold", 0.1),
+                confidence_threshold=timing_config.get("confidence_threshold", 0.8),
+                stability_window=timing_config.get("stability_window", 10),
+                start_output_threshold=timing_config.get("start_output_threshold", 0.5),
+                min_output_length=timing_config.get("min_output_length", 10)  # 새로 추가
             )
             
             # --- 단계 5: 최종 SCS 시스템 조립 ---

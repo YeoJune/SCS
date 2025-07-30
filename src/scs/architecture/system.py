@@ -138,19 +138,18 @@ class AxonalConnections(nn.Module):
         
         return axonal_inputs
 
-
 class AdaptiveOutputTiming:
     """적응적 출력 타이밍 제어"""
     
     def __init__(
         self,
-        min_processing_clk: int = 50,
+        min_processing_clk: int = 100,
         max_processing_clk: int = 500,
         convergence_threshold: float = 0.1,
-        confidence_threshold: float = 0.7,
+        confidence_threshold: float = 0.8,
         stability_window: int = 10,
         start_output_threshold: float = 0.5,
-        min_output_length: int = 50
+        min_output_length: int = 10  # 새로 추가
     ):
         self.min_processing_clk = min_processing_clk
         self.max_processing_clk = max_processing_clk
@@ -158,7 +157,7 @@ class AdaptiveOutputTiming:
         self.confidence_threshold = confidence_threshold
         self.stability_window = stability_window
         self.start_output_threshold = start_output_threshold
-        self.min_output_length = min_output_length
+        self.min_output_length = min_output_length  # 새로 추가
         
         self.acc_history = []
         
@@ -168,12 +167,19 @@ class AdaptiveOutputTiming:
             return False
         return acc_activity > self.start_output_threshold
     
-    def should_end_output(self, current_clk: int, acc_activity: float, output_confidence: float) -> bool:
-        """출력 종료 시점 결정"""
+    def should_end_output(
+        self, 
+        current_clk: int, 
+        acc_activity: float, 
+        output_confidence: float,
+        generated_length: int = 0  # 새로 추가
+    ) -> bool:
+        """출력 종료 시점 결정 (최소 길이 보장)"""
         if current_clk >= self.max_processing_clk:
             return True
         
-        if len(self.acc_history) < self.min_output_length:
+        # 최소 길이 미달 시 계속 생성
+        if generated_length < self.min_output_length:
             return False
         
         self.acc_history.append(acc_activity)
@@ -196,8 +202,7 @@ class AdaptiveOutputTiming:
     def reset(self):
         """상태 초기화"""
         self.acc_history = []
-
-
+        
 class SCSSystem(nn.Module):
     """
     SCS 시스템: CLK 기반 동기화된 이산 spike 신호 처리
@@ -283,29 +288,66 @@ class SCSSystem(nn.Module):
         attention_mask: Optional[torch.Tensor],  # [B, seq_len]
         max_clk: int
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
-        """학습 모드 forward pass (Teacher Forcing)"""
-        batch_size, seq_len = input_schedule.shape
+        """학습 모드 forward pass (Teacher Forcing) - 타이밍 정보 수집 추가"""
+        batch_size, input_seq_len = input_schedule.shape
+        _, target_seq_len = target_schedule.shape
+
+        # 1. 목표 CLK 정의
+        target_start_clk = min(input_seq_len, max_clk - target_seq_len - 1)
+        target_end_clk = min(input_seq_len + target_seq_len - 1, max_clk - 1)
+
+        # 타이밍 정보를 담을 딕셔너리
+        timing_info = {
+            'target_start_clk': target_start_clk,
+            'target_end_clk': target_end_clk,
+            'start_conditions': None,
+            'end_conditions': None
+        }
         
-        # 고정된 CLK 동안 실행 (AdaptiveOutputTiming 비활성화)
         all_spikes = []
-        
+
         for clk in range(max_clk):
             self.current_clk = clk
             
-            # Phase 1: 스파이크 계산
+            # Phase 1-3: 기존과 동일
             current_spikes = self._phase1_compute_spikes()
-            
-            # Phase 2: 상태 업데이트 (배치 처리)
-            external_input = self._get_external_input_training(input_schedule, attention_mask, clk, seq_len)
+            external_input = self._get_external_input_training(input_schedule, attention_mask, clk, input_seq_len)
             self._phase2_update_states(external_input, current_spikes)
-            
-            # Phase 3: 후처리
             self._phase3_post_spike_processing(current_spikes)
             
-            # 스파이크 기록
-            all_spikes.append(current_spikes[self.output_node])  # [B, H, W]
-            
-            # 이전 상태 업데이트
+            # --- 타이밍 정보 수집 로직 ---
+            if clk == target_start_clk or clk == target_end_clk:
+                acc_activity = self._get_acc_activity(current_spikes)
+
+                # output_confidence 계산을 위한 임시 로짓
+                try:
+                    temp_logits = self.output_interface.generate_token_at_clk(current_spikes[self.output_node])
+                    
+                    # 타겟 토큰에 대한 신뢰도 계산
+                    current_target_token_idx = clk - target_start_clk
+                    if 0 <= current_target_token_idx < target_seq_len:
+                        current_target_tokens = target_schedule[:, current_target_token_idx]  # [B]
+                        confidence = torch.softmax(temp_logits, dim=-1).gather(1, current_target_tokens.unsqueeze(-1)).squeeze()  # [B]
+                    else:
+                        confidence = torch.zeros(batch_size, device=self.device)
+                except Exception:
+                    confidence = torch.zeros(batch_size, device=self.device)
+
+                # 정보 저장
+                if clk == target_start_clk:
+                    timing_info['start_conditions'] = {
+                        'acc_activity': acc_activity,
+                        'clk': clk
+                    }
+                elif clk == target_end_clk:
+                    timing_info['end_conditions'] = {
+                        'acc_activity': acc_activity,
+                        'confidence': confidence.mean().item(),
+                        'raw_confidence_batch': confidence,
+                        'clk': clk
+                    }
+
+            all_spikes.append(current_spikes[self.output_node])
             self.previous_spikes = {k: v.clone() for k, v in current_spikes.items()}
         
         # 모든 타임스텝의 스파이크를 사용하여 출력 생성
@@ -321,8 +363,9 @@ class SCSSystem(nn.Module):
         processing_info = {
             "processing_clk": max_clk,
             "batch_size": batch_size,
-            "sequence_length": seq_len,
-            "training_mode": True
+            "sequence_length": target_seq_len,
+            "training_mode": True,
+            "timing_info": timing_info  # 수집된 타이밍 정보
         }
         
         return output_logits, processing_info

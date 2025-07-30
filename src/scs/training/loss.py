@@ -9,18 +9,19 @@ import torch.nn.functional as F
 from typing import Dict, Any
 
 class SCSLoss(nn.Module):
+    """SCS 배치 처리 지원 손실 함수"""
     def __init__(
         self, 
         pad_token_id: int,
         spike_reg_weight: float = 0.0,
         temporal_weight: float = 0.0,
-        length_penalty_weight: float = 0.2,
+        length_penalty_weight: float = 0.0,  # 새로 추가
         target_spike_rate: float = 0.1
     ):
         super().__init__()
         self.spike_reg_weight = spike_reg_weight
         self.temporal_weight = temporal_weight
-        self.length_penalty_weight = length_penalty_weight
+        self.length_penalty_weight = length_penalty_weight  # 새로 추가
         self.target_spike_rate = target_spike_rate
         
         self.base_loss = nn.CrossEntropyLoss(ignore_index=pad_token_id)
@@ -85,11 +86,11 @@ class SCSLoss(nn.Module):
         
         # 너무 짧은 출력에 대한 강한 패널티
         if length_ratio < 0.3:  # 30% 미만
-            penalty = (0.3 - length_ratio) * 3.0  # 강한 패널티
+            penalty = (0.3 - length_ratio) * 3.0
         elif length_ratio < 0.7:  # 30-70%
-            penalty = (0.7 - length_ratio) * 1.0  # 중간 패널티
+            penalty = (0.7 - length_ratio) * 1.0
         elif length_ratio > 1.5:  # 150% 초과
-            penalty = (length_ratio - 1.5) * 0.5  # 너무 긴 출력 패널티
+            penalty = (length_ratio - 1.5) * 0.5
         else:
             penalty = 0.0  # 적절한 길이
         
@@ -122,6 +123,61 @@ class SCSLoss(nn.Module):
         else:
             return torch.tensor(0.0, dtype=torch.float32, device=device)
 
+class TimingLoss(SCSLoss):
+    """
+    AdaptiveOutputTiming 학습을 위한 손실 함수.
+    기본 SCSLoss에 타이밍 정합성(alignment) 손실을 추가합니다.
+    """
+    def __init__(
+        self, 
+        pad_token_id: int, 
+        timing_weight: float = 0.1,
+        start_threshold: float = 0.5,
+        confidence_threshold: float = 0.7,
+        **kwargs
+    ):
+        super().__init__(pad_token_id, **kwargs)
+        self.timing_weight = timing_weight
+        self.start_threshold = start_threshold
+        self.confidence_threshold = confidence_threshold
+
+    def forward(
+        self, 
+        outputs: torch.Tensor, 
+        targets: torch.Tensor, 
+        processing_info: Dict[str, Any]
+    ) -> torch.Tensor:
+        # 기본 손실 계산 (부모 클래스 재사용)
+        base_total_loss = super().forward(outputs, targets, processing_info)
+        
+        # 타이밍 손실 계산
+        timing_loss = self._calculate_timing_loss(processing_info, outputs.device)
+        
+        return base_total_loss + self.timing_weight * timing_loss
+
+    def _calculate_timing_loss(self, processing_info: Dict[str, Any], device: torch.device) -> torch.Tensor:
+        if 'timing_info' not in processing_info:
+            return torch.tensor(0.0, device=device)
+            
+        timing_info = processing_info['timing_info']
+        start_loss = torch.tensor(0.0, device=device)
+        end_loss = torch.tensor(0.0, device=device)
+        
+        # 1. 시작 시점 손실: target_start_clk에서 acc_activity가 임계값을 넘도록 유도
+        if timing_info.get('start_conditions'):
+            start_info = timing_info['start_conditions']
+            # acc_activity가 start_threshold보다 작으면 페널티 (Hinge Loss)
+            start_loss = torch.relu(self.start_threshold - start_info['acc_activity'])
+
+        # 2. 종료 시점 손실: target_end_clk에서 confidence가 임계값을 넘도록 유도
+        if timing_info.get('end_conditions'):
+            end_info = timing_info['end_conditions']
+            # confidence가 confidence_threshold보다 작으면 페널티
+            if 'raw_confidence_batch' in end_info:
+                confidence_batch = end_info['raw_confidence_batch']
+                end_loss = torch.relu(self.confidence_threshold - confidence_batch).mean()
+            
+        return start_loss + end_loss
 
 class SpikingLoss(SCSLoss):
     """스파이킹 뉴럴 네트워크 특화 손실"""

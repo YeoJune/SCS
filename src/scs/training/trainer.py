@@ -293,7 +293,7 @@ class SCSTrainer:
     
     
     def _validate_epoch(self, val_loader: DataLoader) -> Dict[str, float]:
-        """검증 - 배치 처리"""
+        """검증 - Teacher Forcing으로 공정한 비교"""
         self.model.eval()
         
         total_loss = 0.0
@@ -302,21 +302,19 @@ class SCSTrainer:
         
         with torch.no_grad():
             for batch in val_loader:
-                # 🎯 배치 전체를 한번에 처리
                 input_tokens = batch['input_tokens'].to(self.device)
                 target_tokens = batch['target_tokens'].to(self.device)
                 attention_mask = batch['attention_mask'].to(self.device)
                 
-                # 학습과 동일한 방식으로 배치 처리
+                # Teacher Forcing 사용으로 공정한 비교
                 output_logits, processing_info = self.model(
                     input_schedule=input_tokens,
                     max_clk=self.config.max_clk_training,
-                    training=False,
+                    training=True,  # ← 이것을 True로 변경
                     target_schedule=target_tokens,
                     attention_mask=attention_mask
                 )
                 
-                # 배치 단위 손실 및 메트릭 계산
                 batch_loss = self.loss_fn(output_logits, target_tokens, processing_info)
                 batch_accuracy = SCSMetrics.accuracy(
                     output_logits, 

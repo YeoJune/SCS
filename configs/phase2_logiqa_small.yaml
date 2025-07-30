@@ -104,19 +104,32 @@ io_system:
   output_interface:
     max_output_len: 256
 
-# 학습 설정
+# 학습 설정에 타이밍 관련 파라미터 추가
 training:
   epochs: 20
   learning_rate: 5e-4
   batch_size: 1
   max_clk_training: 150
   length_penalty_weight: 0.1
+  timing_weight: 0.1 # 새로 추가
+  start_threshold: 0.5 # 새로 추가
+  confidence_threshold: 0.8 # 새로 추가
   optimizer: "adamw"
   weight_decay: 0.01
   warmup_steps: 100
   eval_every_n_epochs: 5
   save_every_n_epochs: 10
   early_stopping_patience: 5
+
+# adaptive_output_timing 섹션 (추가 보장)
+adaptive_output_timing:
+  min_processing_clk: 100
+  max_processing_clk: 500
+  convergence_threshold: 0.1
+  confidence_threshold: 0.8
+  stability_window: 10
+  start_output_threshold: 0.5
+  min_output_length: 10
 
 # 데이터 설정
 data:

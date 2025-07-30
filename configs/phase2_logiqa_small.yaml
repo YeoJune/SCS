@@ -110,6 +110,7 @@ training:
   learning_rate: 5e-4
   batch_size: 1
   max_clk_training: 150
+  length_penalty_weight: 0.1
   optimizer: "adamw"
   weight_decay: 0.01
   warmup_steps: 100

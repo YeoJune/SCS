@@ -19,7 +19,7 @@ from .metric import SCSMetrics
 @dataclass
 class TrainingConfig:
     """학습 설정"""
-    epochs: int = 100
+    epochs: int = 15
     learning_rate: float = 1e-3
     weight_decay: float = 1e-4
     gradient_clip_norm: float = 1.0

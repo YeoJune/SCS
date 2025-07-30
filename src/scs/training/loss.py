@@ -14,13 +14,13 @@ class SCSLoss(nn.Module):
         pad_token_id: int,
         spike_reg_weight: float = 0.0,
         temporal_weight: float = 0.0,
-        length_penalty_weight: float = 0.1,  # 새로 추가
+        length_penalty_weight: float = 0.2,
         target_spike_rate: float = 0.1
     ):
         super().__init__()
         self.spike_reg_weight = spike_reg_weight
         self.temporal_weight = temporal_weight
-        self.length_penalty_weight = length_penalty_weight  # 새로 추가
+        self.length_penalty_weight = length_penalty_weight
         self.target_spike_rate = target_spike_rate
         
         self.base_loss = nn.CrossEntropyLoss(ignore_index=pad_token_id)

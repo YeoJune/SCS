@@ -149,7 +149,8 @@ class AdaptiveOutputTiming:
         convergence_threshold: float = 0.1,
         confidence_threshold: float = 0.7,
         stability_window: int = 10,
-        start_output_threshold: float = 0.5
+        start_output_threshold: float = 0.5,
+        min_output_length: int = 50
     ):
         self.min_processing_clk = min_processing_clk
         self.max_processing_clk = max_processing_clk
@@ -157,6 +158,7 @@ class AdaptiveOutputTiming:
         self.confidence_threshold = confidence_threshold
         self.stability_window = stability_window
         self.start_output_threshold = start_output_threshold
+        self.min_output_length = min_output_length
         
         self.acc_history = []
         
@@ -170,6 +172,9 @@ class AdaptiveOutputTiming:
         """출력 종료 시점 결정"""
         if current_clk >= self.max_processing_clk:
             return True
+        
+        if len(self.acc_history) < self.min_output_length:
+            return False
         
         self.acc_history.append(acc_activity)
         

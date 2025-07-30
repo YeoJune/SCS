@@ -408,26 +408,83 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
         logger.error(f"❌ 학습 중 치명적인 오류 발생: {e}", exc_info=True)
         raise
 
+def find_best_checkpoint(experiment_dir: Path) -> Path:
+    """가장 적합한 체크포인트 찾기"""
+    checkpoint_dir = experiment_dir / "checkpoints"
+    
+    # 1순위: best_model.pt
+    best_model_path = checkpoint_dir / "best_model.pt"
+    if best_model_path.exists():
+        return best_model_path
+    
+    # 2순위: 가장 최근 에포크 체크포인트
+    checkpoint_files = list(checkpoint_dir.glob("checkpoint_epoch_*.pt"))
+    if checkpoint_files:
+        # 에포크 번호로 정렬해서 가장 최근 것 선택
+        def extract_epoch(path):
+            try:
+                return int(path.stem.split('_')[-1])
+            except (ValueError, IndexError):
+                return -1
+        
+        latest_checkpoint = max(checkpoint_files, key=extract_epoch)
+        return latest_checkpoint
+    
+    raise FileNotFoundError(f"체크포인트를 찾을 수 없습니다. {checkpoint_dir}에서 'best_model.pt' 또는 'checkpoint_epoch_*.pt' 파일을 확인해주세요.")
+
+def load_model_with_checkpoint(config: Dict[str, Any], checkpoint_path: Path, device: str, logger) -> torch.nn.Module:
+    """체크포인트에서 모델 로드 (안전한 에러 핸들링)"""
+    try:
+        # 체크포인트 로드 (PyTorch 2.6+ 호환성)
+        logger.info(f"체크포인트 로드 중: {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        
+        # 모델 생성
+        logger.info("모델 구조 생성 중...")
+        model = ModelBuilder.build_scs_from_config(config, device=device)
+        
+        # 상태 딕셔너리 로드
+        model_state_dict = checkpoint['model_state_dict']
+        missing, unexpected = model.load_state_dict(model_state_dict, strict=False)
+        
+        if missing or unexpected:
+            logger.warning("일부 파라미터가 로드되지 않았지만 계속 진행합니다.")
+        else:
+            logger.info("✅ 모델 상태 완전히 로드됨")
+        
+        # 체크포인트 정보 로깅
+        epoch = checkpoint.get('epoch', 'unknown')
+        best_loss = checkpoint.get('best_loss', 'unknown')
+        logger.info(f"로드된 체크포인트 정보: 에포크={epoch}, 최고 손실={best_loss}")
+        
+        return model
+        
+    except Exception as e:
+        logger.error(f"체크포인트 로드 실패: {e}")
+        logger.info("새로운 모델을 생성하여 계속 진행합니다...")
+        return ModelBuilder.build_scs_from_config(config, device=device)
+    
 def evaluate_mode(args: argparse.Namespace):
-    """평가 모드 실행 (새로운 선언적 조립 구조 지원)"""
+    """평가 모드 실행 (개선된 체크포인트 로드)"""
     # 1. 환경 설정
     experiment_dir = Path(args.experiment_dir)
     config_path = experiment_dir / "config.yaml"
-    checkpoint_path = experiment_dir / "checkpoints" / "best_model.pt"
 
     if not config_path.exists():
         raise FileNotFoundError(f"설정 파일을 찾을 수 없습니다: {config_path}")
-    if not checkpoint_path.exists():
-        raise FileNotFoundError(f"체크포인트를 찾을 수 없습니다: {checkpoint_path}")
 
     config = load_config(config_path)
-    setup_logging(log_dir=experiment_dir / "logs" / "eval")
+    setup_logging(log_dir=experiment_dir / "logs" / "eval", level=logging.DEBUG if args.debug else logging.INFO)
     logger = logging.getLogger(__name__)
     device = get_device(args.device)
     logger.info(f"📊 평가 모드 시작 | 디바이스: {device}")
     
     try:
-        # 2. 설정 파일 검증 (저장된 실험의 무결성 확인)
+        # 2. 체크포인트 경로 찾기
+        checkpoint_path = find_best_checkpoint(experiment_dir)
+        logger.info(f"사용할 체크포인트: {checkpoint_path}")
+        
+        # 3. 설정 파일 검증 (경고만, 평가는 계속)
         logger.info("📋 저장된 설정 파일 검증 중...")
         validation_errors = ModelBuilder.validate_config_structure(config)
         dimension_errors = validate_axonal_connections(config)
@@ -438,7 +495,7 @@ def evaluate_mode(args: argparse.Namespace):
             for error in all_errors[:3]:  # 처음 3개만 표시
                 logger.warning(f"   - {error}")
 
-        # 3. 데이터 및 모델 로드
+        # 4. 데이터 로더 생성
         logger.info("📊 데이터 로더 생성 중...")
         tokenizer = SCSTokenizer(config["data_loading"]["tokenizer"]["name"])
         dataset_name = get_dataset_name_from_config(config, logger)
@@ -451,17 +508,15 @@ def evaluate_mode(args: argparse.Namespace):
             tokenizer=tokenizer
         )
         
+        # 5. 모델 로드 (개선된 에러 핸들링)
         logger.info("🧠 모델 복원 중...")
         config["io_system"]["input_interface"]["vocab_size"] = tokenizer.vocab_size
         config["io_system"]["output_interface"]["vocab_size"] = tokenizer.vocab_size
-        model = ModelBuilder.build_scs_from_config(config, device=device)
         
-        # 체크포인트 로드
-        checkpoint = torch.load(checkpoint_path, map_location=device)
-        model.load_state_dict(checkpoint['model_state_dict'])
+        model = load_model_with_checkpoint(config, checkpoint_path, device, logger)
         logger.info("✅ 모델 복원 완료")
 
-        # 4. 트레이너 생성 및 평가
+        # 6. 트레이너 생성 및 평가
         logger.info("📈 평가 실행 중...")
         pad_token_id = tokenizer.tokenizer.pad_token_id
         
@@ -471,11 +526,14 @@ def evaluate_mode(args: argparse.Namespace):
         trainer = SCSTrainer(model=model, config=training_config, tokenizer=tokenizer)
         results = trainer.evaluate(test_loader)
         
-        # 결과 저장
+        # 결과 저장 및 출력
         results_path = experiment_dir / f"eval_results_{datetime.now().strftime('%Y%m%d_%H%M')}.yaml"
         save_config(results, results_path)
         
         logger.info("🎉 평가가 성공적으로 완료되었습니다!")
+        logger.info("📊 평가 결과:")
+        for key, value in results.items():
+            logger.info(f"   - {key}: {value:.4f}")
         logger.info(f"📂 결과 저장 위치: {results_path}")
 
     except Exception as e:

@@ -64,6 +64,7 @@ class SCSTrainer:
         self.current_epoch = 0
         self.best_loss = float('inf')
         self.patience_counter = 0
+        self.best_model_path = None  # 최고 모델 경로 추가
         
         # 로깅
         logging.basicConfig(level=logging.INFO)
@@ -86,6 +87,11 @@ class SCSTrainer:
         
         self.logger.info(f"배치 처리 학습 시작: {self.config.epochs} 에포크")
         
+        # 저장 디렉토리 생성
+        if save_path:
+            save_dir = Path(save_path)
+            save_dir.mkdir(parents=True, exist_ok=True)
+        
         for epoch in range(self.config.epochs):
             self.current_epoch = epoch
             
@@ -100,19 +106,77 @@ class SCSTrainer:
                 history['val_loss'].append(val_metrics['loss'])
                 history['val_accuracy'].append(val_metrics['accuracy'])
                 
+                # 최고 모델 저장 (validation loss 기준)
+                if save_path and val_metrics['loss'] < self.best_loss:
+                    self.best_loss = val_metrics['loss']
+                    self.best_model_path = self._save_best_model(save_path, epoch, val_metrics['loss'])
+                    self.patience_counter = 0
+                    self.logger.info(f"🏆 새로운 최고 모델 저장: {self.best_model_path}")
+                else:
+                    self.patience_counter += 1
+                
                 # 조기 종료 체크
                 if self._should_early_stop(val_metrics['loss']):
                     self.logger.info(f"조기 종료: 에포크 {epoch}")
                     break
             
-            # 체크포인트 저장
+            # 정기 체크포인트 저장
             if save_path and epoch % self.config.save_every == 0:
                 self._save_checkpoint(save_path, epoch)
             
             # 로깅
-            self._log_progress(epoch, train_metrics)
+            self._log_progress(epoch, train_metrics, 
+                             val_metrics if val_loader and epoch % self.config.eval_every == 0 else None)
+        
+        # 학습 완료 후 최종 최고 모델이 없다면 마지막 모델을 최고 모델로 저장
+        if save_path and self.best_model_path is None:
+            self.best_model_path = self._save_best_model(save_path, self.current_epoch, self.best_loss)
+            self.logger.info(f"최종 모델을 최고 모델로 저장: {self.best_model_path}")
         
         return history
+    
+    def _save_best_model(self, save_path: str, epoch: int, loss: float) -> str:
+        """최고 성능 모델 저장"""
+        best_model_path = f"{save_path}/best_model.pt"
+        
+        checkpoint = {
+            'epoch': epoch,
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'best_loss': loss
+        }
+        
+        if self.scheduler:
+            checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()
+            
+        torch.save(checkpoint, best_model_path)
+        return best_model_path
+    
+    def _save_checkpoint(self, save_path: str, epoch: int):
+        """정기 체크포인트 저장"""
+        save_dir = Path(save_path)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        
+        checkpoint = {
+            'epoch': epoch,
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'best_loss': self.best_loss
+        }
+        if self.scheduler:
+            checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()
+        torch.save(checkpoint, f"{save_path}/checkpoint_epoch_{epoch}.pt")
+    
+    def _log_progress(self, epoch: int, train_metrics: Dict[str, float], val_metrics: Optional[Dict[str, float]] = None):
+        """진행 상황 로깅"""
+        log_msg = f"에포크 {epoch}: 훈련 손실={train_metrics['loss']:.4f}, 훈련 정확도={train_metrics['accuracy']:.4f}"
+        
+        if val_metrics:
+            log_msg += f", 검증 손실={val_metrics['loss']:.4f}, 검증 정확도={val_metrics['accuracy']:.4f}"
+            if val_metrics['loss'] < self.best_loss:
+                log_msg += " ⭐"
+        
+        self.logger.info(log_msg)
     
     def _train_epoch(self, train_loader: DataLoader) -> Dict[str, float]:
         """한 에포크 배치 학습"""
@@ -241,30 +305,6 @@ class SCSTrainer:
         else:
             self.patience_counter += 1
             return self.patience_counter >= self.config.early_stopping_patience
-    
-    def _save_checkpoint(self, save_path: str, epoch: int):
-        """체크포인트 저장"""
-        save_dir = Path(save_path)
-        save_dir.mkdir(parents=True, exist_ok=True)
-        
-        checkpoint = {
-            'epoch': epoch,
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'best_loss': self.best_loss,
-            'config': self.config
-        }
-        if self.scheduler:
-            checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()
-        torch.save(checkpoint, f"{save_path}/checkpoint_epoch_{epoch}.pt")
-    
-    def _log_progress(self, epoch: int, metrics: Dict[str, float]):
-        """진행 상황 로깅"""
-        self.logger.info(
-            f"에포크 {epoch}: "
-            f"손실={metrics['loss']:.4f}, "
-            f"정확도={metrics['accuracy']:.4f}"
-        )
     
     def evaluate(self, test_loader: DataLoader) -> Dict[str, float]:
         """테스트 평가 - 배치 처리로 일관성 유지"""

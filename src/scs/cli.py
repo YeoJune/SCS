@@ -433,13 +433,37 @@ def find_best_checkpoint(experiment_dir: Path) -> Path:
     raise FileNotFoundError(f"체크포인트를 찾을 수 없습니다. {checkpoint_dir}에서 'best_model.pt' 또는 'checkpoint_epoch_*.pt' 파일을 확인해주세요.")
 
 def load_model_with_checkpoint(config: Dict[str, Any], checkpoint_path: Path, device: str, logger) -> torch.nn.Module:
-    """체크포인트에서 모델 로드 (안전한 에러 핸들링)"""
+    """체크포인트에서 모델 로드 (설정 호환성 검증 포함)"""
     try:
         # 체크포인트 로드 (PyTorch 2.6+ 호환성)
         logger.info(f"체크포인트 로드 중: {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
         
-        # 모델 생성
+        # 체크포인트 정보 로깅
+        epoch = checkpoint.get('epoch', 'unknown')
+        best_loss = checkpoint.get('best_loss', 'unknown')
+        save_timestamp = checkpoint.get('save_timestamp', 'unknown')
+        logger.info(f"로드된 체크포인트 정보: 에포크={epoch}, 최고 손실={best_loss}, 저장 시간={save_timestamp}")
+        
+        # 설정 호환성 검증
+        saved_training_config = checkpoint.get('training_config_dict', {})
+        saved_model_config = checkpoint.get('model_config', {})
+        saved_vocab_size = checkpoint.get('tokenizer_vocab_size')
+        
+        # 어휘 크기 호환성 검증
+        current_vocab_size = config.get("io_system", {}).get("input_interface", {}).get("vocab_size")
+        if saved_vocab_size and current_vocab_size and saved_vocab_size != current_vocab_size:
+            logger.warning(f"어휘 크기 불일치: 저장된={saved_vocab_size}, 현재={current_vocab_size}")
+            logger.warning("모델 구조가 달라질 수 있습니다. 새 토크나이저로 재학습을 권장합니다.")
+        
+        # 학습 설정 비교 (경고만)
+        if saved_training_config:
+            current_max_clk = config.get("learning", {}).get("max_clk_training") or config.get("training", {}).get("max_clk_training")
+            saved_max_clk = saved_training_config.get('max_clk_training')
+            if current_max_clk and saved_max_clk and current_max_clk != saved_max_clk:
+                logger.warning(f"max_clk_training 불일치: 저장된={saved_max_clk}, 현재={current_max_clk}")
+        
+        # 모델 생성 (현재 설정 사용)
         logger.info("모델 구조 생성 중...")
         model = ModelBuilder.build_scs_from_config(config, device=device)
         
@@ -449,13 +473,12 @@ def load_model_with_checkpoint(config: Dict[str, Any], checkpoint_path: Path, de
         
         if missing or unexpected:
             logger.warning("일부 파라미터가 로드되지 않았지만 계속 진행합니다.")
+            if missing:
+                logger.warning(f"누락된 키들: {list(missing)[:5]}...")
+            if unexpected:
+                logger.warning(f"예상치 못한 키들: {list(unexpected)[:5]}...")
         else:
             logger.info("✅ 모델 상태 완전히 로드됨")
-        
-        # 체크포인트 정보 로깅
-        epoch = checkpoint.get('epoch', 'unknown')
-        best_loss = checkpoint.get('best_loss', 'unknown')
-        logger.info(f"로드된 체크포인트 정보: 에포크={epoch}, 최고 손실={best_loss}")
         
         return model
         

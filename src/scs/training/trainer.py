@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from tqdm import tqdm
 import logging
 from pathlib import Path
+from datetime import datetime
 
 from .loss import SCSLoss
 from .metric import SCSMetrics
@@ -136,14 +137,32 @@ class SCSTrainer:
         return history
     
     def _save_best_model(self, save_path: str, epoch: int, loss: float) -> str:
-        """최고 성능 모델 저장"""
+        """최고 성능 모델 저장 (설정 정보 포함)"""
         best_model_path = f"{save_path}/best_model.pt"
+        
+        # TrainingConfig를 딕셔너리로 변환하여 저장 (pickle 문제 해결)
+        training_config_dict = {
+            'epochs': self.config.epochs,
+            'learning_rate': self.config.learning_rate,
+            'weight_decay': self.config.weight_decay,
+            'gradient_clip_norm': self.config.gradient_clip_norm,
+            'eval_every': self.config.eval_every,
+            'save_every': self.config.save_every,
+            'early_stopping_patience': self.config.early_stopping_patience,
+            'device': self.config.device,
+            'max_clk_training': self.config.max_clk_training,
+            'pad_token_id': self.config.pad_token_id
+        }
         
         checkpoint = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'best_loss': loss
+            'best_loss': loss,
+            'training_config_dict': training_config_dict,  # 학습 설정
+            'model_config': getattr(self.model, 'config', None),  # 모델 자체 설정
+            'tokenizer_vocab_size': getattr(self.tokenizer, 'vocab_size', None) if self.tokenizer else None,
+            'save_timestamp': datetime.now().isoformat()  # 저장 시간
         }
         
         if self.scheduler:
@@ -151,17 +170,35 @@ class SCSTrainer:
             
         torch.save(checkpoint, best_model_path)
         return best_model_path
-    
+
     def _save_checkpoint(self, save_path: str, epoch: int):
-        """정기 체크포인트 저장"""
+        """정기 체크포인트 저장 (설정 정보 포함)"""
         save_dir = Path(save_path)
         save_dir.mkdir(parents=True, exist_ok=True)
+        
+        # TrainingConfig를 딕셔너리로 변환하여 저장
+        training_config_dict = {
+            'epochs': self.config.epochs,
+            'learning_rate': self.config.learning_rate,
+            'weight_decay': self.config.weight_decay,
+            'gradient_clip_norm': self.config.gradient_clip_norm,
+            'eval_every': self.config.eval_every,
+            'save_every': self.config.save_every,
+            'early_stopping_patience': self.config.early_stopping_patience,
+            'device': self.config.device,
+            'max_clk_training': self.config.max_clk_training,
+            'pad_token_id': self.config.pad_token_id
+        }
         
         checkpoint = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'best_loss': self.best_loss
+            'best_loss': self.best_loss,
+            'training_config_dict': training_config_dict,  # 학습 설정
+            'model_config': getattr(self.model, 'config', None),  # 모델 자체 설정
+            'tokenizer_vocab_size': getattr(self.tokenizer, 'vocab_size', None) if self.tokenizer else None,
+            'save_timestamp': datetime.now().isoformat()  # 저장 시간
         }
         if self.scheduler:
             checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()

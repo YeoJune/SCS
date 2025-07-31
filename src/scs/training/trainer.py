@@ -351,7 +351,7 @@ class SCSTrainer:
                 output_logits, processing_info = self.model(
                     input_schedule=input_tokens,
                     max_clk=self.config.max_clk_training,
-                    training=True,  # **수정됨**: Teacher Forcing 유지
+                    training=False,
                     target_schedule=target_tokens,
                     attention_mask=attention_mask,
                     target_start_clk=target_start_clk  # **새로 추가**
@@ -421,7 +421,7 @@ class SCSTrainer:
                 output_logits, processing_info = self.model(
                     input_schedule=input_tokens,
                     max_clk=self.config.max_clk_training,
-                    training=True,  # **수정됨**: Teacher Forcing으로 공정한 평가
+                    training=False,
                     target_schedule=target_tokens,
                     attention_mask=attention_mask,
                     target_start_clk=target_start_clk  # **새로 추가**

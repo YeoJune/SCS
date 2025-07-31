@@ -138,7 +138,7 @@ class LogiQADataset(BaseDataset):
             # 선택지 추가
             options_text = " ".join([f"{chr(65+i)}) {opt.strip()}" 
                                    for i, opt in enumerate(options)])
-            # input_parts.append(f"Options: {options_text}")
+            input_parts.append(f"Options: {options_text}")
             target_text = options[answer].strip()  # 실제 답 텍스트
             
             return {
@@ -220,9 +220,9 @@ class MultiDataset(BaseDataset):
             input_parts.append(f"Question: {question}")
             
             if options:
-                # options_text = " ".join([f"{chr(65+i)}) {opt}" 
-                #                        for i, opt in enumerate(options)])
-                # input_parts.append(f"Options: {options_text}")
+                options_text = " ".join([f"{chr(65+i)}) {opt}" 
+                                       for i, opt in enumerate(options)])
+                input_parts.append(f"Options: {options_text}")
                 
                 # 정답 처리
                 if isinstance(answer, int) and 0 <= answer < len(options):

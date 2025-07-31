@@ -116,6 +116,7 @@ class ModelBuilder:
                 vocab_size=io_config["output_interface"]["vocab_size"],
                 grid_height=output_h,
                 grid_width=output_w,
+                pad_token_id=config["io_system"]["output_interface"]["pad_token_id"],
                 embedding_dim=io_config["output_interface"]["embedding_dim"],
                 max_output_len=io_config["output_interface"]["max_output_len"],
                 num_heads=io_config["output_interface"]["num_heads"],

@@ -255,12 +255,17 @@ class SCSTrainer:
         
         # 3. Forward Pass (모델에 배치 전체를 전달)
         # 모델의 forward는 내부적으로 CLK 루프를 돌고 최종 로짓 [B, seq_len, vocab_size]를 반환
+        input_seq_len = input_tokens.shape[1]
+        target_seq_len = target_tokens.shape[1]
+        target_start_clk = min(input_seq_len, self.config.max_clk_training - target_seq_len - 1)
+
         output_logits, processing_info = self.model(
             input_schedule=input_tokens,
             max_clk=self.config.max_clk_training,  # YAML 설정에서 가져온 고정 CLK
             training=True,
             target_schedule=target_tokens,
-            attention_mask=attention_mask
+            attention_mask=attention_mask,
+            target_start_clk=target_start_clk  # **새로 추가**
         )
         
         # 4. 손실 계산 (수정된 loss_fn 사용)
@@ -306,13 +311,19 @@ class SCSTrainer:
                 target_tokens = batch['target_tokens'].to(self.device)
                 attention_mask = batch['attention_mask'].to(self.device)
                 
+                # **추가됨**: target_start_clk 계산
+                input_seq_len = input_tokens.shape[1]
+                target_seq_len = target_tokens.shape[1]
+                target_start_clk = min(input_seq_len, self.config.max_clk_training - target_seq_len - 1)
+                
                 # Teacher Forcing 사용으로 공정한 비교
                 output_logits, processing_info = self.model(
                     input_schedule=input_tokens,
                     max_clk=self.config.max_clk_training,
-                    training=False,
+                    training=True,  # **수정됨**: Teacher Forcing 유지
                     target_schedule=target_tokens,
-                    attention_mask=attention_mask
+                    attention_mask=attention_mask,
+                    target_start_clk=target_start_clk  # **새로 추가**
                 )
                 
                 batch_loss = self.loss_fn(output_logits, target_tokens, processing_info)
@@ -370,13 +381,19 @@ class SCSTrainer:
                 target_tokens = batch['target_tokens'].to(self.device)
                 attention_mask = batch['attention_mask'].to(self.device)
                 
+                # **추가됨**: target_start_clk 계산
+                input_seq_len = input_tokens.shape[1]
+                target_seq_len = target_tokens.shape[1]
+                target_start_clk = min(input_seq_len, self.config.max_clk_training - target_seq_len - 1)
+                
                 # 배치 단위로 모델 실행 (항상 배치 출력 보장)
                 output_logits, processing_info = self.model(
                     input_schedule=input_tokens,
                     max_clk=self.config.max_clk_training,
-                    training=False,  # 실제 추론 모드로 평가
+                    training=True,  # **수정됨**: Teacher Forcing으로 공정한 평가
                     target_schedule=target_tokens,
-                    attention_mask=attention_mask
+                    attention_mask=attention_mask,
+                    target_start_clk=target_start_clk  # **새로 추가**
                 )
                 
                 # 출력은 항상 [B, seq_len, vocab_size] 형태로 보장됨

@@ -154,7 +154,7 @@ class TimingLoss(SCSLoss):
         timing_loss = self._calculate_timing_loss(processing_info, outputs.device)
         
         return base_total_loss + self.timing_weight * timing_loss
-
+    
     def _calculate_timing_loss(self, processing_info: Dict[str, Any], device: torch.device) -> torch.Tensor:
         if 'timing_info' not in processing_info:
             return torch.tensor(0.0, device=device)
@@ -176,7 +176,14 @@ class TimingLoss(SCSLoss):
             # confidence가 confidence_threshold보다 작으면 페널티
             if 'raw_confidence_batch' in end_info:
                 confidence_batch = end_info['raw_confidence_batch']
-                # 이미 tensor이므로 그대로 사용
+                
+                # **수정됨**: 안전한 tensor 변환 추가
+                if not isinstance(confidence_batch, torch.Tensor):
+                    confidence_batch = torch.tensor(confidence_batch, device=device)
+                else:
+                    # 이미 tensor이지만 디바이스가 다를 수 있음
+                    confidence_batch = confidence_batch.to(device)
+                    
                 end_loss = torch.relu(self.confidence_threshold - confidence_batch).mean()
             
         return start_loss + end_loss

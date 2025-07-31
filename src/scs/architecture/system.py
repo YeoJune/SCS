@@ -260,14 +260,15 @@ class SCSSystem(nn.Module):
             self.previous_spikes[node_name] = torch.zeros(
                 batch_size, node.grid_height, node.grid_width, device=self.device
             )
-    
+            
     def forward(
         self,
         input_schedule: Optional[torch.Tensor] = None,  # [B, seq_len] or [seq_len] or Dict[int, torch.Tensor]
         max_clk: Optional[int] = None,
         training: bool = False,
         target_schedule: Optional[torch.Tensor] = None,  # [B, seq_len] or [seq_len]
-        attention_mask: Optional[torch.Tensor] = None    # [B, seq_len] or [seq_len]
+        attention_mask: Optional[torch.Tensor] = None,   # [B, seq_len] or [seq_len]
+        target_start_clk: Optional[int] = None          # **새로 추가된 인자**
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
         """
         전체 시스템 처리 (항상 배치 출력)
@@ -293,23 +294,28 @@ class SCSSystem(nn.Module):
         self.reset_state(batch_size)
         
         if training:
-            return self._forward_training(input_schedule, target_schedule, attention_mask, max_clk)
+            # **수정됨**: target_start_clk 인자 전달
+            return self._forward_training(input_schedule, target_schedule, attention_mask, max_clk, target_start_clk)
         else:
             return self._forward_inference(input_schedule, max_clk, batch_size)
-    
+
+
+    # _forward_training 메서드 시그니처도 수정
     def _forward_training(
         self,
         input_schedule: torch.Tensor,     # [B, seq_len]
         target_schedule: torch.Tensor,    # [B, seq_len]
         attention_mask: Optional[torch.Tensor],  # [B, seq_len]
-        max_clk: int
+        max_clk: int,
+        target_start_clk: Optional[int] = None  # **새로 추가된 인자**
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
         """학습 모드 forward pass (Teacher Forcing) - 타이밍 정보 수집 추가"""
         batch_size, input_seq_len = input_schedule.shape
         _, target_seq_len = target_schedule.shape
 
         # 1. 목표 CLK 정의
-        target_start_clk = min(input_seq_len, max_clk - target_seq_len - 1)
+        if target_start_clk is None:
+            target_start_clk = min(input_seq_len, max_clk - target_seq_len - 1)
         target_end_clk = min(input_seq_len + target_seq_len - 1, max_clk - 1)
 
         # 타이밍 정보를 담을 딕셔너리
@@ -373,6 +379,7 @@ class SCSSystem(nn.Module):
         output_logits = self.output_interface.forward_training(
             grid_spikes=output_spikes,
             target_tokens=target_schedule,
+            target_start_clk=target_start_clk,
             attention_mask=attention_mask
         )  # [B, seq_len, vocab_size]
         
@@ -388,14 +395,20 @@ class SCSSystem(nn.Module):
     
     def _forward_inference(
         self,
-        input_schedule: Optional[torch.Tensor],  # [B, seq_len] or Dict[int, torch.Tensor]
+        input_schedule: Optional[torch.Tensor],
         max_clk: int,
         batch_size: int
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
         """추론 모드 forward pass (항상 배치 출력)"""
         output_started = False
-        generated_tokens = []
         
+        # **수정됨**: 생성된 토큰 로짓과 실제 토큰 ID를 관리할 리스트
+        generated_logits = []
+        # BOS 토큰으로 초기화. [B, 1] 형태
+        generated_ids = torch.ones((batch_size, 1), dtype=torch.long, device=self.device) 
+
+        self.output_timing.reset() # 타이밍 객체 초기화
+
         for clk in range(max_clk):
             self.current_clk = clk
             
@@ -414,35 +427,49 @@ class SCSSystem(nn.Module):
             acc_activity = self._get_acc_activity(current_spikes)
             
             if not output_started and self.output_timing.should_start_output(clk, acc_activity):
-                self.output_interface.start_generation()
                 output_started = True
             
             if output_started:
                 output_spikes = current_spikes[self.output_node]  # [B, H, W]
-                token_logits = self.output_interface.generate_token_at_clk(output_spikes)  # [B, vocab_size]
-                generated_tokens.append(token_logits)
                 
-                # confidence 계산 (배치의 첫 번째 샘플 기준)
+                # **수정된 호출 방식**
+                token_logits = self.output_interface.generate_token_at_clk(
+                    output_spikes, generated_ids
+                ) # [B, vocab_size]
+                
+                generated_logits.append(token_logits)
+                
+                # **추가된 자기회귀 로직**
+                # 다음 토큰 ID를 결정 (가장 확률이 높은 토큰으로)
+                next_token_ids = torch.argmax(token_logits, dim=-1, keepdim=True) # [B, 1]
+                
+                # 생성된 ID를 기존 시퀀스에 연결하여 다음 스텝의 입력으로 사용
+                generated_ids = torch.cat([generated_ids, next_token_ids], dim=1) # [B, current_len + 1]
+
+                # 종료 조건 확인
                 output_confidence = torch.softmax(token_logits[0], dim=-1).max().item()
-                if self.output_timing.should_end_output(clk, acc_activity, output_confidence):
-                    self.output_interface.end_generation()
+                # generated_ids에는 BOS가 포함되어 있으므로, 실제 생성 길이는 -1
+                if self.output_timing.should_end_output(clk, acc_activity, output_confidence, generated_length=generated_ids.shape[1] - 1):
                     break
             
             self.previous_spikes = {k: v.clone() for k, v in current_spikes.items()}
         
-        # 출력 토큰 생성 (항상 배치 형태)
-        if generated_tokens:
-            output_tokens = torch.stack(generated_tokens, dim=1)  # [B, seq_len, vocab_size]
+        # 최종 출력 생성
+        if generated_logits:
+            # 스택으로 쌓아 [B, seq_len, vocab_size] 텐서 생성
+            output_tokens = torch.stack(generated_logits, dim=1)
         else:
-            output_tokens = torch.zeros(batch_size, 1, self.output_interface.vocab_size, device=self.device)
-        
+            # 생성된 토큰이 없을 경우, 0으로 채워진 텐서 반환
+            output_tokens = torch.zeros(batch_size, 0, self.output_interface.vocab_size, device=self.device)
+
         processing_info = {
             "processing_clk": self.current_clk + 1,
             "output_started": output_started,
-            "tokens_generated": len(generated_tokens),
+            "tokens_generated": len(generated_logits),
             "convergence_achieved": clk < max_clk - 1 if 'clk' in locals() else False,
             "final_acc_activity": acc_activity if 'acc_activity' in locals() else 0.0,
-            "batch_size": batch_size
+            "batch_size": batch_size,
+            "generated_ids": generated_ids[:, 1:] # BOS 토큰 제외
         }
         
         return output_tokens, processing_info

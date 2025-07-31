@@ -15,7 +15,7 @@ system:
 
   # 배치 처리 설정
   enable_batch_processing: true
-  default_batch_size: 8
+  default_batch_size: 2
   max_clk_training: 100 # 학습 시 고정 CLK 수
 
   # 메모리 최적화
@@ -259,7 +259,7 @@ learning:
 
 # 데이터 로딩 설정
 data_loading:
-  batch_size: 8
+  batch_size: 2
   shuffle: true
   num_workers: 4
   pin_memory: true

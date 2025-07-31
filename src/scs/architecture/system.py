@@ -150,8 +150,7 @@ class AdaptiveOutputTiming:
         stability_window: int = 10,
         start_output_threshold: float = 0.5,
         min_output_length: int = 10,
-        # --- 디버깅을 위한 새로운 플래그 추가 ---
-        force_fixed_length: bool = True
+        force_fixed_length: bool = False
     ):
         self.min_processing_clk = min_processing_clk
         self.max_processing_clk = max_processing_clk
@@ -160,8 +159,6 @@ class AdaptiveOutputTiming:
         self.stability_window = stability_window
         self.start_output_threshold = start_output_threshold
         self.min_output_length = min_output_length
-        
-        # --- 디버깅 플래그 ---
         self.force_fixed_length = force_fixed_length
         
         self.acc_history = []
@@ -260,7 +257,7 @@ class SCSSystem(nn.Module):
             self.previous_spikes[node_name] = torch.zeros(
                 batch_size, node.grid_height, node.grid_width, device=self.device
             )
-            
+
     def forward(
         self,
         input_schedule: Optional[torch.Tensor] = None,  # [B, seq_len] or [seq_len] or Dict[int, torch.Tensor]
@@ -388,7 +385,11 @@ class SCSSystem(nn.Module):
             "batch_size": batch_size,
             "sequence_length": target_seq_len,
             "training_mode": True,
-            "timing_info": timing_info  # 수집된 타이밍 정보
+            "timing_info": timing_info,  # 수집된 타이밍 정보
+            "tokens_generated": target_seq_len,  # 학습 시에는 타겟 시퀀스 길이
+            "output_started": True,  # 학습 모드에서는 항상 True
+            "convergence_achieved": True,  # 학습 모드에서는 항상 True (완료됨)
+            "final_acc_activity": 0.0  # 학습 모드에서는 기본값
         }
         
         return output_logits, processing_info

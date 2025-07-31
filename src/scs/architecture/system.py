@@ -265,7 +265,8 @@ class SCSSystem(nn.Module):
         training: bool = False,
         target_schedule: Optional[torch.Tensor] = None,  # [B, seq_len] or [seq_len]
         attention_mask: Optional[torch.Tensor] = None,   # [B, seq_len] or [seq_len]
-        target_start_clk: Optional[int] = None          # **새로 추가된 인자**
+        target_start_clk: Optional[int] = None,
+        ss_prob: float = 1.0
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
         """
         전체 시스템 처리 (항상 배치 출력)
@@ -292,19 +293,19 @@ class SCSSystem(nn.Module):
         
         if training:
             # **수정됨**: target_start_clk 인자 전달
-            return self._forward_training(input_schedule, target_schedule, attention_mask, max_clk, target_start_clk)
+            return self._forward_training(input_schedule, target_schedule, attention_mask, max_clk, target_start_clk, ss_prob=ss_prob)
         else:
             return self._forward_inference(input_schedule, max_clk, batch_size)
 
 
-    # _forward_training 메서드 시그니처도 수정
     def _forward_training(
         self,
         input_schedule: torch.Tensor,     # [B, seq_len]
         target_schedule: torch.Tensor,    # [B, seq_len]
         attention_mask: Optional[torch.Tensor],  # [B, seq_len]
         max_clk: int,
-        target_start_clk: Optional[int] = None  # **새로 추가된 인자**
+        target_start_clk: Optional[int] = None,
+        ss_prob: float = 1.0
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
         """학습 모드 forward pass (Teacher Forcing) - 타이밍 정보 수집 추가"""
         batch_size, input_seq_len = input_schedule.shape
@@ -377,7 +378,8 @@ class SCSSystem(nn.Module):
             grid_spikes=output_spikes,
             target_tokens=target_schedule,
             target_start_clk=target_start_clk,
-            attention_mask=attention_mask
+            attention_mask=attention_mask,
+            ss_prob=ss_prob
         )  # [B, seq_len, vocab_size]
         
         processing_info = {

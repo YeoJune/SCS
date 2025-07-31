@@ -415,59 +415,78 @@ class OutputInterface(nn.Module):
 
     def forward_training(
         self,
-        grid_spikes: torch.Tensor,                      # [B, max_clk, H, W]
-        target_tokens: torch.Tensor,                    # [B, seq_len]
-        target_start_clk: int,                          # 타겟 생성이 시작되는 기준 CLK
-        attention_mask: Optional[torch.Tensor] = None   # [B, seq_len]
+        grid_spikes: torch.Tensor,
+        target_tokens: torch.Tensor,
+        target_start_clk: int,
+        attention_mask: Optional[torch.Tensor] = None, # 이제 이 인자를 사용합니다.
+        ss_prob: float = 1.0
     ) -> torch.Tensor:
         """
-        배치 학습을 위한 forward pass (Teacher Forcing)
+        배치 학습을 위한 forward pass
+        **최종 수정**: 스케줄 샘플링과 패딩 마스크(attention_mask)를 함께 처리하여 강건성 확보
         """
-        batch_size, max_clk, height, width = grid_spikes.shape
+        batch_size, max_clk, _, _ = grid_spikes.shape
         _, seq_len = target_tokens.shape
+        device = grid_spikes.device
 
-        # 1. 각 타겟 토큰에 해당하는 CLK의 스파이크 상태를 추출하여 '메모리 시퀀스'를 생성합니다.
-        #    - 타겟 시퀀스의 i번째 토큰은 (target_start_clk + i) 시점의 스파이크를 참조합니다.
-        #    - 이것이 디코더의 크로스-어텐션 대상이 됩니다.
-        
-        # [seq_len] 크기의 CLK 인덱스 시퀀스를 생성
-        clk_indices = torch.arange(seq_len, device=self.device) + target_start_clk
-        # CLK 인덱스가 max_clk를 넘어가지 않도록 안전하게 제한
-        clk_indices = torch.clamp(clk_indices, 0, max_clk - 1)
+        # 패딩 토큰 ID를 가져옵니다.
+        pad_token_id = self.token_embedding.padding_idx if self.token_embedding.padding_idx is not None else 0
 
-        # 고급 인덱싱을 사용하여 각 배치 샘플에 대해 해당 CLK의 스파이크들을 한 번에 수집
-        # torch.arange(batch_size).unsqueeze(1)는 브로드캐스팅을 위해 배치 인덱스를 생성합니다.
-        relevant_spikes = grid_spikes[torch.arange(batch_size).unsqueeze(1), clk_indices]  # 결과: [B, seq_len, H, W]
+        # 디코더의 첫 입력은 항상 BOS 토큰
+        decoder_input_ids = torch.full((batch_size, 1), 1, dtype=torch.long, device=device)
 
-        # 수집된 스파이크를 디코더 입력에 맞게 평탄화(flatten)
-        flat_spikes = relevant_spikes.view(batch_size, seq_len, -1)  # [B, seq_len, H*W]
+        all_logits = []
 
-        # 이제 메모리는 [B, 1, D]가 아닌, 시퀀스 길이를 갖는 [B, seq_len, D] 형태가 됩니다.
-        memory_sequence = self.layer_norm(self.grid_to_embedding(flat_spikes))  # [B, seq_len, embedding_dim]
+        for t in range(seq_len):
+            # 1. 현재 타임스텝 't'의 스파이크 컨텍스트(메모리) 추출
+            current_clk = min(target_start_clk + t, max_clk - 1)
+            current_spikes = grid_spikes[:, current_clk, :, :]
+            memory = self._create_memory_from_spikes_batch(current_spikes)
 
-        # 2. 타겟 토큰 임베딩 준비 (기존과 동일)
-        target_embeds = self._prepare_target_embeddings_batch(target_tokens)  # [B, seq_len, embedding_dim]
+            # 2. 디코더 입력 임베딩 및 자기회귀 마스크 생성
+            current_embeds = self._prepare_target_embeddings_batch(decoder_input_ids)
+            tgt_mask = self._generate_square_subsequent_mask(decoder_input_ids.shape[1])
+            
+            # 3. 디코더를 한 스텝 실행하여 다음 토큰 로짓 예측
+            decoder_output = self.transformer_decoder(
+                tgt=current_embeds,
+                memory=memory,
+                tgt_mask=tgt_mask
+            )
+            logits_t = self.final_projection(decoder_output[:, -1, :]) # [B, vocab_size]
+            all_logits.append(logits_t)
 
-        # 3. 자기회귀 마스크 및 패딩 마스크 준비
-        tgt_mask = self._generate_square_subsequent_mask(seq_len)  # [seq_len, seq_len]
-        tgt_key_padding_mask = None
-        if attention_mask is not None:
-            tgt_key_padding_mask = ~attention_mask  # [B, seq_len] (True=패딩)
+            # 4. **[핵심 수정]** 스케줄 샘플링 및 패딩 처리를 위한 다음 입력 결정
+            use_teacher_forcing = torch.rand(1).item() < ss_prob
+            
+            if use_teacher_forcing:
+                # Teacher Forcing: 정답 토큰을 사용
+                chosen_input = target_tokens[:, t:t+1] # [B, 1]
+            else:
+                # Auto-regressive: 모델 자신의 예측을 사용
+                chosen_input = logits_t.argmax(dim=-1, keepdim=True) # [B, 1]
 
-        # 4. 배치 트랜스포머 디코더 실행
-        #    - 이제 memory는 시퀀스 형태이므로, memory_key_padding_mask를 사용할 수 있습니다.
-        #    - 여기서는 타겟의 패딩 마스크를 동일하게 사용합니다.
-        decoder_output = self.transformer_decoder(
-            tgt=target_embeds,
-            memory=memory_sequence,
-            tgt_mask=tgt_mask,
-            tgt_key_padding_mask=tgt_key_padding_mask,
-            memory_key_padding_mask=tgt_key_padding_mask  # 메모리 시퀀스에 대한 패딩 마스크
-        )  # [B, seq_len, embedding_dim]
+            # 5. **[핵심 수정]** attention_mask를 사용하여 실제 토큰과 패딩 토큰을 구분
+            # attention_mask가 없으면 모든 토큰을 실제 토큰으로 간주
+            if attention_mask is None:
+                is_real_token = torch.ones((batch_size, 1), dtype=torch.bool, device=device)
+            else:
+                is_real_token = attention_mask[:, t:t+1] # [B, 1], True=실제, False=패딩
 
-        # 5. 최종 로짓 계산 (기존과 동일)
-        output_logits = self.final_projection(decoder_output)  # [B, seq_len, vocab_size]
+            # 패딩 토큰을 담은 텐서 준비
+            padding_input = torch.full_like(chosen_input, pad_token_id)
+            
+            # 실제 토큰 위치에는 'chosen_input'을, 패딩 위치에는 'padding_input'을 사용
+            next_input_id = torch.where(
+                is_real_token,
+                chosen_input,
+                padding_input
+            )
+            
+            # 다음 입력을 기존 시퀀스에 추가
+            decoder_input_ids = torch.cat([decoder_input_ids, next_input_id], dim=1)
 
+        output_logits = torch.stack(all_logits, dim=1)
         return output_logits
     
     def _prepare_target_embeddings_batch(self, target_tokens: torch.Tensor) -> torch.Tensor:

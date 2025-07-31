@@ -23,12 +23,16 @@ class TrainingConfig:
     learning_rate: float = 1e-3
     weight_decay: float = 1e-4
     gradient_clip_norm: float = 1.0
-    eval_every: int = 5
+    eval_every: int = 3
     save_every: int = 10
     early_stopping_patience: int = 20
     device: str = "cuda"
     max_clk_training: int = 100  # 학습 시 고정 CLK
     pad_token_id: int = 0  # 패딩 토큰 ID
+    use_scheduled_sampling: bool = False      # 스케줄 샘플링 사용 여부
+    ss_start_prob: float = 1.0                # 시작 시 Teacher Forcing 확률 (epsilon)
+    ss_end_prob: float = 0.05                 # 종료 시 Teacher Forcing 확률
+    ss_decay_epochs: int = 10                 # 확률이 감소하는 데 걸리는 에포크 수
 
 
 class SCSTrainer:
@@ -66,11 +70,34 @@ class SCSTrainer:
         self.best_loss = float('inf')
         self.patience_counter = 0
         self.best_model_path = None  # 최고 모델 경로 추가
+
+        self.current_ss_prob = self.config.ss_start_prob
         
         # 로깅
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
     
+    def _update_scheduled_sampling_prob(self):
+        """현재 에포크에 맞춰 스케줄 샘플링 확률(epsilon)을 업데이트합니다."""
+        if not self.config.use_scheduled_sampling:
+            self.current_ss_prob = 1.0 # 사용 안 할 시 항상 Teacher Forcing
+            return
+
+        # 선형 감소(Linear Decay) 스케줄
+        decay_epochs = self.config.ss_decay_epochs
+        start_prob = self.config.ss_start_prob
+        end_prob = self.config.ss_end_prob
+        
+        if self.current_epoch >= decay_epochs:
+            self.current_ss_prob = end_prob
+        else:
+            # 현재 에포크에 따라 선형적으로 확률을 감소시킴
+            self.current_ss_prob = start_prob - (start_prob - end_prob) * (self.current_epoch / decay_epochs)
+        
+        # self.logger가 초기화된 후에만 로깅
+        if hasattr(self, 'logger'):
+            self.logger.info(f"Scheduled Sampling 확률(epsilon) 업데이트: {self.current_ss_prob:.4f}")
+
     def train(
         self,
         train_loader: DataLoader,
@@ -95,6 +122,8 @@ class SCSTrainer:
         
         for epoch in range(self.config.epochs):
             self.current_epoch = epoch
+
+            self._update_scheduled_sampling_prob()
             
             # 학습
             train_metrics = self._train_epoch(train_loader)
@@ -265,7 +294,8 @@ class SCSTrainer:
             training=True,
             target_schedule=target_tokens,
             attention_mask=attention_mask,
-            target_start_clk=target_start_clk  # **새로 추가**
+            target_start_clk=target_start_clk,
+            ss_prob=self.current_ss_prob
         )
         
         # 4. 손실 계산 (수정된 loss_fn 사용)

@@ -150,7 +150,7 @@ class AdaptiveOutputTiming:
         stability_window: int = 10,
         start_output_threshold: float = 0.5,
         min_output_length: int = 10,
-        force_fixed_length: bool = False
+        force_fixed_length: bool = True
     ):
         self.min_processing_clk = min_processing_clk
         self.max_processing_clk = max_processing_clk

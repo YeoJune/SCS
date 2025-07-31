@@ -109,7 +109,7 @@ training:
   epochs: 20
   learning_rate: 5e-4
   batch_size: 1
-  max_clk_training: 150
+  max_clk_training: 250
   length_penalty_weight: 0.1
   timing_weight: 0.1 # 새로 추가
   start_threshold: 0.5 # 새로 추가
@@ -124,7 +124,7 @@ training:
 # adaptive_output_timing 섹션 (추가 보장)
 adaptive_output_timing:
   min_processing_clk: 100
-  max_processing_clk: 250
+  max_processing_clk: 300
   convergence_threshold: 0.1
   confidence_threshold: 0.8
   stability_window: 10

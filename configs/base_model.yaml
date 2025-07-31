@@ -16,7 +16,7 @@ system:
   # 배치 처리 설정
   enable_batch_processing: true
   default_batch_size: 2
-  max_clk_training: 100 # 학습 시 고정 CLK 수
+  max_clk_training: 250 # 학습 시 고정 CLK 수
 
   # 메모리 최적화
   gradient_checkpointing: false

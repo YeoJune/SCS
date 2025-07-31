@@ -27,7 +27,7 @@ class TrainingConfig:
     save_every: int = 10
     early_stopping_patience: int = 20
     device: str = "cuda"
-    max_clk_training: int = 100  # 학습 시 고정 CLK
+    max_clk_training: int = 250  # 학습 시 고정 CLK
     pad_token_id: int = 0  # 패딩 토큰 ID
     use_scheduled_sampling: bool = False      # 스케줄 샘플링 사용 여부
     ss_start_prob: float = 1.0                # 시작 시 Teacher Forcing 확률 (epsilon)

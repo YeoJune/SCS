@@ -235,6 +235,7 @@ class OutputInterface(nn.Module):
         vocab_size: int,
         grid_height: int,
         grid_width: int,
+        pad_token_id: int,
         embedding_dim: int = 256,      # 작은 디코더를 위한 크기 조절
         max_output_len: int = 128,
         num_heads: int = 4,            # embedding_dim에 맞춰 조절
@@ -248,6 +249,7 @@ class OutputInterface(nn.Module):
         self.vocab_size = vocab_size
         self.grid_height = grid_height
         self.grid_width = grid_width
+        self.pad_token_id = pad_token_id
         self.embedding_dim = embedding_dim
         self.max_output_len = max_output_len
         self.num_heads = num_heads
@@ -259,7 +261,11 @@ class OutputInterface(nn.Module):
         
         # 2. 표준 트랜스포머 디코더 구성요소
         # 토큰 임베딩
-        self.token_embedding = nn.Embedding(vocab_size, embedding_dim)
+        self.token_embedding = nn.Embedding(
+            vocab_size, 
+            embedding_dim, 
+            padding_idx=self.pad_token_id
+        )
         
         # 위치 임베딩
         self.position_embedding = nn.Embedding(max_output_len, embedding_dim)
@@ -418,7 +424,7 @@ class OutputInterface(nn.Module):
         grid_spikes: torch.Tensor,
         target_tokens: torch.Tensor,
         target_start_clk: int,
-        attention_mask: Optional[torch.Tensor] = None, # 이제 이 인자를 사용합니다.
+        attention_mask: Optional[torch.Tensor] = None,
         ss_prob: float = 1.0
     ) -> torch.Tensor:
         """
@@ -429,10 +435,7 @@ class OutputInterface(nn.Module):
         _, seq_len = target_tokens.shape
         device = grid_spikes.device
 
-        # 패딩 토큰 ID를 가져옵니다.
-        pad_token_id = self.token_embedding.padding_idx if self.token_embedding.padding_idx is not None else 0
-
-        # 디코더의 첫 입력은 항상 BOS 토큰
+        # 디코더의 첫 입력은 항상 BOS 토큰 (ID=1 가정)
         decoder_input_ids = torch.full((batch_size, 1), 1, dtype=torch.long, device=device)
 
         all_logits = []
@@ -449,41 +452,34 @@ class OutputInterface(nn.Module):
             
             # 3. 디코더를 한 스텝 실행하여 다음 토큰 로짓 예측
             decoder_output = self.transformer_decoder(
-                tgt=current_embeds,
-                memory=memory,
-                tgt_mask=tgt_mask
+                tgt=current_embeds, memory=memory, tgt_mask=tgt_mask
             )
-            logits_t = self.final_projection(decoder_output[:, -1, :]) # [B, vocab_size]
+            logits_t = self.final_projection(decoder_output[:, -1, :])
             all_logits.append(logits_t)
 
-            # 4. **[핵심 수정]** 스케줄 샘플링 및 패딩 처리를 위한 다음 입력 결정
+            # 4. 스케줄 샘플링을 위한 다음 입력 후보 결정
             use_teacher_forcing = torch.rand(1).item() < ss_prob
             
             if use_teacher_forcing:
-                # Teacher Forcing: 정답 토큰을 사용
-                chosen_input = target_tokens[:, t:t+1] # [B, 1]
+                chosen_input = target_tokens[:, t:t+1] # 정답 토큰
             else:
-                # Auto-regressive: 모델 자신의 예측을 사용
-                chosen_input = logits_t.argmax(dim=-1, keepdim=True) # [B, 1]
+                chosen_input = logits_t.argmax(dim=-1, keepdim=True) # 모델의 예측
 
-            # 5. **[핵심 수정]** attention_mask를 사용하여 실제 토큰과 패딩 토큰을 구분
-            # attention_mask가 없으면 모든 토큰을 실제 토큰으로 간주
-            if attention_mask is None:
-                is_real_token = torch.ones((batch_size, 1), dtype=torch.bool, device=device)
+            # 5. [핵심 수정] attention_mask를 사용하여 실제 다음 입력 결정
+            if attention_mask is not None:
+                # is_real_token: [B, 1] 형태, True이면 실제 토큰, False이면 패딩
+                is_real_token = attention_mask[:, t:t+1]
+                
+                # 패딩 위치를 채울 패딩 토큰 텐서
+                padding_input = torch.full_like(chosen_input, self.pad_token_id)
+                
+                # 실제 토큰 위치에는 chosen_input을, 패딩 위치에는 padding_input을 사용
+                next_input_id = torch.where(is_real_token, chosen_input, padding_input)
             else:
-                is_real_token = attention_mask[:, t:t+1] # [B, 1], True=실제, False=패딩
-
-            # 패딩 토큰을 담은 텐서 준비
-            padding_input = torch.full_like(chosen_input, pad_token_id)
+                # attention_mask가 없으면 모두 실제 토큰으로 간주
+                next_input_id = chosen_input
             
-            # 실제 토큰 위치에는 'chosen_input'을, 패딩 위치에는 'padding_input'을 사용
-            next_input_id = torch.where(
-                is_real_token,
-                chosen_input,
-                padding_input
-            )
-            
-            # 다음 입력을 기존 시퀀스에 추가
+            # 6. 다음 루프를 위해 입력 시퀀스 업데이트
             decoder_input_ids = torch.cat([decoder_input_ids, next_input_id], dim=1)
 
         output_logits = torch.stack(all_logits, dim=1)

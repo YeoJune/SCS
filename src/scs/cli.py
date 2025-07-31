@@ -324,6 +324,7 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
         # 3. 데이터 로더 생성
         logger.info("📊 데이터 로더 생성 중...")
         tokenizer = SCSTokenizer(config["data_loading"]["tokenizer"]["name"])
+        pad_token_id = tokenizer.tokenizer.pad_token_id
         dataset_name = get_dataset_name_from_config(config, logger)
         
         task_config = config.get("task", {})
@@ -352,6 +353,8 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
         logger.info("🧠 SCS 모델 생성 중...")
         config["io_system"]["input_interface"]["vocab_size"] = tokenizer.vocab_size
         config["io_system"]["output_interface"]["vocab_size"] = tokenizer.vocab_size
+        config["io_system"]["output_interface"]["pad_token_id"] = pad_token_id
+
         model = ModelBuilder.build_scs_from_config(config, device=device)
         
         total_params = sum(p.numel() for p in model.parameters())
@@ -362,7 +365,6 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
 
         # 5. 학습 시스템 구성
         logger.info("⚙️ 학습 시스템 구성 중...")
-        pad_token_id = tokenizer.tokenizer.pad_token_id
         
         filtered_config, raw_config = extract_and_normalize_training_config(config)
         
@@ -550,6 +552,7 @@ def evaluate_mode(args: argparse.Namespace):
         # 4. 데이터 로더 생성
         logger.info("📊 데이터 로더 생성 중...")
         tokenizer = SCSTokenizer(config["data_loading"]["tokenizer"]["name"])
+        pad_token_id = tokenizer.tokenizer.pad_token_id
         dataset_name = get_dataset_name_from_config(config, logger)
         
         test_loader = create_dataloader(
@@ -564,13 +567,13 @@ def evaluate_mode(args: argparse.Namespace):
         logger.info("🧠 모델 복원 중...")
         config["io_system"]["input_interface"]["vocab_size"] = tokenizer.vocab_size
         config["io_system"]["output_interface"]["vocab_size"] = tokenizer.vocab_size
+        config["io_system"]["output_interface"]["pad_token_id"] = pad_token_id
         
         model = load_model_with_checkpoint(config, checkpoint_path, device, logger)
         logger.info("✅ 모델 복원 완료")
 
         # 6. 트레이너 생성 및 평가
         logger.info("📈 평가 실행 중...")
-        pad_token_id = tokenizer.tokenizer.pad_token_id
         
         filtered_config, _ = extract_and_normalize_training_config(config)
         

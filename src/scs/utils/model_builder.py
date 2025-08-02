@@ -105,27 +105,30 @@ class ModelBuilder:
                 vocab_size=io_config["input_interface"]["vocab_size"],
                 grid_height=input_h,
                 grid_width=input_w,
-                embedding_dim=io_config["input_interface"]["embedding_dim"],
-                max_seq_len=io_config["input_interface"]["max_seq_len"],
-                num_heads=io_config["input_interface"]["num_heads"],
-                use_positional_encoding=io_config["input_interface"]["positional_encoding"],
+                embedding_dim=io_config["input_interface"].get("embedding_dim", 512),
+                max_seq_len=io_config["input_interface"].get("max_seq_len", 128),
+                num_heads=io_config["input_interface"].get("num_heads", 8),
+                use_positional_encoding=io_config["input_interface"].get(
+                    "use_positional_encoding", 
+                    io_config["input_interface"].get("positional_encoding", True)
+                ),
                 device=device
             )
             
-            output_interface = OutputInterface(
-                vocab_size=io_config["output_interface"]["vocab_size"],
-                grid_height=output_h,
-                grid_width=output_w,
-                pad_token_id=config["io_system"]["output_interface"]["pad_token_id"],
-                embedding_dim=io_config["output_interface"]["embedding_dim"],
-                max_output_len=io_config["output_interface"]["max_output_len"],
-                num_heads=io_config["output_interface"]["num_heads"],
-                num_decoder_layers=io_config["output_interface"]["num_decoder_layers"],
-                dim_feedforward=io_config["output_interface"]["dim_feedforward"],
-                dropout=io_config["output_interface"]["dropout"],
+            input_interface = InputInterface(
+                vocab_size=io_config["input_interface"]["vocab_size"],
+                grid_height=input_h,
+                grid_width=input_w,
+                embedding_dim=io_config["input_interface"].get("embedding_dim", 512),
+                max_seq_len=io_config["input_interface"].get("max_seq_len", 128),
+                num_heads=io_config["input_interface"].get("num_heads", 8),
+                use_positional_encoding=io_config["input_interface"].get(
+                    "use_positional_encoding", 
+                    io_config["input_interface"].get("positional_encoding", True)
+                ),
                 device=device
             )
-            
+                        
             # --- 단계 4: 적응적 타이밍 객체 생성 ---
             timing_config = config.get("adaptive_output_timing", config.get("timing", {}))
             output_timing = AdaptiveOutputTiming(
@@ -135,7 +138,8 @@ class ModelBuilder:
                 confidence_threshold=timing_config.get("confidence_threshold", 0.8),
                 stability_window=timing_config.get("stability_window", 10),
                 start_output_threshold=timing_config.get("start_output_threshold", 0.5),
-                min_output_length=timing_config.get("min_output_length", 10)  # 새로 추가
+                min_output_length=timing_config.get("min_output_length", 10),
+                force_fixed_length=timing_config.get("force_fixed_length", False)
             )
             
             # --- 단계 5: 최종 SCS 시스템 조립 ---
@@ -174,7 +178,7 @@ class ModelBuilder:
         # 필수 최상위 섹션 확인
         required_sections = [
             "system_roles", "brain_regions", "axonal_connections", 
-            "spike_dynamics", "connectivity", "io_system", "timing"
+            "spike_dynamics", "connectivity", "io_system"
         ]
         
         for section in required_sections:
@@ -236,5 +240,48 @@ class ModelBuilder:
                         errors.append(f"연결 {i}의 source '{source}'가 brain_regions에 정의되지 않았습니다.")
                     if target and target not in available_nodes:
                         errors.append(f"연결 {i}의 target '{target}'가 brain_regions에 정의되지 않았습니다.")
+        
+         # 타이밍 섹션 검증 추가
+        has_timing = "timing" in config
+        has_adaptive_timing = "adaptive_output_timing" in config
+        if not (has_timing or has_adaptive_timing):
+            errors.append("'timing' 또는 'adaptive_output_timing' 섹션이 필요합니다.")
+        
+        # IO System 상세 검증 추가
+        if "io_system" in config:
+            io_config = config["io_system"]
+            
+            # input_interface 필수 필드 검증
+            if "input_interface" in io_config:
+                input_required = ["embedding_dim", "max_seq_len", "num_heads"]
+                for field in input_required:
+                    if field not in io_config["input_interface"]:
+                        errors.append(f"io_system.input_interface에 '{field}' 필드가 필요합니다.")
+            else:
+                errors.append("io_system에 'input_interface' 섹션이 필요합니다.")
+            
+            # output_interface 필수 필드 검증  
+            if "output_interface" in io_config:
+                output_required = ["embedding_dim", "max_output_len", "num_heads", "num_decoder_layers"]
+                for field in output_required:
+                    if field not in io_config["output_interface"]:
+                        errors.append(f"io_system.output_interface에 '{field}' 필드가 필요합니다.")
+            else:
+                errors.append("io_system에 'output_interface' 섹션이 필요합니다.")
+        
+        # 학습 설정 검증 추가
+        learning_config = config.get("learning", config.get("training", {}))
+        if learning_config:
+            # 필수 학습 파라미터 확인
+            required_learning = ["epochs", "max_clk_training"]
+            learning_rate_variants = ["learning_rate", "base_learning_rate"]
+            
+            for field in required_learning:
+                if field not in learning_config:
+                    errors.append(f"학습 설정에 '{field}' 필드가 필요합니다.")
+            
+            # learning_rate 또는 base_learning_rate 중 하나는 있어야 함
+            if not any(variant in learning_config for variant in learning_rate_variants):
+                errors.append("학습 설정에 'learning_rate' 또는 'base_learning_rate' 필드가 필요합니다.")
         
         return errors

@@ -18,7 +18,7 @@ from .metric import SCSMetrics
 
 @dataclass
 class TrainingConfig:
-    """학습 설정"""
+    """학습 설정 - 모든 파라미터 포함"""
     epochs: int = 15
     learning_rate: float = 1e-3
     weight_decay: float = 1e-4
@@ -27,13 +27,12 @@ class TrainingConfig:
     save_every: int = 10
     early_stopping_patience: int = 20
     device: str = "cuda"
-    max_clk_training: int = 250  # 학습 시 고정 CLK
-    pad_token_id: int = 0  # 패딩 토큰 ID
-    use_scheduled_sampling: bool = False      # 스케줄 샘플링 사용 여부
-    ss_start_prob: float = 1.0                # 시작 시 Teacher Forcing 확률 (epsilon)
-    ss_end_prob: float = 0.05                 # 종료 시 Teacher Forcing 확률
-    ss_decay_epochs: int = 10                 # 확률이 감소하는 데 걸리는 에포크 수
-
+    max_clk_training: int = 250
+    pad_token_id: int = 0
+    use_scheduled_sampling: bool = False
+    ss_start_prob: float = 1.0
+    ss_end_prob: float = 0.05
+    ss_decay_epochs: int = 10
 
 class SCSTrainer:
     """SCS 배치 처리 최적화 학습 시스템"""
@@ -169,7 +168,7 @@ class SCSTrainer:
         """최고 성능 모델 저장 (설정 정보 포함)"""
         best_model_path = f"{save_path}/best_model.pt"
         
-        # TrainingConfig를 딕셔너리로 변환하여 저장 (pickle 문제 해결)
+        # TrainingConfig를 딕셔너리로 변환하여 저장 (전체 필드 포함)
         training_config_dict = {
             'epochs': self.config.epochs,
             'learning_rate': self.config.learning_rate,
@@ -180,7 +179,11 @@ class SCSTrainer:
             'early_stopping_patience': self.config.early_stopping_patience,
             'device': self.config.device,
             'max_clk_training': self.config.max_clk_training,
-            'pad_token_id': self.config.pad_token_id
+            'pad_token_id': self.config.pad_token_id,
+            'use_scheduled_sampling': self.config.use_scheduled_sampling,
+            'ss_start_prob': self.config.ss_start_prob,
+            'ss_end_prob': self.config.ss_end_prob,
+            'ss_decay_epochs': self.config.ss_decay_epochs,
         }
         
         checkpoint = {
@@ -188,10 +191,11 @@ class SCSTrainer:
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'best_loss': loss,
-            'training_config_dict': training_config_dict,  # 학습 설정
-            'model_config': getattr(self.model, 'config', None),  # 모델 자체 설정
+            'training_config_dict': training_config_dict,
+            'model_config': getattr(self.model, 'config', None),
             'tokenizer_vocab_size': getattr(self.tokenizer, 'vocab_size', None) if self.tokenizer else None,
-            'save_timestamp': datetime.now().isoformat()  # 저장 시간
+            'save_timestamp': datetime.now().isoformat(),
+            'current_ss_prob': getattr(self, 'current_ss_prob', None)
         }
         
         if self.scheduler:
@@ -205,7 +209,7 @@ class SCSTrainer:
         save_dir = Path(save_path)
         save_dir.mkdir(parents=True, exist_ok=True)
         
-        # TrainingConfig를 딕셔너리로 변환하여 저장
+        # TrainingConfig를 딕셔너리로 변환하여 저장 (확장된 필드 포함)
         training_config_dict = {
             'epochs': self.config.epochs,
             'learning_rate': self.config.learning_rate,
@@ -216,7 +220,12 @@ class SCSTrainer:
             'early_stopping_patience': self.config.early_stopping_patience,
             'device': self.config.device,
             'max_clk_training': self.config.max_clk_training,
-            'pad_token_id': self.config.pad_token_id
+            'pad_token_id': self.config.pad_token_id,
+            # Scheduled Sampling 정보 추가
+            'use_scheduled_sampling': self.config.use_scheduled_sampling,
+            'ss_start_prob': self.config.ss_start_prob,
+            'ss_end_prob': self.config.ss_end_prob,
+            'ss_decay_epochs': self.config.ss_decay_epochs,
         }
         
         checkpoint = {
@@ -227,10 +236,13 @@ class SCSTrainer:
             'training_config_dict': training_config_dict,  # 학습 설정
             'model_config': getattr(self.model, 'config', None),  # 모델 자체 설정
             'tokenizer_vocab_size': getattr(self.tokenizer, 'vocab_size', None) if self.tokenizer else None,
-            'save_timestamp': datetime.now().isoformat()  # 저장 시간
+            'save_timestamp': datetime.now().isoformat(),  # 저장 시간
+            'current_ss_prob': getattr(self, 'current_ss_prob', None)  # 현재 SS 확률 저장
         }
+        
         if self.scheduler:
             checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()
+        
         torch.save(checkpoint, f"{save_path}/checkpoint_epoch_{epoch}.pt")
     
     def _log_progress(self, epoch: int, train_metrics: Dict[str, float], val_metrics: Optional[Dict[str, float]] = None):

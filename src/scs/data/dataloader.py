@@ -77,13 +77,16 @@ class SCSDataLoader:
         dataset_name: str,
         split: str = "train",
         batch_size: int = 8,
-        shuffle: bool = True,
+        shuffle: bool = None,
         max_length: int = 128,
         num_workers: int = 0,
         processor=None,
         tokenizer=None,
         max_samples=None,
     ):
+        if shuffle is None:
+            shuffle = (split == "train")
+            
         # 토크나이저 생성 (인자로 받지 않으면 기본 생성)
         if tokenizer is None:
             tokenizer = SCSTokenizer()

@@ -1,50 +1,23 @@
 # configs/base_model.yaml
-# SCS 기본 모델 설정 - 새로운 선언적 조립 구조
+# SCS 기본 모델 설정 - 표준화된 구조
 
-# 시스템 역할 정의 (새로 추가)
+# === 시스템 역할 정의 ===
 system_roles:
-  input_node: "PFC"
-  output_node: "PFC"
+  input_node: "IN"
+  output_node: "OUT"
 
-# 시스템 설정
-system:
-  clk_frequency: 1000 # 1000Hz (1ms per CLK)
-  device: "auto" # auto, cuda, cpu, mps
-  precision: "float32"
-  random_seed: 42
-
-  # 배치 처리 설정
-  enable_batch_processing: true
-  default_batch_size: 2
-  max_clk_training: 250 # 학습 시 고정 CLK 수
-
-  # 메모리 최적화
-  gradient_checkpointing: false
-  mixed_precision: false
-
-# 뇌 영역별 설정 (새로운 형식: grid_size 배열 사용)
+# === 뇌 영역 구성 (단순한 IN→OUT 구조) ===
 brain_regions:
-  PFC:
-    grid_size: [32, 16]  # [height, width]
-    decay_rate: 0.95 # 긴 지속성 (작업 기억)
-    distance_tau: 1.5 # 빠른 감쇠
-
-  ACC:
-    grid_size: [16, 16]  # [height, width]
-    decay_rate: 0.88 # 빠른 반응 (갈등 감지)
+  IN:
+    grid_size: [16, 16]
+    decay_rate: 0.95
+    distance_tau: 1.5
+  OUT:
+    grid_size: [16, 16]
+    decay_rate: 0.88
     distance_tau: 2.0
 
-  IPL:
-    grid_size: [24, 16]  # [height, width]
-    decay_rate: 0.92 # 중간 지속성 (관계 연합)
-    distance_tau: 2.5
-
-  MTL:
-    grid_size: [16, 16]  # [height, width]
-    decay_rate: 0.97 # 장기 기억
-    distance_tau: 3.0 # 넓은 연결
-
-# 스파이크 동역학 설정
+# === 스파이크 역학 ===
 spike_dynamics:
   threshold: 0.0
   refractory_base: 3
@@ -52,234 +25,89 @@ spike_dynamics:
   surrogate_beta: 10.0
   ema_alpha: 0.1
 
-# 연결성 설정
+# === 연결성 설정 ===
 connectivity:
-  # 지역적 연결
   local:
     max_distance: 5
 
-# 축삭 연결 설정 (차원 호환성 완벽 수정)
-axonal_connections:
-  excitatory_ratio: 0.8 # 80% 흥분성, 20% 억제성
-  connections:
-    # PFC [32, 16] → ACC [16, 16]
-    # Height: (32 + 0 - 17) / 1 + 1 = 16 ✓
-    # Width: (16 + 8 - 1) / 1 + 1 = 24 (문제) -> padding 조정 필요
-    # 수정: Height만 다운샘플링, Width는 유지
-    - source: "PFC"
-      target: "ACC"
-      kernel_size: 1   # 1x1 conv 사용
-      stride: 2        # Height만 2로 다운샘플링: 32/2 = 16 ✓
-      padding: 0       # Width는 유지: 16 ✓
-      dilation: 1
-      weight_scale: 0.8
-      # 실제 계산: Height = (32 + 0 - 1) / 2 + 1 = 16 ✓, Width = (16 + 0 - 1) / 2 + 1 = 8 (문제)
-
-    # 최종 수정: AdaptiveAvgPool2d 효과를 Conv2d로 구현
-    - source: "PFC"
-      target: "ACC"
-      kernel_size: 3   # 3x3 커널
-      stride: 2        # stride 2로 다운샘플링
-      padding: 1       # padding 1
-      dilation: 1
-      weight_scale: 0.8
-      # Height: (32 + 2 - 3) / 2 + 1 = 16 ✓
-      # Width: (16 + 2 - 3) / 2 + 1 = 8 (여전히 문제)
-
-    # 가장 간단한 해결책: 서로 다른 크기 노드는 1x1 conv + 적절한 stride 사용 불가
-    # 따라서 Interpolation이 필요하지만, 이는 Conv2d로 불가능
-    # 대안: 타겟 크기에 맞게 소스 노드 크기 조정 또는 별도 처리 필요
-    
-    # 현실적 해결책 1: PFC → ACC 연결에서 특별 처리 (17x1 커널 사용)
-    - source: "PFC"
-      target: "ACC"
-      kernel_size: 17  # Height를 정확히 16으로 만들기 위해
-      stride: 1
-      padding: 0       # Height: (32 + 0 - 17) / 1 + 1 = 16 ✓, Width: (16 + 0 - 17) / 1 + 1 = 0 (불가능)
-      dilation: 1
-      weight_scale: 0.8
-
-    # 최종 현실적 해결책: Average Pooling 효과
-    - source: "PFC"  
-      target: "ACC"
-      kernel_size: 2   # 2x2 커널로 절반 크기로
-      stride: 2        # stride 2
-      padding: 0       # Height: (32 + 0 - 2) / 2 + 1 = 16 ✓, Width: (16 + 0 - 2) / 2 + 1 = 8 (여전히 문제)
-      dilation: 1  
-      weight_scale: 0.8
-
-    # 실제 작동 가능한 PFC → ACC 연결 (Width 차원 문제 해결)
-    - source: "PFC"
-      target: "ACC"
-      kernel_size: 1   # 1x1 conv
-      stride: 1        # stride 1 유지
-      padding: 8       # Height: (32 + 16 - 1) / 1 + 1 = 48 (문제), Width: (16 + 16 - 1) / 1 + 1 = 32 (문제)
-      dilation: 1
-      weight_scale: 0.8
-
-# 결론: Conv2d만으로는 임의의 크기 변환이 불가능하므로, 
-# 실용적 해결책으로 노드 크기를 조정하거나 별도의 크기 변환 레이어가 필요합니다.
-
-# 수정된 연결 (실제 작동 가능한 버전)
+# === 축삭 연결 (IN→OUT 단일 연결) ===
 axonal_connections:
   excitatory_ratio: 0.8
   connections:
-    # PFC [32, 16] → ACC [16, 16]: Height 절반으로 축소
-    - source: "PFC"
-      target: "ACC"
-      kernel_size: 2   # 2x2 average pooling 효과  
-      stride: 2        # Height: 32/2 = 16 ✓, Width: 16/2 = 8 (문제)
-      padding: 0
-      dilation: 1
-      weight_scale: 0.8
-      # 이것도 Width가 맞지 않음 (8 != 16)
-
-    # 최종 해결책: 크기 변환이 복잡한 연결은 제거하고 같은 크기끼리만 연결
-    # 또는 노드 크기를 호환되도록 수정
-
-# 최종 수정: 모든 노드를 16x16으로 통일하여 호환성 확보
-brain_regions:
-  PFC:
-    grid_size: [16, 16]  # 크기 통일
-    decay_rate: 0.95
-    distance_tau: 1.5
-  ACC:
-    grid_size: [16, 16]
-    decay_rate: 0.88  
-    distance_tau: 2.0
-  IPL:
-    grid_size: [16, 16]  # 크기 통일
-    decay_rate: 0.92
-    distance_tau: 2.5
-  MTL:
-    grid_size: [16, 16]
-    decay_rate: 0.97
-    distance_tau: 3.0
-
-# 축삭 연결 설정 (모든 노드가 16x16으로 통일됨)
-axonal_connections:
-  excitatory_ratio: 0.8
-  connections:
-    # 모든 연결이 16x16 → 16x16이므로 크기 유지만 하면 됨
-    - source: "PFC"
-      target: "ACC"
-      kernel_size: 3   # (16 + 2 - 3) / 1 + 1 = 16 ✓
+    - source: "IN"
+      target: "OUT"
+      kernel_size: 3
       stride: 1
       padding: 1
       dilation: 1
       weight_scale: 0.8
 
-    - source: "PFC"
-      target: "IPL"
-      kernel_size: 5   # (16 + 4 - 5) / 1 + 1 = 16 ✓
-      stride: 1
-      padding: 2
-      dilation: 1
-      weight_scale: 0.6
-
-    - source: "ACC"
-      target: "MTL"
-      kernel_size: 3   # (16 + 2 - 3) / 1 + 1 = 16 ✓
-      stride: 1
-      padding: 1
-      dilation: 2      # dilation 사용으로 넓은 범위 연결
-      weight_scale: 0.7
-
-    - source: "IPL"
-      target: "MTL"
-      kernel_size: 1   # (16 + 0 - 1) / 1 + 1 = 16 ✓
-      stride: 1
-      padding: 0
-      dilation: 1
-      weight_scale: 0.5
-
-# 입출력 시스템
+# === IO 시스템 ===
 io_system:
   input_interface:
-    vocab_size: 50000
     embedding_dim: 512
-    max_seq_len: 256
+    max_seq_len: 128
     num_heads: 8
-    positional_encoding: true
-
+    use_positional_encoding: true
   output_interface:
-    vocab_size: 50000
-    embedding_dim: 512
-    max_output_len: 256
+    embedding_dim: 256
+    max_output_len: 128
     num_heads: 4
     num_decoder_layers: 2
     dim_feedforward: 1024
     dropout: 0.1
 
-# 적응적 타이밍
-timing:
-  min_processing_clk: 50 # 50ms
-  max_processing_clk: 500 # 500ms
+# === 적응적 출력 타이밍 ===
+adaptive_output_timing:
+  min_processing_clk: 100
+  max_processing_clk: 500
   convergence_threshold: 0.1
-  confidence_threshold: 0.7
+  confidence_threshold: 0.8
   stability_window: 10
   start_output_threshold: 0.5
+  min_output_length: 10
+  force_fixed_length: false
 
-# 학습 메커니즘
+# === 학습 설정 ===
 learning:
-  base_learning_rate: 1e-3
-  optimizer: "Adam"
+  epochs: 15
+  learning_rate: 1e-3
+  weight_decay: 1e-4
+  gradient_clip_norm: 1.0
+  eval_every: 3
+  save_every: 10
+  early_stopping_patience: 20
+  max_clk_training: 250
+  optimizer: "adamw"
 
-  # 배치 학습 설정
-  batch_size: 2
-  max_sequence_length: 128
-  gradient_accumulation_steps: 1
-  max_grad_norm: 1.0
+  # Scheduled Sampling
+  use_scheduled_sampling: false
+  ss_start_prob: 1.0
+  ss_end_prob: 0.05
+  ss_decay_epochs: 10
 
-  # 학습 스케줄러
-  scheduler:
-    type: "cosine" # linear, cosine, constant
-    warmup_steps: 1000
-    total_steps: 10000
+  # 손실 함수 파라미터
+  spike_reg_weight: 0.0
+  temporal_weight: 0.0
+  length_penalty_weight: 0.0
+  target_spike_rate: 0.1
+  timing_weight: 0.1
+  start_threshold: 0.5
+  confidence_threshold: 0.7
 
-  # K-hop 제한 역전파
-  k_hop_limit: 2
-
-  # 신경조절 신호
-  neuromodulation:
-    dopamine_sensitivity: 2.0
-    acetylcholine_sensitivity: 3.0
-    stdp_modulation_strength: 0.1
-
-  # STDP (기본 비활성화)
-  stdp:
-    enabled: false
-    level: 1 # 1: 노드 내부만, 2: 층간 포함
-    tau_pos: 20.0
-    tau_neg: 20.0
-    learning_rate: 1e-6
-    weight_limits: [0.0, 0.1]
-    max_weight_change: 0.001
-    update_frequency: 10
-
-# 데이터 로딩 설정
+# === 데이터 로딩 ===
 data_loading:
-  batch_size: 2
-  shuffle: true
-  num_workers: 4
-  pin_memory: true
-  drop_last: false
-
-  # 토큰화 설정
+  batch_size: 8
+  num_workers: 0
   tokenizer:
     name: "bert-base-uncased"
     max_length: 128
-    padding: true
-    truncation: true
 
-  # 데이터셋별 설정
-  datasets:
-    train:
-      path: "data/train"
-      max_samples: null
-    validation:
-      path: "data/val"
-      max_samples: 1000
-    test:
-      path: "data/test"
-      max_samples: 500
+# === 작업 설정 ===
+task:
+  dataset_name: "datatune/LogiQA2.0"
+  task_type: "auto"
+
+# === 평가 설정 ===
+evaluation:
+  save_examples: 10

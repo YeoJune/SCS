@@ -238,9 +238,11 @@ def get_dataset_name_from_config(config: Dict[str, Any], logger) -> str:
     """설정 파일에서 데이터셋 이름 추출 (다양한 형식 지원)"""
     dataset_name = None
     
-    # 우선순위에 따라 데이터셋 이름 탐색
+    # 우선순위에 따라 데이터셋 이름 탐색 (순서 중요)
     if "task" in config and "dataset_name" in config["task"]:
         dataset_name = config["task"]["dataset_name"]
+    elif "data_loading" in config and "dataset_name" in config["data_loading"]:
+        dataset_name = config["data_loading"]["dataset_name"]
     elif "data" in config and "dataset_name" in config["data"]:
         dataset_name = config["data"]["dataset_name"]  
     elif "dataset_name" in config:
@@ -259,28 +261,36 @@ def extract_and_normalize_training_config(config: Dict[str, Any]) -> Tuple[Dict[
     # config 매핑 - base_model.yaml은 "learning", phase2는 "training" 사용
     raw_config = config.get("learning", config.get("training", {})).copy()
     
-    # 파라미터 이름 정규화
+    # 파라미터 이름 정규화 (확장)
     param_mapping = {
         "base_learning_rate": "learning_rate",
         "max_grad_norm": "gradient_clip_norm", 
         "eval_every_n_epochs": "eval_every",
-        "save_every_n_epochs": "save_every"
+        "save_every_n_epochs": "save_every",
+        # 새로 추가:
+        "use_schedule_sampling": "use_scheduled_sampling",
+        "scheduled_sampling_start": "ss_start_prob",
+        "scheduled_sampling_end": "ss_end_prob",
+        "scheduled_sampling_decay": "ss_decay_epochs",
     }
     
     for old_name, new_name in param_mapping.items():
         if old_name in raw_config:
             raw_config[new_name] = raw_config.pop(old_name)
     
-    # TrainingConfig가 허용하는 파라미터만 필터링
+    # TrainingConfig가 허용하는 파라미터 확장
     valid_params = {
         "epochs", "learning_rate", "weight_decay", "gradient_clip_norm",
-        "eval_every", "save_every", "early_stopping_patience", "max_clk_training"
+        "eval_every", "save_every", "early_stopping_patience", "max_clk_training",
+        # 새로 추가:
+        "use_scheduled_sampling", "ss_start_prob", "ss_end_prob", "ss_decay_epochs"
     }
     filtered_config = {k: v for k, v in raw_config.items() if k in valid_params}
     
-    # 타입 변환 - YAML에서 문자열로 로드된 숫자 값들을 적절한 타입으로 변환
-    float_params = ["learning_rate", "weight_decay", "gradient_clip_norm"]
-    int_params = ["epochs", "eval_every", "save_every", "early_stopping_patience", "max_clk_training"]
+    # 타입 변환 확장
+    float_params = ["learning_rate", "weight_decay", "gradient_clip_norm", "ss_start_prob", "ss_end_prob"]
+    int_params = ["epochs", "eval_every", "save_every", "early_stopping_patience", "max_clk_training", "ss_decay_epochs"]
+    bool_params = ["use_scheduled_sampling"]  # 새로 추가
     
     for param in float_params:
         if param in filtered_config:
@@ -289,6 +299,10 @@ def extract_and_normalize_training_config(config: Dict[str, Any]) -> Tuple[Dict[
     for param in int_params:
         if param in filtered_config:
             filtered_config[param] = int(filtered_config[param])
+    
+    for param in bool_params:
+        if param in filtered_config:
+            filtered_config[param] = bool(filtered_config[param])
     
     return filtered_config, raw_config
 

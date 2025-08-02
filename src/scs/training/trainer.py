@@ -510,26 +510,7 @@ class SCSTrainer:
                 )
                 
                 if output_logits.shape[1] > 0:
-                    # 온도 샘플링으로 다양성 추가
-                    temperature = 0.8
-                    if temperature > 0:
-                        scaled_logits = output_logits[0] / temperature  # [seq_len, vocab_size]
-                        probs = torch.softmax(scaled_logits, dim=-1)
-                        
-                        generated_tokens = []
-                        for pos in range(scaled_logits.shape[0]):
-                            # Top-k 샘플링
-                            k = 20
-                            top_probs, top_indices = probs[pos].topk(k)
-                            top_probs = top_probs / top_probs.sum()
-                            
-                            sampled_idx = torch.multinomial(top_probs, 1).item()
-                            sampled_token = top_indices[sampled_idx].item()
-                            generated_tokens.append(sampled_token)
-                        
-                        generated_tokens = torch.tensor(generated_tokens, device=device)
-                    else:
-                        generated_tokens = output_logits[0].argmax(dim=-1)
+                    generated_tokens = output_logits[0].argmax(dim=-1)  # [seq_len]
                     
                     return self._decode_tokens_to_text(generated_tokens)
                 else:

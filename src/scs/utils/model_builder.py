@@ -128,6 +128,20 @@ class ModelBuilder:
                 ),
                 device=device
             )
+
+            output_interface = OutputInterface(
+                vocab_size=io_config["output_interface"]["vocab_size"],
+                grid_height=output_h,
+                grid_width=output_w,
+                pad_token_id=config["io_system"]["output_interface"]["pad_token_id"],
+                embedding_dim=io_config["output_interface"].get("embedding_dim", 256),
+                max_output_len=io_config["output_interface"].get("max_output_len", 128),
+                num_heads=io_config["output_interface"].get("num_heads", 4),
+                num_decoder_layers=io_config["output_interface"].get("num_decoder_layers", 2),
+                dim_feedforward=io_config["output_interface"].get("dim_feedforward", 1024),
+                dropout=io_config["output_interface"].get("dropout", 0.1),
+                device=device
+            )
                         
             # --- 단계 4: 적응적 타이밍 객체 생성 ---
             timing_config = config.get("adaptive_output_timing", config.get("timing", {}))

@@ -63,11 +63,51 @@ class BaseDataset(Dataset):
         except Exception as e:
             logger.error(f"Failed to load dataset {self.dataset_name}: {e}")
             return []
+    
+    def _process_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
+        """단일 아이템 처리 - 서브클래스에서 오버라이드"""
+        return {
+            'input_text': str(item),
+            'target_text': "unknown",
+            'metadata': {'index': idx}
+        }
+    
+    def _tokenize_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        """토큰화"""
+        input_tokens = self.tokenizer.tokenize(item['input_text'], self.max_length)
+        target_tokens = self.tokenizer.tokenize(item['target_text'], self.max_length // 4)
+        
+        return {
+            'input_tokens': input_tokens,
+            'target_tokens': target_tokens,
+            'input_text': item['input_text'],
+            'target_text': item['target_text'],
+            'metadata': item.get('metadata', {})
+        }
+    
+    def __len__(self) -> int:
+        return len(self.data)
+    
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        try:
+            return self._tokenize_item(self.data[idx])
+        except Exception as e:
+            logger.warning(f"Error in __getitem__[{idx}]: {e}")
+            # 폴백 아이템 반환
+            return {
+                'input_tokens': [0] * 10,  # 기본 토큰
+                'target_tokens': [0] * 5,
+                'input_text': "error",
+                'target_text': "error",
+                'metadata': {'index': idx, 'error': True}
+            }
+
+
 class LogiQADataset(BaseDataset):
     """LogiQA 전용 데이터셋"""
     
-    def __init__(self, tokenizer: SCSTokenizer, split: str = "train", num_samples: int = -1):
-        super().__init__("datatune/LogiQA2.0", tokenizer, split, max_length=256, num_samples=num_samples)
+    def __init__(self, tokenizer: SCSTokenizer, split: str = "train", max_samples: Optional[int] = None):
+        super().__init__("datatune/LogiQA2.0", tokenizer, split, max_length=256, max_samples=max_samples)
     
     def _process_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
         """LogiQA 아이템 처리"""

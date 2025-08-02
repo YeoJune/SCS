@@ -495,6 +495,11 @@ class SCSTrainer:
         self.model.eval()
         with torch.no_grad():
             try:
+                device = self.config.device
+                input_tokens = input_tokens.to(device)
+                if attention_mask is not None:
+                    attention_mask = attention_mask.to(device)
+                
                 # 실제 추론 실행
                 output_logits, processing_info = self.model(
                     input_schedule=input_tokens.unsqueeze(0),  # [1, seq_len]
@@ -522,7 +527,7 @@ class SCSTrainer:
                             sampled_token = top_indices[sampled_idx].item()
                             generated_tokens.append(sampled_token)
                         
-                        generated_tokens = torch.tensor(generated_tokens)
+                        generated_tokens = torch.tensor(generated_tokens, device=device)
                     else:
                         generated_tokens = output_logits[0].argmax(dim=-1)
                     
@@ -534,36 +539,67 @@ class SCSTrainer:
                 print(f"추론 중 오류: {e}")
                 return "[추론 오류]"
 
-    # 사용 방법 (메인 함수에서):
     def _extract_examples_from_batch(self, batch, output_logits, processing_info, batch_accuracy):
+        """배치에서 예시 데이터 추출 - 실제 추론 모드 사용"""
         examples = []
         batch_size = batch['input_tokens'].shape[0]
         
+        device = self.config.device
+        
         for i in range(batch_size):
-            input_text = self._decode_tokens_to_text(batch['input_tokens'][i])
-            target_text = self._decode_tokens_to_text(batch['target_tokens'][i])
-            
-            # *** 실제 추론으로 생성 ***
-            attention_mask = batch['attention_mask'][i] if 'attention_mask' in batch else None
-            generated_text = self._generate_text_for_sample(
-                batch['input_tokens'][i], 
-                attention_mask
-            )
-            
-            # 정확도는 원래 Teacher Forcing 결과 사용
-            individual_accuracy = self._calculate_individual_accuracy(
-                output_logits[i:i+1], 
-                batch['target_tokens'][i:i+1]
-            )
-            
-            example_info = {
-                'input_text': input_text,
-                'target_text': target_text,
-                'generated_text': generated_text,  # 실제 추론 결과!
-                'accuracy': individual_accuracy,
-                'generation_method': 'real_inference'
-            }
-            examples.append(example_info)
+            try:
+                input_text = self._decode_tokens_to_text(batch['input_tokens'][i])
+                target_text = self._decode_tokens_to_text(batch['target_tokens'][i])
+                
+                # *** 실제 추론으로 생성 ***
+                input_tokens_cpu = batch['input_tokens'][i]  # CPU에서 유지
+                attention_mask_cpu = batch['attention_mask'][i] if 'attention_mask' in batch else None
+                
+                generated_text = self._generate_text_for_sample(
+                    input_tokens_cpu,  # _generate_text_for_sample 내부에서 device로 이동
+                    attention_mask_cpu
+                )
+                
+                # 정확도는 원래 Teacher Forcing 결과 사용
+                individual_accuracy = self._calculate_individual_accuracy(
+                    output_logits[i:i+1], 
+                    batch['target_tokens'][i:i+1]
+                )
+                
+                example_info = {
+                    'input_text': input_text,
+                    'target_text': target_text,
+                    'generated_text': generated_text,  # 실제 추론 결과!
+                    'accuracy': individual_accuracy,
+                    'processing_clk': processing_info.get('processing_clk', 'unknown'),
+                    'tokens_generated': processing_info.get('tokens_generated', 'unknown'),
+                    'convergence_achieved': processing_info.get('convergence_achieved', False),
+                    'batch_accuracy': batch_accuracy,
+                    'generation_method': 'real_inference'
+                }
+                examples.append(example_info)
+                
+            except Exception as e:
+                self.logger.warning(f"예시 추출 중 오류 (배치 {i}): {e}")
+                # 폴백: 기본 정보만 저장
+                try:
+                    input_text = self._decode_tokens_to_text(batch['input_tokens'][i])
+                    target_text = self._decode_tokens_to_text(batch['target_tokens'][i])
+                    
+                    example_info = {
+                        'input_text': input_text,
+                        'target_text': target_text,
+                        'generated_text': "[추론 실패]",
+                        'accuracy': 0.0,
+                        'processing_clk': 'error',
+                        'tokens_generated': 0,
+                        'convergence_achieved': False,
+                        'batch_accuracy': batch_accuracy,
+                        'generation_method': 'error'
+                    }
+                    examples.append(example_info)
+                except:
+                    continue
         
         return examples
 

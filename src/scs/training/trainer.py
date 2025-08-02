@@ -510,8 +510,15 @@ class SCSTrainer:
                 target_text = self._decode_tokens_to_text(batch['target_tokens'][i])
                 
                 # 2. 생성된 텍스트 복원
-                generated_tokens = output_logits[i].argmax(dim=-1)  # [seq_len]
+                generated_tokens = output_logits[i].argmax(dim=-1)
+                
+                # 토큰이 정말 다른지 확인
+                print(f"Sample {i} first 5 tokens: {generated_tokens[:5].tolist()}")
+                print(f"Sample {i} tensor id: {id(generated_tokens)}")
+                
                 generated_text = self._decode_tokens_to_text(generated_tokens)
+                print(f"Sample {i} generated_text: '{generated_text}'")
+                print("---")
                 
                 # 3. 개별 샘플 정확도 계산
                 individual_accuracy = self._calculate_individual_accuracy(

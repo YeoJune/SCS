@@ -13,7 +13,6 @@ from .tokenizer import SCSTokenizer
 
 logger = logging.getLogger(__name__)
 
-
 class BaseDataset(Dataset):
     """범용 베이스 데이터셋 클래스"""
     
@@ -23,13 +22,13 @@ class BaseDataset(Dataset):
         tokenizer: SCSTokenizer,
         split: str = "train",
         max_length: int = 256,
-        max_samples: Optional[int] = None
+        num_samples: int = -1  # max_samples → num_samples로 변경, -1은 전체
     ):
         self.dataset_name = dataset_name
         self.tokenizer = tokenizer
         self.split = split
         self.max_length = max_length
-        self.max_samples = max_samples
+        self.num_samples = num_samples  # 변경
         
         logger.info(f"📦 Loading {dataset_name} ({split})...")
         self.data = self._load_and_process_data()
@@ -41,9 +40,12 @@ class BaseDataset(Dataset):
             # 데이터셋 로딩
             raw_dataset = load_dataset(self.dataset_name, split=self.split)
             
-            # 샘플 제한
-            if self.max_samples and len(raw_dataset) > self.max_samples:
-                raw_dataset = raw_dataset.select(range(self.max_samples))
+            # 샘플 개수 제한 (표준적인 방식)
+            if self.num_samples > 0 and len(raw_dataset) > self.num_samples:
+                raw_dataset = raw_dataset.select(range(self.num_samples))
+                logger.info(f"Dataset truncated to {self.num_samples} samples")
+            else:
+                logger.info(f"Using full dataset: {len(raw_dataset)} samples")
             
             # 데이터 처리
             processed_data = []
@@ -61,51 +63,11 @@ class BaseDataset(Dataset):
         except Exception as e:
             logger.error(f"Failed to load dataset {self.dataset_name}: {e}")
             return []
-    
-    def _process_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
-        """단일 아이템 처리 - 서브클래스에서 오버라이드"""
-        return {
-            'input_text': str(item),
-            'target_text': "unknown",
-            'metadata': {'index': idx}
-        }
-    
-    def _tokenize_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
-        """토큰화"""
-        input_tokens = self.tokenizer.tokenize(item['input_text'], self.max_length)
-        target_tokens = self.tokenizer.tokenize(item['target_text'], self.max_length // 4)
-        
-        return {
-            'input_tokens': input_tokens,
-            'target_tokens': target_tokens,
-            'input_text': item['input_text'],
-            'target_text': item['target_text'],
-            'metadata': item.get('metadata', {})
-        }
-    
-    def __len__(self) -> int:
-        return len(self.data)
-    
-    def __getitem__(self, idx: int) -> Dict[str, Any]:
-        try:
-            return self._tokenize_item(self.data[idx])
-        except Exception as e:
-            logger.warning(f"Error in __getitem__[{idx}]: {e}")
-            # 폴백 아이템 반환
-            return {
-                'input_tokens': [0] * 10,  # 기본 토큰
-                'target_tokens': [0] * 5,
-                'input_text': "error",
-                'target_text': "error",
-                'metadata': {'index': idx, 'error': True}
-            }
-
-
 class LogiQADataset(BaseDataset):
     """LogiQA 전용 데이터셋"""
     
-    def __init__(self, tokenizer: SCSTokenizer, split: str = "train", max_samples: Optional[int] = None):
-        super().__init__("datatune/LogiQA2.0", tokenizer, split, max_length=256, max_samples=max_samples)
+    def __init__(self, tokenizer: SCSTokenizer, split: str = "train", num_samples: int = -1):
+        super().__init__("datatune/LogiQA2.0", tokenizer, split, max_length=256, num_samples=num_samples)
     
     def _process_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
         """LogiQA 아이템 처리"""
@@ -162,12 +124,7 @@ class bAbIDataset(BaseDataset):
     """
     bAbI 전용 데이터셋 ('Muennighoff/babi' 버전 사용)
     """
-    
-    def __init__(self, tokenizer: SCSTokenizer, task_id: int = 1, split: str = "train", max_samples: Optional[int] = None):
-        """
-        Args:
-            task_id: bAbI의 20개 태스크 중 하나 (1~20)
-        """
+    def __init__(self, tokenizer: SCSTokenizer, task_id: int = 1, split: str = "train", num_samples: int = -1):
         assert 1 <= task_id <= 20, "task_id는 1과 20 사이여야 합니다."
         self.task_id = task_id
         
@@ -176,7 +133,7 @@ class bAbIDataset(BaseDataset):
             tokenizer=tokenizer, 
             split=split, 
             max_length=256,
-            max_samples=max_samples
+            num_samples=num_samples
         )
 
     def _load_and_process_data(self) -> List[Dict[str, Any]]:
@@ -189,11 +146,13 @@ class bAbIDataset(BaseDataset):
             filtered_dataset = raw_dataset.filter(lambda example: example['task'] == self.task_id)
             logger.info(f"Task {self.task_id} 필터링 완료: {len(filtered_dataset)}개 샘플")
             
-            # 3. 샘플 수 제한
-            if self.max_samples and len(filtered_dataset) > self.max_samples:
-                final_dataset = filtered_dataset.select(range(self.max_samples))
+            # 3. 샘플 수 제한 (표준적인 방식)
+            if self.num_samples > 0 and len(filtered_dataset) > self.num_samples:
+                final_dataset = filtered_dataset.select(range(self.num_samples))
+                logger.info(f"Dataset truncated to {self.num_samples} samples")
             else:
                 final_dataset = filtered_dataset
+                logger.info(f"Using full filtered dataset: {len(final_dataset)} samples")
 
             # 4. 각 아이템 처리
             processed_data = []
@@ -239,7 +198,6 @@ class bAbIDataset(BaseDataset):
         except Exception as e:
             logger.warning(f"bAbI 아이템 {idx} 처리 실패: {e}")
             return None
-
 class MultiDataset(BaseDataset):
     """다중 태스크 지원 데이터셋"""
     
@@ -249,10 +207,10 @@ class MultiDataset(BaseDataset):
         tokenizer: SCSTokenizer, 
         split: str = "train",
         task_type: str = "auto",
-        max_samples: Optional[int] = None
+        num_samples: int = -1
     ):
         self.task_type = task_type
-        super().__init__(dataset_name, tokenizer, split, max_samples=max_samples)
+        super().__init__(dataset_name, tokenizer, split, num_samples=num_samples)
     
     def _process_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
         """다중 태스크 아이템 처리"""
@@ -398,14 +356,14 @@ def create_dataset(
     dataset_name: str,
     tokenizer: SCSTokenizer,
     split: str = "train",
-    max_samples: Optional[int] = None,
+    num_samples: int = -1,  # max_samples → num_samples
     task_id: int = 1
 ) -> BaseDataset:
     """데이터셋 생성 팩토리 함수"""
     
     if "babi" in dataset_name.lower():
-        return bAbIDataset(tokenizer, task_id=task_id, split=split, max_samples=max_samples)
+        return bAbIDataset(tokenizer, task_id=task_id, split=split, num_samples=num_samples)
     elif "logiqa" in dataset_name.lower():
-        return LogiQADataset(tokenizer, split, max_samples)
+        return LogiQADataset(tokenizer, split, num_samples=num_samples)
     else:
-        return MultiDataset(dataset_name, tokenizer, split, max_samples=max_samples)
+        return MultiDataset(dataset_name, tokenizer, split, num_samples=num_samples)

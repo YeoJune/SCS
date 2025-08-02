@@ -95,6 +95,11 @@ learning:
   start_threshold: 0.5
   confidence_threshold: 0.7
 
+data:
+  train_samples: -1 # -1은 전체 데이터, 양수는 해당 개수만
+  val_samples: -1 # -1은 전체 데이터
+  test_samples: -1 # -1은 전체 데이터
+
 # === 데이터 로딩 ===
 data_loading:
   batch_size: 8

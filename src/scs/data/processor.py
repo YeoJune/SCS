@@ -24,22 +24,25 @@ class DataProcessor:
         split: str = "train",
         tokenizer: Optional[SCSTokenizer] = None,
         max_length: int = 256,
-        max_samples: Optional[int] = None,
-        task_id: int = 1  # bAbI용 파라미터 추가
+        num_samples: int = -1,
+        task_id: int = 1
     ):
-        """데이터셋 생성 - bAbI 지원 추가"""
+        """데이터셋 생성"""
         effective_tokenizer = tokenizer or self.tokenizer
         
         logger.info(f"Creating dataset: {dataset_name} ({split})")
+        if num_samples > 0:
+            logger.info(f"Limiting to {num_samples} samples")
+        else:
+            logger.info("Using full dataset")
         
         try:
-            # task_id 파라미터를 create_dataset에 전달
             dataset = create_dataset(
                 dataset_name=dataset_name,
                 tokenizer=effective_tokenizer,
                 split=split,
-                max_samples=max_samples,
-                task_id=task_id  # 새로 추가
+                num_samples=num_samples,  # 변경
+                task_id=task_id
             )
             
             logger.info(f"✅ Successfully created dataset with {len(dataset)} examples")

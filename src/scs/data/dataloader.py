@@ -71,38 +71,34 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
 
 class SCSDataLoader:
     """SCS용 배치 데이터 로더 (PyTorch DataLoader 래퍼)"""
-    
     def __init__(
         self,
         dataset_name: str,
         split: str = "train",
         batch_size: int = 8,
-        shuffle: bool = None,
+        shuffle: bool = True,
         max_length: int = 128,
         num_workers: int = 0,
         processor=None,
         tokenizer=None,
-        max_samples=None,
+        num_samples: int = -1,
         task_id: int = 1,
     ):
-        if shuffle is None:
-            shuffle = (split == "train")
-            
-        # 토크나이저 생성 (인자로 받지 않으면 기본 생성)
+        # 토크나이저 생성
         if tokenizer is None:
             tokenizer = SCSTokenizer()
         
-        # 데이터 프로세서 생성 (인자로 받지 않으면 기본 생성)
+        # 데이터 프로세서 생성
         if processor is None:
             processor = DataProcessor()
         
-        # 데이터셋 생성 - 새로운 방식 사용
+        # 데이터셋 생성
         self.dataset = processor.create_dataset(
             dataset_name=dataset_name,
             split=split,
             tokenizer=tokenizer,
             max_length=max_length,
-            max_samples=max_samples,
+            num_samples=num_samples,  # 변경
             task_id=task_id
         )
         
@@ -127,20 +123,22 @@ class SCSDataLoader:
     def batch_size(self) -> int:
         return self.dataloader.batch_size
 
-
 def create_dataloader(
     dataset_name: str,
     split: str = "train",
     batch_size: int = 8,
-    shuffle: bool = True,
+    shuffle: bool = None,
     max_length: int = 128,
     num_workers: int = 0,
     processor=None,
     tokenizer=None,
-    max_samples=None,
+    num_samples: int = -1,
     task_id: int = 1
 ) -> SCSDataLoader:
     """SCS 배치 데이터 로더 생성"""
+    
+    if shuffle is None:
+        shuffle = (split == "train")
     
     return SCSDataLoader(
         dataset_name=dataset_name,
@@ -151,6 +149,6 @@ def create_dataloader(
         num_workers=num_workers,
         processor=processor,
         tokenizer=tokenizer,
-        max_samples=max_samples,
+        num_samples=num_samples,
         task_id=task_id
     )

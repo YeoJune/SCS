@@ -95,10 +95,6 @@ axonal_connections:
 task:
   dataset_name: "datatune/LogiQA2.0"
   task_type: "reasoning"
-  max_samples:
-    train: 50
-    validation: 10
-    test: 10
 
 # === IO 시스템 부분 오버라이드 ===
 io_system:
@@ -109,7 +105,7 @@ io_system:
 
 # === 학습 설정 오버라이드 ===
 learning:
-  epochs: 20
+  epochs: 10
   learning_rate: 5e-4
   batch_size: 1
   max_clk_training: 250
@@ -141,6 +137,11 @@ data_loading:
   tokenizer:
     name: "bert-base-uncased"
     max_length: 256
+
+data:
+  train_samples: 200 # 200개로 제한
+  val_samples: 50 # 50개로 제한
+  test_samples: 50 # 50개로 제한
 
 # === 평가 설정 ===
 evaluation:

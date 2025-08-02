@@ -394,9 +394,13 @@ class SCSTrainer:
         else:
             self.patience_counter += 1
             return self.patience_counter >= self.config.early_stopping_patience
-    
     def evaluate(self, test_loader: DataLoader, save_examples: int = 10) -> Dict[str, Any]:
-        """테스트 평가 (배치 일관성 보장 + 예시 저장)
+        """완전히 재설계된 평가 시스템 - 순수 추론 모드만 사용
+        
+        설계 원칙:
+        1. 모든 평가를 실제 추론 모드로만 수행
+        2. 개별 샘플을 1-배치로 처리하여 완전한 일관성 확보
+        3. 배치 단위는 단순히 개별 결과의 집계
         
         Args:
             test_loader: 테스트 데이터 로더
@@ -407,185 +411,252 @@ class SCSTrainer:
         """
         self.model.eval()
         
-        total_loss = 0.0
-        total_accuracy = 0.0
-        total_comprehensive = 0.0
-        total_convergence = 0.0
-        total_efficiency = 0.0
-        num_batches = 0
-        
-        # 예시 데이터 수집용
+        # 개별 샘플 결과 누적용
+        all_sample_results = []
         saved_examples = []
+        
+        total_samples = 0
         
         with torch.no_grad():
             for batch_idx, batch in enumerate(test_loader):
-                # 배치 전체를 한번에 처리
-                input_tokens = batch['input_tokens'].to(self.device)
-                target_tokens = batch['target_tokens'].to(self.device)
-                attention_mask = batch['attention_mask'].to(self.device)
+                batch_size = batch['input_tokens'].shape[0]
+                print(f"\n=== 배치 {batch_idx} (크기: {batch_size}) 처리 중 ===")
                 
-                input_seq_len = input_tokens.shape[1]
-                target_seq_len = target_tokens.shape[1]
-                latest_possible_start = max(0, self.config.max_clk_training - target_seq_len - 1)
-                target_start_clk = min(input_seq_len, latest_possible_start)
-
-                # 배치 단위로 모델 실행 (항상 배치 출력 보장)
-                output_logits, processing_info = self.model(
-                    input_schedule=input_tokens,
-                    max_clk=self.config.max_clk_training,
-                    training=False,
-                    target_schedule=target_tokens,
-                    attention_mask=attention_mask,
-                    target_start_clk=target_start_clk  # **새로 추가**
-                )
-                
-                # 출력은 항상 [B, seq_len, vocab_size] 형태로 보장됨
-                assert output_logits.dim() == 3, f"예상 차원 [B, seq_len, vocab_size], 실제: {output_logits.shape}"
-                
-                # 배치 단위 손실 및 메트릭 계산
-                batch_loss = self.loss_fn(output_logits, target_tokens, processing_info)
-                batch_accuracy = SCSMetrics.accuracy(
-                    output_logits, 
-                    target_tokens, 
-                    pad_token_id=self.config.pad_token_id
-                )
-                
-                # 상세 메트릭들도 배치 단위로 계산
-                batch_comprehensive = SCSMetrics.comprehensive_score(processing_info)
-                batch_convergence = SCSMetrics.convergence_rate(processing_info)
-                batch_efficiency = SCSMetrics.processing_efficiency(processing_info)
-                
-                total_loss += batch_loss.item()
-                total_accuracy += batch_accuracy
-                total_comprehensive += batch_comprehensive
-                total_convergence += batch_convergence
-                total_efficiency += batch_efficiency
-                num_batches += 1
-                
-                # --- 예시 데이터 수집 로직 ---
-                if len(saved_examples) < save_examples:
-                    examples_to_save = self._extract_examples_from_batch(
-                        batch, output_logits, processing_info, batch_accuracy
+                # =====================================
+                # 배치를 개별 샘플로 분해하여 각각 순수 추론
+                # =====================================
+                for sample_idx in range(batch_size):
+                    sample_result = self._evaluate_single_sample_inference(
+                        batch, sample_idx, total_samples
                     )
-                    saved_examples.extend(examples_to_save)
                     
-                    # 목표 개수에 도달하면 저장 중단
-                    if len(saved_examples) >= save_examples:
-                        saved_examples = saved_examples[:save_examples]
+                    all_sample_results.append(sample_result)
+                    total_samples += 1
+                    
+                    # 예시 저장 (초기 몇 개만)
+                    if len(saved_examples) < save_examples:
+                        saved_examples.append(sample_result)
+                    
+                    # 진행 상황 출력
+                    if sample_idx < 3 or total_samples % 10 == 0:
+                        print(f"  샘플 {total_samples}: 정확도={sample_result['accuracy']:.3f}, "
+                            f"생성='{sample_result['generated_text'][:30]}...', "
+                            f"정답='{sample_result['target_text'][:30]}...'")
         
-        # 전체 결과 구성
+        # =====================================
+        # 전체 결과 집계
+        # =====================================
+        print(f"\n=== 전체 {total_samples}개 샘플 결과 집계 ===")
+        
+        # 정확도 계산
+        total_accuracy = sum(result['accuracy'] for result in all_sample_results) / len(all_sample_results)
+        
+        # 손실 계산 (있는 경우)
+        losses = [result['loss'] for result in all_sample_results if result['loss'] is not None]
+        avg_loss = sum(losses) / len(losses) if losses else 0.0
+        
+        # 기타 메트릭 계산
+        convergence_rate = sum(result['convergence_achieved'] for result in all_sample_results) / len(all_sample_results)
+        avg_processing_clk = sum(result['processing_clk'] for result in all_sample_results if isinstance(result['processing_clk'], (int, float))) / len(all_sample_results)
+        avg_tokens_generated = sum(result['tokens_generated'] for result in all_sample_results if isinstance(result['tokens_generated'], (int, float))) / len(all_sample_results)
+        
+        # 처리 효율성 (CLK 기반)
+        processing_efficiency = max(0.0, 1.0 - (avg_processing_clk / self.config.max_clk_training))
+        
+        # 종합 점수
+        comprehensive_score = (
+            0.6 * total_accuracy +  # 정확도 60%
+            0.2 * convergence_rate +  # 수렴율 20%
+            0.2 * processing_efficiency  # 효율성 20%
+        )
+        
         results = {
-            # 기존 메트릭들
-            'test_loss': total_loss / num_batches,
-            'test_accuracy': total_accuracy / num_batches,
-            'comprehensive_score': total_comprehensive / num_batches,
-            'convergence_rate': total_convergence / num_batches,
-            'processing_efficiency': total_efficiency / num_batches,
+            # 핵심 메트릭
+            'test_accuracy': total_accuracy,
+            'test_loss': avg_loss,
+            'comprehensive_score': comprehensive_score,
+            'convergence_rate': convergence_rate,
+            'processing_efficiency': processing_efficiency,
             
-            # 새로 추가: 예시 데이터
+            # 추가 통계
+            'avg_processing_clk': avg_processing_clk,
+            'avg_tokens_generated': avg_tokens_generated,
+            'total_samples_evaluated': total_samples,
+            
+            # 예시 데이터
             'examples': saved_examples,
             'num_examples_saved': len(saved_examples),
-            'total_batches_evaluated': num_batches
+            
+            # 디버깅용 전체 결과 (옵션)
+            'all_results': all_sample_results if total_samples <= 50 else None  # 50개 이하만 저장
         }
         
+        print(f"최종 결과: 정확도={total_accuracy:.4f}, 종합점수={comprehensive_score:.4f}")
+        
         return results
-    
-    def _generate_text_for_sample(self, input_tokens: torch.Tensor, attention_mask: torch.Tensor = None) -> str:
-        """단일 샘플에 대해 실제 추론으로 텍스트 생성"""
-        self.model.eval()
-        with torch.no_grad():
-            try:
-                device = self.config.device
-                input_tokens = input_tokens.to(device)
-                if attention_mask is not None:
-                    attention_mask = attention_mask.to(device)
-                
-                # 실제 추론 실행
-                output_logits, processing_info = self.model(
-                    input_schedule=input_tokens.unsqueeze(0),  # [1, seq_len]
-                    max_clk=self.config.max_clk_training,
-                    training=False,
-                    target_schedule=None,
-                    attention_mask=attention_mask.unsqueeze(0) if attention_mask is not None else None
-                )
-                
-                if output_logits.shape[1] > 0:
-                    generated_tokens = output_logits[0].argmax(dim=-1)  # [seq_len]
-                    
-                    return self._decode_tokens_to_text(generated_tokens)
-                else:
-                    return "[빈 출력]"
-                    
-            except Exception as e:
-                print(f"추론 중 오류: {e}")
-                return "[추론 오류]"
 
-    def _extract_examples_from_batch(self, batch, output_logits, processing_info, batch_accuracy):
-        """배치에서 예시 데이터 추출 - 실제 추론 모드 사용"""
-        examples = []
-        batch_size = batch['input_tokens'].shape[0]
+    def _evaluate_single_sample_inference(self, batch: Dict[str, torch.Tensor], sample_idx: int, global_idx: int) -> Dict[str, Any]:
+        """단일 샘플을 순수 추론 모드로 평가
         
-        device = self.config.device
-        
-        for i in range(batch_size):
-            try:
-                input_text = self._decode_tokens_to_text(batch['input_tokens'][i])
-                target_text = self._decode_tokens_to_text(batch['target_tokens'][i])
-                
-                # *** 실제 추론으로 생성 ***
-                input_tokens_cpu = batch['input_tokens'][i]  # CPU에서 유지
-                attention_mask_cpu = batch['attention_mask'][i] if 'attention_mask' in batch else None
-                
-                generated_text = self._generate_text_for_sample(
-                    input_tokens_cpu,  # _generate_text_for_sample 내부에서 device로 이동
-                    attention_mask_cpu
-                )
-                
-                # 정확도는 원래 Teacher Forcing 결과 사용
-                individual_accuracy = self._calculate_individual_accuracy(
-                    output_logits[i:i+1], 
-                    batch['target_tokens'][i:i+1]
-                )
-                
-                example_info = {
-                    'input_text': input_text,
-                    'target_text': target_text,
-                    'generated_text': generated_text,  # 실제 추론 결과!
-                    'accuracy': individual_accuracy,
-                    'processing_clk': processing_info.get('processing_clk', 'unknown'),
-                    'tokens_generated': processing_info.get('tokens_generated', 'unknown'),
-                    'convergence_achieved': processing_info.get('convergence_achieved', False),
-                    'batch_accuracy': batch_accuracy,
-                    'generation_method': 'real_inference'
-                }
-                examples.append(example_info)
-                
-            except Exception as e:
-                self.logger.warning(f"예시 추출 중 오류 (배치 {i}): {e}")
-                # 폴백: 기본 정보만 저장
+        Args:
+            batch: 원본 배치
+            sample_idx: 배치 내 샘플 인덱스
+            global_idx: 전체 샘플 인덱스
+            
+        Returns:
+            개별 샘플 평가 결과
+        """
+        try:
+            device = self.config.device
+            
+            # =====================================
+            # 1. 개별 샘플 추출 및 준비
+            # =====================================
+            single_input = batch['input_tokens'][sample_idx:sample_idx+1].to(device)  # [1, seq_len]
+            single_target = batch['target_tokens'][sample_idx:sample_idx+1].to(device)  # [1, seq_len]
+            single_mask = batch['attention_mask'][sample_idx:sample_idx+1].to(device) if 'attention_mask' in batch else None
+            
+            # 텍스트 복원
+            input_text = self._decode_tokens_to_text(batch['input_tokens'][sample_idx])
+            target_text = self._decode_tokens_to_text(batch['target_tokens'][sample_idx])
+            
+            # =====================================
+            # 2. 순수 추론 실행 (1-배치)
+            # =====================================
+            output_logits, processing_info = self.model(
+                input_schedule=single_input,
+                max_clk=self.config.max_clk_training,
+                training=False,  # 추론 모드
+                target_schedule=None,  # 타겟 없음 (순수 추론)
+                attention_mask=single_mask
+            )
+            
+            # =====================================
+            # 3. 생성 결과 추출
+            # =====================================
+            if output_logits.shape[1] > 0:
+                # 가장 확률 높은 토큰들 선택 (deterministic)
+                generated_tokens = output_logits[0].argmax(dim=-1)  # [seq_len]
+                generated_text = self._decode_tokens_to_text(generated_tokens)
+            else:
+                generated_tokens = torch.tensor([], dtype=torch.long)
+                generated_text = "[빈 출력]"
+            
+            # =====================================
+            # 4. 정확도 계산 (generated vs target)
+            # =====================================
+            accuracy = self._calculate_sequence_accuracy(generated_tokens, batch['target_tokens'][sample_idx])
+            
+            # =====================================
+            # 5. 손실 계산 (선택적)
+            # =====================================
+            loss = None
+            if output_logits.shape[1] > 0 and single_target.shape[1] > 0:
                 try:
-                    input_text = self._decode_tokens_to_text(batch['input_tokens'][i])
-                    target_text = self._decode_tokens_to_text(batch['target_tokens'][i])
+                    # 길이 맞춤
+                    min_len = min(output_logits.shape[1], single_target.shape[1])
+                    trimmed_logits = output_logits[:, :min_len, :]  # [1, min_len, vocab]
+                    trimmed_target = single_target[:, :min_len]     # [1, min_len]
                     
-                    example_info = {
-                        'input_text': input_text,
-                        'target_text': target_text,
-                        'generated_text': "[추론 실패]",
-                        'accuracy': 0.0,
-                        'processing_clk': 'error',
-                        'tokens_generated': 0,
-                        'convergence_achieved': False,
-                        'batch_accuracy': batch_accuracy,
-                        'generation_method': 'error'
-                    }
-                    examples.append(example_info)
-                except:
-                    continue
+                    loss_fn = torch.nn.CrossEntropyLoss(ignore_index=self.config.pad_token_id)
+                    loss = loss_fn(trimmed_logits.view(-1, trimmed_logits.shape[-1]), trimmed_target.view(-1)).item()
+                except Exception as e:
+                    print(f"  손실 계산 실패 (샘플 {global_idx}): {e}")
+                    loss = None
+            
+            # =====================================
+            # 6. 결과 구성
+            # =====================================
+            result = {
+                # 기본 정보
+                'global_index': global_idx,
+                'input_text': input_text,
+                'target_text': target_text,
+                'generated_text': generated_text,
+                
+                # 성능 메트릭
+                'accuracy': accuracy,
+                'loss': loss,
+                
+                # 처리 정보
+                'processing_clk': processing_info.get('processing_clk', self.config.max_clk_training),
+                'tokens_generated': processing_info.get('tokens_generated', len(generated_tokens)),
+                'convergence_achieved': processing_info.get('convergence_achieved', False),
+                'output_started': processing_info.get('output_started', output_logits.shape[1] > 0),
+                
+                # 메타 정보
+                'generation_method': 'pure_inference',
+                'model_mode': 'inference'
+            }
+            
+            return result
+            
+        except Exception as e:
+            print(f"  샘플 {global_idx} 평가 실패: {e}")
+            
+            # 폴백 결과
+            try:
+                input_text = self._decode_tokens_to_text(batch['input_tokens'][sample_idx])
+                target_text = self._decode_tokens_to_text(batch['target_tokens'][sample_idx])
+            except:
+                input_text = "[디코딩 실패]"
+                target_text = "[디코딩 실패]"
+            
+            return {
+                'global_index': global_idx,
+                'input_text': input_text,
+                'target_text': target_text,
+                'generated_text': "[평가 실패]",
+                'accuracy': 0.0,
+                'loss': None,
+                'processing_clk': self.config.max_clk_training,
+                'tokens_generated': 0,
+                'convergence_achieved': False,
+                'output_started': False,
+                'generation_method': 'error',
+                'model_mode': 'error'
+            }
+
+    def _calculate_sequence_accuracy(self, generated_tokens: torch.Tensor, target_tokens: torch.Tensor) -> float:
+        """시퀀스 정확도 계산 (패딩 제외)
         
-        return examples
+        Args:
+            generated_tokens: 생성된 토큰 시퀀스 [seq_len]
+            target_tokens: 정답 토큰 시퀀스 [seq_len]
+            
+        Returns:
+            토큰별 정확도 (0.0 ~ 1.0)
+        """
+        try:
+            # 패딩 토큰 제거
+            pad_token_id = self.config.pad_token_id
+            
+            # 정답에서 유효한 토큰만 추출
+            valid_target = target_tokens[target_tokens != pad_token_id]
+            
+            if len(valid_target) == 0:
+                return 0.0
+            
+            # 생성된 토큰을 정답 길이에 맞춤
+            if len(generated_tokens) >= len(valid_target):
+                trimmed_generated = generated_tokens[:len(valid_target)]
+            else:
+                # 생성이 부족하면 패딩으로 채움
+                padding = torch.full((len(valid_target) - len(generated_tokens),), pad_token_id, dtype=generated_tokens.dtype)
+                trimmed_generated = torch.cat([generated_tokens, padding])
+            
+            # 토큰별 정확도 계산
+            correct = (trimmed_generated == valid_target).float()
+            accuracy = correct.mean().item()
+            
+            return accuracy
+            
+        except Exception as e:
+            print(f"정확도 계산 실패: {e}")
+            return 0.0
 
     def _decode_tokens_to_text(self, tokens: torch.Tensor) -> str:
-        """토큰을 텍스트로 변환"""
+        """토큰을 텍스트로 변환 (기존과 동일)"""
         if self.tokenizer is None:
             return f"tokens: {tokens.tolist()}"
         
@@ -608,23 +679,7 @@ class SCSTrainer:
                 return f"tokens: {valid_tokens.tolist()}"
                 
         except Exception as e:
-            self.logger.warning(f"토큰 디코딩 실패: {e}")
             return f"decode_error: {tokens.tolist()}"
-
-    def _calculate_individual_accuracy(
-        self, 
-        output_logits: torch.Tensor,  # [1, seq_len, vocab_size]
-        target_tokens: torch.Tensor   # [1, seq_len]
-    ) -> float:
-        """개별 샘플의 정확도 계산"""
-        try:
-            return SCSMetrics.accuracy(
-                output_logits, 
-                target_tokens, 
-                pad_token_id=self.config.pad_token_id
-            )
-        except Exception:
-            return 0.0
 
 class GradualUnfreezingScheduler:
     """점진적 언프리징 스케줄러"""

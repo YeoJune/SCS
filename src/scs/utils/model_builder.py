@@ -77,11 +77,12 @@ class ModelBuilder:
             # --- 단계 2: 축삭 연결 객체 생성 ---
             if "axonal_connections" not in config:
                 raise ValueError("Config 파일에 'axonal_connections' 섹션이 필요합니다.")
-            
+
             axonal_config = config["axonal_connections"]
             axonal_connections = AxonalConnections(
                 connections=axonal_config.get("connections", []),  # 연결이 없는 경우도 처리
                 excitatory_ratio=axonal_config["excitatory_ratio"],
+                node_grid_sizes=node_grid_sizes,  # 🔧 추가: 그리드 크기 정보 전달
                 device=device
             )
             

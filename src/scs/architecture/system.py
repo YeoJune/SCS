@@ -13,33 +13,34 @@ from .io import InputInterface, OutputInterface
 
 class AxonalConnections(nn.Module):
     """
-    축삭 연결 - Conv2d 기반의 모든 연결 통합 처리
+    인접행렬 기반 축삭 연결 - 생물학적으로 정확한 구현
     
-    문서 명세:
-    I_axon^(target)(t) = (A^source→target)^T · [E ⊙ s^source(t) - 0.5 · (1-E) ⊙ s^source(t)]
+    기존 Conv2d 방식을 완전히 대체하여 개별 뉴런별 연결 강도 지원
     """
     
     def __init__(
         self,
-        connections: List[Dict[str, Any]],  # 설정 파일에서 읽은 연결 정보
+        connections: List[Dict[str, Any]],  # 기존과 동일한 설정 파일 구조
         excitatory_ratio: float = 0.8,
+        node_grid_sizes: Dict[str, tuple] = None,  # 추가: 노드별 그리드 크기
         device: str = "cuda"
     ):
         super().__init__()
         
         self.connections = connections
         self.excitatory_ratio = excitatory_ratio
+        self.node_grid_sizes = node_grid_sizes or {}
         self.device = device
         
-        # Conv2d 레이어들을 저장할 ModuleDict
-        self.conv_layers = nn.ModuleDict()
+        # 인접행렬들을 저장할 ModuleDict
+        self.adjacency_matrices = nn.ModuleDict()
         # 흥분성/억제성 마스크들을 저장할 ParameterDict
         self.excitatory_masks = nn.ParameterDict()
         
-        self._initialize_connections()
+        self._initialize_adjacency_connections()
     
-    def _initialize_connections(self):
-        """Conv2d 기반 연결 초기화"""
+    def _initialize_adjacency_connections(self):
+        """Conv2d 설정을 기반으로 인접행렬 연결 초기화"""
         for conn in self.connections:
             source = conn["source"]
             target = conn["target"]
@@ -49,30 +50,71 @@ class AxonalConnections(nn.Module):
             dilation = conn.get("dilation", 1)
             weight_scale = conn["weight_scale"]
             
-            # Conv2d 레이어 생성
-            conv_key = f"{source}→{target}"
-            conv_layer = nn.Conv2d(
-                in_channels=1,
-                out_channels=1,
-                kernel_size=kernel_size,
-                stride=stride,
-                padding=padding,
-                dilation=dilation,
-                bias=False,
-                device=self.device
+            # 연결 키 생성
+            conn_key = f"{source}→{target}"
+            
+            # Conv2d 패턴을 인접행렬로 변환
+            adjacency_matrix = self._create_adjacency_from_conv_pattern(
+                source, target, kernel_size, stride, padding, dilation, weight_scale
             )
             
-            # 가중치 초기화
-            torch.nn.init.normal_(conv_layer.weight, mean=0.0, std=weight_scale)
-            
-            self.conv_layers[conv_key] = conv_layer
+            # 학습 가능한 파라미터로 등록
+            self.adjacency_matrices[conn_key] = nn.Parameter(adjacency_matrix)
             
             # 흥분성/억제성 마스크: source 기반으로 생성 (한 번만)
             mask_key = f"E_{source}"
             if mask_key not in self.excitatory_masks:
-                # 마스크는 나중에 소스 스파이크 크기에 맞춰 생성됨
-                # 여기서는 플래그만 설정
                 self.excitatory_masks[mask_key] = None
+    
+    def _create_adjacency_from_conv_pattern(
+        self, 
+        source: str, 
+        target: str, 
+        kernel_size: int, 
+        stride: int, 
+        padding: int, 
+        dilation: int, 
+        weight_scale: float
+    ) -> torch.Tensor:
+        """Conv2d 패턴을 인접행렬로 변환"""
+        
+        # 소스와 타겟 그리드 크기 가져오기 (설정에서 읽어야 함)
+        source_h, source_w = self._get_grid_size(source)
+        target_h, target_w = self._get_grid_size(target)
+        
+        source_size = source_h * source_w
+        target_size = target_h * target_w
+        
+        # 인접행렬 초기화 [target_size, source_size]
+        adjacency = torch.zeros(target_size, source_size, device=self.device)
+        
+        # Conv2d 패턴에 따라 연결 생성
+        for target_i in range(target_h):
+            for target_j in range(target_w):
+                target_idx = target_i * target_w + target_j
+                
+                # 타겟 위치에서 소스 영역 계산 (Conv2d 역연산)
+                source_center_i = target_i * stride - padding
+                source_center_j = target_j * stride - padding
+                
+                # 커널 영역 내의 모든 소스 뉴런과 연결
+                for ki in range(kernel_size):
+                    for kj in range(kernel_size):
+                        source_i = source_center_i + ki * dilation
+                        source_j = source_center_j + kj * dilation
+                        
+                        # 유효한 소스 위치인지 확인
+                        if 0 <= source_i < source_h and 0 <= source_j < source_w:
+                            source_idx = source_i * source_w + source_j
+                            
+                            # 연결 가중치 설정 (가우시안 분포)
+                            adjacency[target_idx, source_idx] = torch.randn(1).item() * weight_scale
+        
+        return adjacency
+    
+    def _get_grid_size(self, node_name: str) -> tuple:
+        """노드의 그리드 크기 가져오기"""
+        return self.node_grid_sizes.get(node_name, (64, 64))
     
     def _get_or_create_mask(self, source: str, source_shape: torch.Size) -> torch.Tensor:
         """소스에 대한 흥분성/억제성 마스크 생성 또는 반환"""
@@ -96,7 +138,7 @@ class AxonalConnections(nn.Module):
         return self.excitatory_masks[mask_key]
     
     def forward(self, node_spikes: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """Conv2d 기반 축삭 연결 처리 (배치 일관성 보장)"""
+        """인접행렬 기반 축삭 연결 처리"""
         axonal_inputs = {}
         
         for conn in self.connections:
@@ -107,28 +149,40 @@ class AxonalConnections(nn.Module):
                 continue
             
             source_spikes = node_spikes[source]  # [B, H, W]
-            conv_key = f"{source}→{target}"
+            conn_key = f"{source}→{target}"
             
-            if conv_key not in self.conv_layers:
+            if conn_key not in self.adjacency_matrices:
                 continue
             
             # 입력을 배치 형태로 정규화
             if source_spikes.dim() == 2:  # [H, W] -> [1, H, W]
                 source_spikes = source_spikes.unsqueeze(0)
             
-            # 흥분성/억제성 조절 (컨볼루션 전에 적용)
+            batch_size = source_spikes.shape[0]
+            
+            # 흥분성/억제성 조절 (인접행렬 적용 전에)
             E = self._get_or_create_mask(source, source_spikes.shape)
             modulated_spikes = E * source_spikes - 0.5 * (1 - E) * source_spikes
             
-            # Conv2d 입력 형식으로 변환: [B, 1, H, W]
-            conv_input = modulated_spikes.unsqueeze(1)  # [B, 1, H, W]
+            # 2D 그리드를 1D로 flatten
+            flat_spikes = modulated_spikes.view(batch_size, -1)  # [B, source_size]
             
-            # Conv2d 연산 수행
-            conv_layer = self.conv_layers[conv_key]
-            conv_output = conv_layer(conv_input)  # [B, 1, H_out, W_out]
+            # 인접행렬 연산 수행
+            adjacency = self.adjacency_matrices[conn_key]  # [target_size, source_size]
             
-            # 원래 차원으로 복원 (항상 배치 형태 유지)
-            axonal_signal = conv_output.squeeze(1)  # [B, H_out, W_out]
+            # 배치별로 행렬곱 수행
+            batch_outputs = []
+            for b in range(batch_size):
+                # [target_size, source_size] × [source_size, 1] = [target_size, 1]
+                output = torch.mv(adjacency, flat_spikes[b])  # [target_size]
+                batch_outputs.append(output)
+            
+            # 배치 재구성
+            batch_output = torch.stack(batch_outputs, dim=0)  # [B, target_size]
+            
+            # 타겟 그리드 크기로 reshape
+            target_h, target_w = self._get_grid_size(target)
+            axonal_signal = batch_output.view(batch_size, target_h, target_w)
             
             # 타겟 노드에 신호 누적
             if target not in axonal_inputs:
@@ -137,7 +191,7 @@ class AxonalConnections(nn.Module):
                 axonal_inputs[target] += axonal_signal
         
         return axonal_inputs
-
+    
 class AdaptiveOutputTiming:
     """적응적 출력 타이밍 제어 - fixed_len 파라미터로 동작 모드 결정"""
     

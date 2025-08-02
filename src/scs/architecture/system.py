@@ -249,6 +249,9 @@ class SCSSystem(nn.Module):
         
         self.previous_spikes = {}
         self._initialize_previous_spikes()
+
+        # 임시로 하드코딩
+        self.eos_token_id = 2  # 기본 EOS 토큰 ID (추후 수정 가능)
     
     def _initialize_previous_spikes(self, batch_size: int = 1):
         """이전 스파이크 상태 초기화 (항상 배치)"""

@@ -529,7 +529,7 @@ class SCSTrainer:
                 input_schedule=single_input,
                 max_clk=self.config.max_clk_training,
                 training=False,  # 기존과 동일
-                target_schedule=None,  # 유일한 차이: None vs single_target (하지만 training=False라 무시됨)
+                target_schedule=single_target,
                 attention_mask=single_mask,
                 target_start_clk=target_start_clk,  # ✅ 기존과 동일
                 ss_prob=1.0  # ✅ 기존과 동일 (기본값)

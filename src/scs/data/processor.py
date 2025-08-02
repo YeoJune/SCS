@@ -24,32 +24,22 @@ class DataProcessor:
         split: str = "train",
         tokenizer: Optional[SCSTokenizer] = None,
         max_length: int = 256,
-        max_samples: Optional[int] = None
+        max_samples: Optional[int] = None,
+        task_id: int = 1  # bAbI용 파라미터 추가
     ):
-        """
-        데이터셋 생성 - 모든 로직을 dataset.py로 이동
-        
-        Args:
-            dataset_name: HuggingFace 데이터셋 이름
-            split: 데이터 분할 (train/validation/test)
-            tokenizer: 토크나이저 (None이면 기본값 사용)
-            max_length: 최대 길이
-            max_samples: 최대 샘플 수 (None이면 전체)
-        
-        Returns:
-            Dataset 객체
-        """
-        # 토크나이저가 제공되지 않으면 self.tokenizer 사용
+        """데이터셋 생성 - bAbI 지원 추가"""
         effective_tokenizer = tokenizer or self.tokenizer
         
         logger.info(f"Creating dataset: {dataset_name} ({split})")
         
         try:
+            # task_id 파라미터를 create_dataset에 전달
             dataset = create_dataset(
                 dataset_name=dataset_name,
                 tokenizer=effective_tokenizer,
                 split=split,
-                max_samples=max_samples
+                max_samples=max_samples,
+                task_id=task_id  # 새로 추가
             )
             
             logger.info(f"✅ Successfully created dataset with {len(dataset)} examples")
@@ -63,10 +53,7 @@ class DataProcessor:
         """지원되는 데이터셋 목록"""
         return [
             "datatune/LogiQA2.0",
-            "tasksource/logiqa-2.0-nli", 
-            "nyu-mll/multi_nli",
-            "squad",
-            # 필요시 추가
+            "Muennighoff/babi",
         ]
     
     def validate_dataset_config(self, dataset_name: str, split: str) -> bool:

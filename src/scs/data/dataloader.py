@@ -83,6 +83,7 @@ class SCSDataLoader:
         processor=None,
         tokenizer=None,
         max_samples=None,
+        task_id: int = 1,
     ):
         if shuffle is None:
             shuffle = (split == "train")
@@ -101,7 +102,8 @@ class SCSDataLoader:
             split=split,
             tokenizer=tokenizer,
             max_length=max_length,
-            max_samples=max_samples
+            max_samples=max_samples,
+            task_id=task_id
         )
         
         # PyTorch DataLoader 생성
@@ -135,7 +137,8 @@ def create_dataloader(
     num_workers: int = 0,
     processor=None,
     tokenizer=None,
-    max_samples=None
+    max_samples=None,
+    task_id: int = 1
 ) -> SCSDataLoader:
     """SCS 배치 데이터 로더 생성"""
     
@@ -148,5 +151,6 @@ def create_dataloader(
         num_workers=num_workers,
         processor=processor,
         tokenizer=tokenizer,
-        max_samples=max_samples
+        max_samples=max_samples,
+        task_id=task_id
     )

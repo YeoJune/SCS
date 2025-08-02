@@ -343,6 +343,7 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
         
         task_config = config.get("task", {})
         max_samples_config = task_config.get("max_samples", {})
+        task_id = task_config.get("task_id", 1)  # bAbI용 파라미터
 
         train_loader = create_dataloader(
             dataset_name=dataset_name, 
@@ -350,7 +351,8 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
             batch_size=config["data_loading"]["batch_size"], 
             max_length=config["data_loading"]["tokenizer"]["max_length"], 
             tokenizer=tokenizer,
-            max_samples=max_samples_config.get("train", None)
+            max_samples=max_samples_config.get("train", None),
+            task_id=task_id
         )
 
         val_loader = create_dataloader(
@@ -359,7 +361,8 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
             batch_size=1, 
             max_length=config["data_loading"]["tokenizer"]["max_length"], 
             tokenizer=tokenizer,
-            max_samples=max_samples_config.get("validation", None)
+            max_samples=max_samples_config.get("validation", None),
+            task_id=task_id
         )
         logger.info(f"✅ 데이터 로더 생성 완료 (데이터셋: {dataset_name})")
 
@@ -420,7 +423,8 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
             batch_size=1, 
             max_length=config["data_loading"]["tokenizer"]["max_length"], 
             tokenizer=tokenizer,
-            max_samples=max_samples_config.get("test", None)
+            max_samples=max_samples_config.get("test", None),
+            task_id=task_id
         )
         
         # 예시 저장 개수 설정 (config에서 가져오거나 기본값 10)
@@ -568,13 +572,16 @@ def evaluate_mode(args: argparse.Namespace):
         tokenizer = SCSTokenizer(config["data_loading"]["tokenizer"]["name"])
         pad_token_id = tokenizer.tokenizer.pad_token_id
         dataset_name = get_dataset_name_from_config(config, logger)
+
+        task_id = config.get("task", {}).get("task_id", 1)  # bAbI용 파라미터
         
         test_loader = create_dataloader(
             dataset_name=dataset_name, 
             split="test", 
             batch_size=1, 
             max_length=config["data_loading"]["tokenizer"]["max_length"], 
-            tokenizer=tokenizer
+            tokenizer=tokenizer,
+            task_id=task_id
         )
         
         # 5. 모델 로드 (개선된 에러 핸들링)

@@ -158,6 +158,87 @@ class LogiQADataset(BaseDataset):
             logger.warning(f"Failed to process LogiQA item {idx}: {e}")
             return None
 
+class bAbIDataset(BaseDataset):
+    """
+    bAbI 전용 데이터셋 ('Muennighoff/babi' 버전 사용)
+    """
+    
+    def __init__(self, tokenizer: SCSTokenizer, task_id: int = 1, split: str = "train", max_samples: Optional[int] = None):
+        """
+        Args:
+            task_id: bAbI의 20개 태스크 중 하나 (1~20)
+        """
+        assert 1 <= task_id <= 20, "task_id는 1과 20 사이여야 합니다."
+        self.task_id = task_id
+        
+        super().__init__(
+            dataset_name="Muennighoff/babi",
+            tokenizer=tokenizer, 
+            split=split, 
+            max_length=256,
+            max_samples=max_samples
+        )
+
+    def _load_and_process_data(self) -> List[Dict[str, Any]]:
+        """데이터 로딩 및 전처리 - task_id로 필터링"""
+        try:
+            # 1. 전체 데이터셋 로드
+            raw_dataset = load_dataset(self.dataset_name, split=self.split)
+            
+            # 2. 원하는 태스크 번호로 필터링
+            filtered_dataset = raw_dataset.filter(lambda example: example['task'] == self.task_id)
+            logger.info(f"Task {self.task_id} 필터링 완료: {len(filtered_dataset)}개 샘플")
+            
+            # 3. 샘플 수 제한
+            if self.max_samples and len(filtered_dataset) > self.max_samples:
+                final_dataset = filtered_dataset.select(range(self.max_samples))
+            else:
+                final_dataset = filtered_dataset
+
+            # 4. 각 아이템 처리
+            processed_data = []
+            for idx, item in enumerate(final_dataset):
+                try:
+                    processed_item = self._process_item(item, idx)
+                    if processed_item:
+                        processed_data.append(processed_item)
+                except Exception as e:
+                    logger.warning(f"bAbI 아이템 {idx} 처리 실패: {e}")
+                    continue
+            
+            return processed_data
+
+        except Exception as e:
+            logger.error(f"bAbI 데이터셋 로드 실패: {e}")
+            return []
+
+    def _process_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
+        """bAbI 아이템 처리"""
+        try:
+            # 필드 이름: story -> passage로 변경됨
+            passage_text = item.get('passage', '').strip().replace('\n', ' ')
+            question_text = item.get('question', '').strip()
+            answer_text = item.get('answer', '').strip()
+            
+            if not passage_text or not question_text or not answer_text:
+                return None
+            
+            # 입력 형식: "Context: [지문] Question: [질문]"
+            input_text = f"Answer the question based on context: Context: {passage_text} Question: {question_text}"
+            
+            return {
+                'input_text': input_text,
+                'target_text': answer_text,
+                'metadata': {
+                    'index': idx, 
+                    'task': item.get('task', self.task_id),
+                    'task_type': 'reasoning'
+                }
+            }
+            
+        except Exception as e:
+            logger.warning(f"bAbI 아이템 {idx} 처리 실패: {e}")
+            return None
 
 class MultiDataset(BaseDataset):
     """다중 태스크 지원 데이터셋"""
@@ -317,11 +398,14 @@ def create_dataset(
     dataset_name: str,
     tokenizer: SCSTokenizer,
     split: str = "train",
-    max_samples: Optional[int] = None
+    max_samples: Optional[int] = None,
+    task_id: int = 1
 ) -> BaseDataset:
     """데이터셋 생성 팩토리 함수"""
     
-    if "logiqa" in dataset_name.lower():
+    if "babi" in dataset_name.lower():
+        return bAbIDataset(tokenizer, task_id=task_id, split=split, max_samples=max_samples)
+    elif "logiqa" in dataset_name.lower():
         return LogiQADataset(tokenizer, split, max_samples)
     else:
         return MultiDataset(dataset_name, tokenizer, split, max_samples=max_samples)

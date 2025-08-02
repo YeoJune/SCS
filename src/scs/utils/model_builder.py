@@ -153,7 +153,7 @@ class ModelBuilder:
                 stability_window=timing_config.get("stability_window", 10),
                 start_output_threshold=timing_config.get("start_output_threshold", 0.5),
                 min_output_length=timing_config.get("min_output_length", 10),
-                force_fixed_length=timing_config.get("force_fixed_length", False)
+                fixed_len=timing_config.get("fixed_len", -1)  # 변경: force_fixed_length -> fixed_len
             )
             
             # --- 단계 5: 최종 SCS 시스템 조립 ---

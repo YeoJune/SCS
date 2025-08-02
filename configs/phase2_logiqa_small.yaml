@@ -130,6 +130,7 @@ adaptive_output_timing:
   stability_window: 10
   start_output_threshold: 0.5
   min_output_length: 10
+  fixed_len: 3
 
 # === 데이터 로딩 오버라이드 ===
 data_loading:

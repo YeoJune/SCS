@@ -139,7 +139,7 @@ class AxonalConnections(nn.Module):
         return axonal_inputs
 
 class AdaptiveOutputTiming:
-    """적응적 출력 타이밍 제어 - 디버깅/테스트를 위한 임시 수정 포함"""
+    """적응적 출력 타이밍 제어 - fixed_len 파라미터로 동작 모드 결정"""
     
     def __init__(
         self,
@@ -150,7 +150,7 @@ class AdaptiveOutputTiming:
         stability_window: int = 10,
         start_output_threshold: float = 0.5,
         min_output_length: int = 10,
-        force_fixed_length: bool = False
+        fixed_len: int = -1  # 변경: force_fixed_length -> fixed_len
     ):
         self.min_processing_clk = min_processing_clk
         self.max_processing_clk = max_processing_clk
@@ -159,48 +159,47 @@ class AdaptiveOutputTiming:
         self.stability_window = stability_window
         self.start_output_threshold = start_output_threshold
         self.min_output_length = min_output_length
-        self.force_fixed_length = force_fixed_length
+        self.fixed_len = fixed_len  # -1: adaptive, >-1: 고정 길이
         
         self.acc_history = []
         
-    def should_start_output(self, current_clk: int, acc_activity: float) -> bool:
+    def should_start_output(self, current_clk: int, acc_activity: float, input_seq_len: int = 0) -> bool:
         """출력 시작 시점 결정"""
-        # --- 임시 수정 ---
-        if self.force_fixed_length:
-            # 입력 시퀀스 처리 시간(min_processing_clk)이 지나면 즉시 출력을 시작하도록 강제
-            return current_clk >= self.min_processing_clk
-        
-        # 원래 로직
-        if current_clk < self.min_processing_clk:
-            return False
-        return acc_activity > self.start_output_threshold
+        if self.fixed_len > -1:
+            # 고정 길이 모드: input이 끝나는 CLK부터 출력 시작
+            return current_clk >= input_seq_len
+        else:
+            # 적응적 모드: 기존 로직
+            if current_clk < self.min_processing_clk:
+                return False
+            return acc_activity > self.start_output_threshold
     
     def should_end_output(
         self, 
         current_clk: int, 
         acc_activity: float, 
         output_confidence: float,
-        generated_length: int = 0
+        generated_length: int = 0,
+        input_seq_len: int = 0
     ) -> bool:
         """출력 종료 시점 결정"""
-        # --- 임시 수정 ---
-        if self.force_fixed_length:
-            # 절대 종료하지 않음 (외부 max_clk에 의해 제어됨)
-            return False
+        if self.fixed_len > -1:
+            # 고정 길이 모드: fixed_len만큼 생성했으면 종료
+            return generated_length >= self.fixed_len
+        else:
+            # 적응적 모드: 기존 로직
+            if current_clk >= self.max_processing_clk:
+                return True
             
-        # 원래 로직
-        if current_clk >= self.max_processing_clk:
-            return True
-        
-        if generated_length < self.min_output_length:
-            return False
-        
-        self.acc_history.append(acc_activity)
-        
-        convergence_ok = self._check_convergence()
-        confidence_ok = output_confidence > self.confidence_threshold
-        
-        return convergence_ok and confidence_ok
+            if generated_length < self.min_output_length:
+                return False
+            
+            self.acc_history.append(acc_activity)
+            
+            convergence_ok = self._check_convergence()
+            confidence_ok = output_confidence > self.confidence_threshold
+            
+            return convergence_ok and confidence_ok
     
     def _check_convergence(self) -> bool:
         """ACC 활성도 안정화 확인"""
@@ -307,21 +306,70 @@ class SCSSystem(nn.Module):
         target_start_clk: Optional[int] = None,
         ss_prob: float = 1.0
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
-        """학습 모드 forward pass (Teacher Forcing) - 타이밍 정보 수집 추가"""
+        """학습 모드 forward pass (Teacher Forcing) - 고정 길이 지원"""
         batch_size, input_seq_len = input_schedule.shape
-        _, target_seq_len = target_schedule.shape
+        _, original_target_seq_len = target_schedule.shape
 
-        # 1. 목표 CLK 정의
-        if target_start_clk is None:
-            target_start_clk = min(input_seq_len, max_clk - target_seq_len - 1)
-        target_end_clk = min(input_seq_len + target_seq_len - 1, max_clk - 1)
+        # 고정 길이 모드 처리
+        if self.output_timing.fixed_len > -1:
+            fixed_len = self.output_timing.fixed_len
+            
+            # target_start_clk를 input이 끝나는 시점으로 설정
+            target_start_clk = input_seq_len
+            target_end_clk = min(target_start_clk + fixed_len - 1, max_clk - 1)
+            
+            # target 길이 조정
+            if original_target_seq_len < fixed_len:
+                # target이 fixed_len보다 짧으면 EOS로 패딩
+                try:
+                    # tokenizer에서 EOS 토큰 가져오기 (추후 전달받도록 수정 예정)
+                    eos_token_id = getattr(self, 'eos_token_id', 2)  # 기본값 2
+                except:
+                    eos_token_id = 2  # 기본 EOS 토큰 ID
+                    
+                padding_length = fixed_len - original_target_seq_len
+                eos_padding = torch.full(
+                    (batch_size, padding_length), 
+                    eos_token_id, 
+                    dtype=target_schedule.dtype, 
+                    device=target_schedule.device
+                )
+                target_schedule = torch.cat([target_schedule, eos_padding], dim=1)
+                
+            elif original_target_seq_len > fixed_len:
+                # target이 fixed_len보다 길면 앞쪽만 자름
+                target_schedule = target_schedule[:, :fixed_len]
+            
+            # attention_mask도 조정 (있는 경우)
+            if attention_mask is not None:
+                if attention_mask.shape[1] < fixed_len:
+                    # 패딩 부분은 False로 설정
+                    mask_padding = torch.zeros(
+                        (batch_size, fixed_len - attention_mask.shape[1]),
+                        dtype=attention_mask.dtype,
+                        device=attention_mask.device
+                    )
+                    attention_mask = torch.cat([attention_mask, mask_padding], dim=1)
+                elif attention_mask.shape[1] > fixed_len:
+                    attention_mask = attention_mask[:, :fixed_len]
+            
+            target_seq_len = fixed_len
+            
+        else:
+            # 적응적 모드: 기존 로직
+            target_seq_len = original_target_seq_len
+            if target_start_clk is None:
+                target_start_clk = min(input_seq_len, max_clk - target_seq_len - 1)
+            target_end_clk = min(target_start_clk + target_seq_len - 1, max_clk - 1)
 
         # 타이밍 정보를 담을 딕셔너리
         timing_info = {
             'target_start_clk': target_start_clk,
             'target_end_clk': target_end_clk,
             'start_conditions': None,
-            'end_conditions': None
+            'end_conditions': None,
+            'mode': 'fixed_length' if self.output_timing.fixed_len > -1 else 'adaptive',
+            'fixed_len': self.output_timing.fixed_len if self.output_timing.fixed_len > -1 else None
         }
         
         all_spikes = []
@@ -395,14 +443,15 @@ class SCSSystem(nn.Module):
         }
         
         return output_logits, processing_info
-    
+
+
     def _forward_inference(
         self,
         input_schedule: Optional[torch.Tensor],
         max_clk: int,
         batch_size: int
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
-        """추론 모드 forward pass (항상 배치 출력)"""
+        """추론 모드 forward pass - 고정 길이 지원"""
         output_started = False
         
         # **수정됨**: 생성된 토큰 로짓과 실제 토큰 ID를 관리할 리스트
@@ -411,6 +460,11 @@ class SCSSystem(nn.Module):
         generated_ids = torch.ones((batch_size, 1), dtype=torch.long, device=self.device) 
 
         self.output_timing.reset() # 타이밍 객체 초기화
+        
+        # 입력 시퀀스 길이 계산
+        input_seq_len = 0
+        if input_schedule is not None:
+            input_seq_len = input_schedule.shape[1] if input_schedule.dim() > 1 else 1
 
         for clk in range(max_clk):
             self.current_clk = clk
@@ -429,7 +483,7 @@ class SCSSystem(nn.Module):
             # 출력 처리
             acc_activity = self._get_acc_activity(current_spikes)
             
-            if not output_started and self.output_timing.should_start_output(clk, acc_activity):
+            if not output_started and self.output_timing.should_start_output(clk, acc_activity, input_seq_len):
                 output_started = True
             
             if output_started:
@@ -452,7 +506,13 @@ class SCSSystem(nn.Module):
                 # 종료 조건 확인
                 output_confidence = torch.softmax(token_logits[0], dim=-1).max().item()
                 # generated_ids에는 BOS가 포함되어 있으므로, 실제 생성 길이는 -1
-                if self.output_timing.should_end_output(clk, acc_activity, output_confidence, generated_length=generated_ids.shape[1] - 1):
+                generated_length = generated_ids.shape[1] - 1
+                
+                if self.output_timing.should_end_output(
+                    clk, acc_activity, output_confidence, 
+                    generated_length=generated_length, 
+                    input_seq_len=input_seq_len
+                ):
                     break
             
             self.previous_spikes = {k: v.clone() for k, v in current_spikes.items()}
@@ -472,7 +532,8 @@ class SCSSystem(nn.Module):
             "convergence_achieved": clk < max_clk - 1 if 'clk' in locals() else False,
             "final_acc_activity": acc_activity if 'acc_activity' in locals() else 0.0,
             "batch_size": batch_size,
-            "generated_ids": generated_ids[:, 1:] # BOS 토큰 제외
+            "generated_ids": generated_ids[:, 1:], # BOS 토큰 제외
+            "mode": 'fixed_length' if self.output_timing.fixed_len > -1 else 'adaptive'
         }
         
         return output_tokens, processing_info

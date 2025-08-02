@@ -490,59 +490,80 @@ class SCSTrainer:
         
         return results
     
-    def _extract_examples_from_batch(
-        self, 
-        batch: Dict[str, torch.Tensor], 
-        output_logits: torch.Tensor,
-        processing_info: Dict[str, Any],
-        batch_accuracy: float
-    ) -> List[Dict[str, Any]]:
-        """배치에서 예시 데이터 추출"""
-        examples = []
-        
-        # 배치 크기 확인
-        batch_size = output_logits.shape[0]
-        
-        for i in range(batch_size):
+    def _generate_text_for_sample(self, input_tokens: torch.Tensor, attention_mask: torch.Tensor = None) -> str:
+        """단일 샘플에 대해 실제 추론으로 텍스트 생성"""
+        self.model.eval()
+        with torch.no_grad():
             try:
-                # 1. 입력/타겟 텍스트 복원
-                input_text = self._decode_tokens_to_text(batch['input_tokens'][i])
-                target_text = self._decode_tokens_to_text(batch['target_tokens'][i])
-                
-                # 2. 생성된 텍스트 복원
-                generated_tokens = output_logits[i].argmax(dim=-1)
-                
-                # 토큰이 정말 다른지 확인
-                print(f"Sample {i} first 5 tokens: {generated_tokens[:5].tolist()}")
-                print(f"Sample {i} tensor id: {id(generated_tokens)}")
-                
-                generated_text = self._decode_tokens_to_text(generated_tokens)
-                print(f"Sample {i} generated_text: '{generated_text}'")
-                print("---")
-                
-                # 3. 개별 샘플 정확도 계산
-                individual_accuracy = self._calculate_individual_accuracy(
-                    output_logits[i:i+1], 
-                    batch['target_tokens'][i:i+1]
+                # 실제 추론 실행
+                output_logits, processing_info = self.model(
+                    input_schedule=input_tokens.unsqueeze(0),  # [1, seq_len]
+                    max_clk=self.config.max_clk_training,
+                    training=False,
+                    target_schedule=None,
+                    attention_mask=attention_mask.unsqueeze(0) if attention_mask is not None else None
                 )
                 
-                # 4. 처리 정보 추출
-                example_info = {
-                    'input_text': input_text,
-                    'target_text': target_text,
-                    'generated_text': generated_text,
-                    'accuracy': individual_accuracy,
-                    'processing_clk': processing_info.get('processing_clk', 'unknown'),
-                    'tokens_generated': processing_info.get('tokens_generated', 'unknown'),
-                    'convergence_achieved': processing_info.get('convergence_achieved', False),
-                    'batch_accuracy': batch_accuracy
-                }
-                
-                examples.append(example_info)
-                
+                if output_logits.shape[1] > 0:
+                    # 온도 샘플링으로 다양성 추가
+                    temperature = 0.8
+                    if temperature > 0:
+                        scaled_logits = output_logits[0] / temperature  # [seq_len, vocab_size]
+                        probs = torch.softmax(scaled_logits, dim=-1)
+                        
+                        generated_tokens = []
+                        for pos in range(scaled_logits.shape[0]):
+                            # Top-k 샘플링
+                            k = 20
+                            top_probs, top_indices = probs[pos].topk(k)
+                            top_probs = top_probs / top_probs.sum()
+                            
+                            sampled_idx = torch.multinomial(top_probs, 1).item()
+                            sampled_token = top_indices[sampled_idx].item()
+                            generated_tokens.append(sampled_token)
+                        
+                        generated_tokens = torch.tensor(generated_tokens)
+                    else:
+                        generated_tokens = output_logits[0].argmax(dim=-1)
+                    
+                    return self._decode_tokens_to_text(generated_tokens)
+                else:
+                    return "[빈 출력]"
+                    
             except Exception as e:
-                self.logger.warning(f"예시 추출 중 오류 (배치 {i}): {e}")
-                continue
+                print(f"추론 중 오류: {e}")
+                return "[추론 오류]"
+
+    # 사용 방법 (메인 함수에서):
+    def _extract_examples_from_batch(self, batch, output_logits, processing_info, batch_accuracy):
+        examples = []
+        batch_size = batch['input_tokens'].shape[0]
+        
+        for i in range(batch_size):
+            input_text = self._decode_tokens_to_text(batch['input_tokens'][i])
+            target_text = self._decode_tokens_to_text(batch['target_tokens'][i])
+            
+            # *** 실제 추론으로 생성 ***
+            attention_mask = batch['attention_mask'][i] if 'attention_mask' in batch else None
+            generated_text = self._generate_text_for_sample(
+                batch['input_tokens'][i], 
+                attention_mask
+            )
+            
+            # 정확도는 원래 Teacher Forcing 결과 사용
+            individual_accuracy = self._calculate_individual_accuracy(
+                output_logits[i:i+1], 
+                batch['target_tokens'][i:i+1]
+            )
+            
+            example_info = {
+                'input_text': input_text,
+                'target_text': target_text,
+                'generated_text': generated_text,  # 실제 추론 결과!
+                'accuracy': individual_accuracy,
+                'generation_method': 'real_inference'
+            }
+            examples.append(example_info)
         
         return examples
 

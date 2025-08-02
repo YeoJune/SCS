@@ -523,12 +523,19 @@ class SCSTrainer:
             # =====================================
             # 2. 순수 추론 실행 (1-배치)
             # =====================================
+            input_seq_len = single_input.shape[1]
+            target_seq_len = single_target.shape[1] 
+            latest_possible_start = max(0, self.config.max_clk_training - target_seq_len - 1)
+            target_start_clk = min(input_seq_len, latest_possible_start)
+
+            # ✅ target_start_clk 전달
             output_logits, processing_info = self.model(
                 input_schedule=single_input,
                 max_clk=self.config.max_clk_training,
-                training=False,  # 추론 모드
-                target_schedule=None,  # 타겟 없음 (순수 추론)
-                attention_mask=single_mask
+                training=False,
+                target_schedule=None,
+                attention_mask=single_mask,
+                target_start_clk=target_start_clk  # ← 추가!
             )
             
             # =====================================

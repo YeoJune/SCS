@@ -106,9 +106,9 @@ class BaseDataset(Dataset):
 class LogiQADataset(BaseDataset):
     """LogiQA 전용 데이터셋"""
     
-    def __init__(self, tokenizer: SCSTokenizer, split: str = "train", max_samples: Optional[int] = None):
-        super().__init__("datatune/LogiQA2.0", tokenizer, split, max_length=256, max_samples=max_samples)
-    
+    def __init__(self, tokenizer: SCSTokenizer, split: str = "train", num_samples: Optional[int] = None):
+        super().__init__("datatune/LogiQA2.0", tokenizer, split, max_length=256, num_samples=num_samples)
+
     def _process_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
         """LogiQA 아이템 처리"""
         try:

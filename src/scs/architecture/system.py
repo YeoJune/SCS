@@ -10,7 +10,6 @@ from typing import Dict, List, Optional, Tuple, Any
 from .node import SpikeNode, LocalConnectivity
 from .io import InputInterface, OutputInterface
 
-
 class AxonalConnections(nn.Module):
     """
     인접행렬 기반 축삭 연결 - 생물학적으로 정확한 구현
@@ -32,8 +31,8 @@ class AxonalConnections(nn.Module):
         self.node_grid_sizes = node_grid_sizes or {}
         self.device = device
         
-        # 인접행렬들을 저장할 ModuleDict
-        self.adjacency_matrices = nn.ModuleDict()
+        # 인접행렬들을 저장할 ParameterDict (수정)
+        self.adjacency_matrices = nn.ParameterDict()
         # 흥분성/억제성 마스크들을 저장할 ParameterDict
         self.excitatory_masks = nn.ParameterDict()
         
@@ -50,7 +49,7 @@ class AxonalConnections(nn.Module):
             dilation = conn.get("dilation", 1)
             weight_scale = conn["weight_scale"]
             
-            # 연결 키 생성
+            # 연결 키 생성 (ParameterDict 호환)
             conn_key = f"{source}_to_{target}"
             
             # Conv2d 패턴을 인접행렬로 변환
@@ -78,7 +77,7 @@ class AxonalConnections(nn.Module):
     ) -> torch.Tensor:
         """Conv2d 패턴을 인접행렬로 변환"""
         
-        # 소스와 타겟 그리드 크기 가져오기 (설정에서 읽어야 함)
+        # 소스와 타겟 그리드 크기 가져오기
         source_h, source_w = self._get_grid_size(source)
         target_h, target_w = self._get_grid_size(target)
         

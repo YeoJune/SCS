@@ -51,7 +51,7 @@ class AxonalConnections(nn.Module):
             weight_scale = conn["weight_scale"]
             
             # 연결 키 생성
-            conn_key = f"{source}→{target}"
+            conn_key = f"{source}_to_{target}"
             
             # Conv2d 패턴을 인접행렬로 변환
             adjacency_matrix = self._create_adjacency_from_conv_pattern(
@@ -149,7 +149,7 @@ class AxonalConnections(nn.Module):
                 continue
             
             source_spikes = node_spikes[source]  # [B, H, W]
-            conn_key = f"{source}→{target}"
+            conn_key = f"{source}_to_{target}"
             
             if conn_key not in self.adjacency_matrices:
                 continue

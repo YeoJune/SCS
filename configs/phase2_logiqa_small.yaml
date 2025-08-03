@@ -96,13 +96,6 @@ task:
   dataset_name: "datatune/LogiQA2.0"
   task_type: "reasoning"
 
-# === IO 시스템 부분 오버라이드 ===
-io_system:
-  input_interface:
-    max_seq_len: 256
-  output_interface:
-    max_output_len: 256
-
 # === 학습 설정 오버라이드 ===
 learning:
   epochs: 10

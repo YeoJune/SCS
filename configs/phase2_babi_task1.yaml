@@ -98,13 +98,6 @@ task:
   dataset_name: "Muennighoff/babi"
   task_id: 1 # bAbI Task 1: Single Supporting Fact
 
-# === IO 시스템 부분 오버라이드 ===
-io_system:
-  input_interface:
-    max_seq_len: 256
-  output_interface:
-    max_output_len: 256
-
 # === 학습 설정 오버라이드 ===
 learning:
   epochs: 10

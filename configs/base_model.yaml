@@ -49,16 +49,16 @@ io_system:
     max_seq_len: 128
     num_heads: 8
     use_positional_encoding: true
-    t5_model_name: "t5-base"
+    t5_model_name: "t5-small"
   output_interface:
-    embedding_dim: 256
+    embedding_dim: 512
     max_output_len: 128
-    num_heads: 4
+    num_heads: 8
     num_decoder_layers: 2
-    dim_feedforward: 1024
+    dim_feedforward: 2048
     dropout: 0.1
     use_positional_encoding: true
-    t5_model_name: "t5-base"
+    t5_model_name: "t5-small"
 
 # === 적응적 출력 타이밍 ===
 adaptive_output_timing:

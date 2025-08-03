@@ -113,20 +113,7 @@ class ModelBuilder:
                     "use_positional_encoding", 
                     io_config["input_interface"].get("positional_encoding", True)
                 ),
-                device=device
-            )
-            
-            input_interface = InputInterface(
-                vocab_size=io_config["input_interface"]["vocab_size"],
-                grid_height=input_h,
-                grid_width=input_w,
-                embedding_dim=io_config["input_interface"].get("embedding_dim", 512),
-                max_seq_len=io_config["input_interface"].get("max_seq_len", 128),
-                num_heads=io_config["input_interface"].get("num_heads", 8),
-                use_positional_encoding=io_config["input_interface"].get(
-                    "use_positional_encoding", 
-                    io_config["input_interface"].get("positional_encoding", True)
-                ),
+                t5_model_name=io_config["input_interface"].get("t5_model_name", "t5-base"),
                 device=device
             )
 
@@ -141,6 +128,11 @@ class ModelBuilder:
                 num_decoder_layers=io_config["output_interface"].get("num_decoder_layers", 2),
                 dim_feedforward=io_config["output_interface"].get("dim_feedforward", 1024),
                 dropout=io_config["output_interface"].get("dropout", 0.1),
+                use_positional_encoding=io_config["output_interface"].get(
+                    "use_positional_encoding", 
+                    io_config["output_interface"].get("positional_encoding", True)
+                ),
+                t5_model_name=io_config["output_interface"].get("t5_model_name", "t5-base"),
                 device=device
             )
                         

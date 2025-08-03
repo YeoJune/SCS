@@ -129,7 +129,7 @@ adaptive_output_timing:
 data_loading:
   batch_size: 1
   tokenizer:
-    name: "bert-base-uncased"
+    name: "t5-small"
     max_length: 256
 
 data:

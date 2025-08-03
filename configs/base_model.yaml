@@ -108,7 +108,7 @@ data_loading:
   batch_size: 4
   num_workers: 0
   tokenizer:
-    name: "bert-base-uncased"
+    name: "t5-small"
     max_length: 128
 
 # === 작업 설정 ===

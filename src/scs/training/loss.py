@@ -49,7 +49,7 @@ class SCSLoss(nn.Module):
             targets = targets[:, :min_len]
         
         # 1. 기본 분류 손실
-        base_loss = self.base_loss(outputs.view(-1, vocab_size), targets.view(-1))
+        base_loss = self.base_loss(outputs.reshape(-1, vocab_size), targets.reshape(-1))
         
         # 2. 스파이크 정규화
         spike_reg = self._spike_regularization(processing_info, outputs.device)

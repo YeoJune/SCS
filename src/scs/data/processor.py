@@ -57,6 +57,7 @@ class DataProcessor:
         return [
             "datatune/LogiQA2.0",
             "Muennighoff/babi",
+            "rajpurkar/squad",
         ]
     
     def validate_dataset_config(self, dataset_name: str, split: str) -> bool:

@@ -238,6 +238,77 @@ class bAbIDataset(BaseDataset):
         except Exception as e:
             logger.warning(f"bAbI 아이템 {idx} 처리 실패: {e}")
             return None
+
+
+class SQuADDataset(BaseDataset):
+    """SQuAD (Stanford Question Answering Dataset) 전용 데이터셋"""
+    
+    def __init__(self, tokenizer: SCSTokenizer, split: str = "train", num_samples: int = -1):
+        super().__init__(
+            dataset_name="rajpurkar/squad",
+            tokenizer=tokenizer, 
+            split=split, 
+            max_length=512,  # SQuAD는 긴 컨텍스트가 있을 수 있음
+            num_samples=num_samples
+        )
+
+    def _process_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
+        """SQuAD 아이템 처리"""
+        try:
+            context = item.get('context', '').strip()
+            question = item.get('question', '').strip()
+            answers = item.get('answers', {})
+            title = item.get('title', '').strip()
+            item_id = item.get('id', str(idx))
+            
+            if not context or not question:
+                return None
+            
+            # 답변 처리
+            answer_texts = answers.get('text', [])
+            answer_starts = answers.get('answer_start', [])
+            
+            # 첫 번째 답변을 타겟으로 사용 (SQuAD는 여러 답변이 있을 수 있음)
+            if answer_texts and len(answer_texts) > 0:
+                target_text = answer_texts[0].strip()
+            else:
+                # 답변이 없는 경우 (SQuAD 2.0의 unanswerable questions)
+                target_text = "unanswerable"
+            
+            # 입력 텍스트 구성
+            input_parts = ["Answer the question based on the given context:"]
+            
+            if title:
+                input_parts.append(f"Title: {title}")
+            
+            input_parts.extend([
+                f"Context: {context}",
+                f"Question: {question}"
+            ])
+            
+            input_text = " ".join(input_parts)
+            
+            return {
+                'input_text': input_text,
+                'target_text': target_text,
+                'metadata': {
+                    'id': item_id,
+                    'title': title,
+                    'context': context,
+                    'question': question,
+                    'all_answers': answer_texts,  # 모든 답변 보존
+                    'answer_starts': answer_starts,
+                    'task_type': 'reading_comprehension',
+                    'index': idx,
+                    'is_answerable': len(answer_texts) > 0
+                }
+            }
+            
+        except Exception as e:
+            logger.warning(f"Failed to process SQuAD item {idx}: {e}")
+            return None
+
+
 class MultiDataset(BaseDataset):
     """다중 태스크 지원 데이터셋"""
     
@@ -405,5 +476,7 @@ def create_dataset(
         return bAbIDataset(tokenizer, task_id=task_id, split=split, num_samples=num_samples)
     elif "logiqa" in dataset_name.lower():
         return LogiQADataset(tokenizer, split, num_samples=num_samples)
+    elif "squad" in dataset_name.lower():
+        return SQuADDataset(tokenizer, split, num_samples=num_samples)
     else:
         return MultiDataset(dataset_name, tokenizer, split, num_samples=num_samples)

@@ -100,14 +100,14 @@ task:
 
 # === 학습 설정 오버라이드 ===
 learning:
-  epochs: 10
+  epochs: 12
   learning_rate: 5e-4
   batch_size: 1
-  max_clk_training: 250
+  max_clk_training: 100
   optimizer: "adamw"
   weight_decay: 0.01
-  eval_every: 5
-  save_every: 10
+  eval_every: 3
+  save_every: 1
   early_stopping_patience: 5
 
   # TimingLoss 특화 파라미터
@@ -125,18 +125,19 @@ adaptive_output_timing:
   stability_window: 10
   start_output_threshold: 0.5
   min_output_length: 10
+  fixed_len: 2
 
 # === 데이터 로딩 오버라이드 ===
 data_loading:
-  batch_size: 1
+  batch_size: 4
   tokenizer:
     name: "bert-base-uncased"
     max_length: 256
 
 data:
-  train_samples: 200 # 200개로 제한
-  val_samples: 50 # 50개로 제한
-  test_samples: 50 # 50개로 제한
+  train_samples: -1
+  val_samples: -1
+  test_samples: -1
 
 # === 평가 설정 ===
 evaluation:

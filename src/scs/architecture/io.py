@@ -293,10 +293,11 @@ class OutputInterface(nn.Module):
         # 3. 최종 출력 레이어
         if t5_model_name is not None and self.t5_data is not None:
             # T5 lm_head 사용
-            self.final_projection = nn.Linear.from_pretrained(
-                self.t5_data['lm_head_weights'].T  # [d_model, vocab_size]
-            )
-            print(f"Loaded T5 lm_head: {self.final_projection.weight.shape}")
+            self.final_projection = nn.Linear(self.embedding_dim, self.vocab_size)
+
+            if t5_model_name is not None:
+                with torch.no_grad():
+                    self.final_projection.weight.copy_(self.t5_data['lm_head_weights'])
         else:
             # 기본 출력 레이어
             self.final_projection = nn.Linear(self.embedding_dim, vocab_size)

@@ -256,12 +256,12 @@ def get_dataset_name_from_config(config: Dict[str, Any], logger) -> str:
 
 
 # --- 학습 설정 추출 및 정규화 헬퍼 ---
-def extract_and_normalize_training_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any], Optional[Dict]]:
+def extract_and_normalize_training_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
     """설정에서 학습 파라미터 추출 및 정규화"""
     raw_config = config.get("learning", config.get("training", {})).copy()
     
     # gradual_unfreezing 별도 추출
-    unfreezing_config = raw_config.pop("gradual_unfreezing", None)
+    unfreezing_config = raw_config.pop("gradual_unfreezing", {})
     
     # 파라미터 이름 정규화
     param_mapping = {

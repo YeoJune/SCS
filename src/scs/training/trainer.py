@@ -420,7 +420,6 @@ class SCSTrainer:
         with torch.no_grad():
             for batch_idx, batch in enumerate(test_loader):
                 batch_size = batch['input_tokens'].shape[0]
-                print(f"\n=== 배치 {batch_idx} (크기: {batch_size}) 처리 중 ===")
                 
                 # =====================================
                 # 배치를 개별 샘플로 분해하여 각각 순수 추론
@@ -436,16 +435,7 @@ class SCSTrainer:
                     # 예시 저장 (초기 몇 개만)
                     if len(saved_examples) < save_examples:
                         saved_examples.append(sample_result)
-                    
-                    # 진행 상황 출력
-                    if sample_idx < 3 or total_samples % 10 == 0:
-                        print(f"  샘플 {total_samples}: 정확도={sample_result['accuracy']:.3f}, "
-                            f"생성='{sample_result['generated_text'][:30]}...', "
-                            f"정답='{sample_result['target_text'][:30]}...'")
-        
-        # =====================================
-        # 전체 결과 집계 (기존 방식과 동일하게)
-        # =====================================
+
         print(f"\n=== 전체 {total_samples}개 샘플 결과 집계 ===")
         
         # 정확도 계산
@@ -562,14 +552,15 @@ class SCSTrainer:
                 accuracy = self._calculate_sequence_accuracy_fallback(generated_tokens, batch['target_tokens'][sample_idx])
             
             # =====================================
-            # 6. 손실 계산 (기존과 동일 방식)
+            # 6. 손실 계산 (train_batch와 일관성 맞춤)
             # =====================================
             loss = None
             if output_logits.shape[1] > 0 and single_target.shape[1] > 0:
                 try:
-                    # 기존과 동일한 loss 계산
+                    # 기존과 동일한 loss 계산 (train_batch와 동일한 방식)
                     if hasattr(self, 'loss_fn') and self.loss_fn is not None:
-                        loss = self.loss_fn(output_logits.unsqueeze(0), single_target, processing_info).item()
+                        # train_batch와 동일: unsqueeze 제거, .item() 추가
+                        loss = self.loss_fn(output_logits, single_target, processing_info).item()
                     else:
                         # 폴백: CrossEntropyLoss
                         min_len = min(output_logits.shape[1], single_target.shape[1])

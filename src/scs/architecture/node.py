@@ -47,6 +47,10 @@ class SpikeNode(nn.Module):
         self.influence_strength = nn.Parameter(
             torch.ones(grid_height, grid_width, device=device)
         )        
+
+        self.input_normalizer = nn.LayerNorm(
+            [grid_height, grid_width], elementwise_affine=False
+        )
         
         # 상태 초기화 (단일 샘플용)
         self.reset_state()
@@ -101,8 +105,11 @@ class SpikeNode(nn.Module):
         # 총 입력 계산 (배치 지원)
         total_input = self._integrate_inputs(external_input, internal_input, axonal_input)
         
-        # 막전위 업데이트 (배치 지원)
-        self.membrane_potential = self._update_membrane_potential(total_input)
+        # 합산된 입력 정규화로 활성도 폭발/사망 방지
+        normalized_input = self.input_normalizer(total_input)
+        
+        # 막전위 업데이트 (정규화된 입력 사용)
+        self.membrane_potential = self._update_membrane_potential(normalized_input)
     
     def post_spike_update(
         self,

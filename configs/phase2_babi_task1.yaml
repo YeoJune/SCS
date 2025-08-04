@@ -100,8 +100,8 @@ task:
 
 # === 학습 설정 오버라이드 ===
 learning:
-  epochs: 12
-  learning_rate: 5e-4
+  epochs: 31
+  learning_rate: 1e-4
   batch_size: 1
   max_clk_training: 100
   optimizer: "adamw"
@@ -129,7 +129,7 @@ adaptive_output_timing:
 
 # === 데이터 로딩 오버라이드 ===
 data_loading:
-  batch_size: 4
+  batch_size: 32
   tokenizer:
     name: "t5-small"
     max_length: 128

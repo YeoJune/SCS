@@ -120,7 +120,7 @@ class SCSTrainer:
             save_dir.mkdir(parents=True, exist_ok=True)
 
         # --- 새로운 로직: 동결/해제 설정 ---
-        unfreeze_epoch = 10  # 예시: 10 에포크가 끝난 후 임베딩을 해제
+        unfreeze_epoch = 30  # 예시: 30 에포크가 끝난 후 임베딩을 해제
 
         # 1. 초기: T5 임베딩 동결
         self.logger.info("Freezing T5 embeddings for initial training.")

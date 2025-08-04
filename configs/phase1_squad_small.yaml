@@ -102,7 +102,6 @@ task:
 learning:
   epochs: 12
   learning_rate: 1e-4
-  batch_size: 1
   max_clk_training: 550
   optimizer: "adamw"
   weight_decay: 0.01

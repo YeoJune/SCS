@@ -369,7 +369,7 @@ class SCSSystem(nn.Module):
             target_start_clk = input_seq_len
             target_end_clk = min(target_start_clk + fixed_len - 1, max_clk - 1)
 
-            effective_max_clk = min(target_start_clk + fixed_len + 2, max_clk)
+            effective_max_clk = min(target_start_clk + fixed_len, max_clk)
             
             # target 길이 조정
             if original_target_seq_len < fixed_len:

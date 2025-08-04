@@ -108,7 +108,7 @@ learning:
   weight_decay: 0.01
   eval_every: 3
   save_every: 1
-  early_stopping_patience: 5
+  early_stopping_patience: 100
 
   # TimingLoss 특화 파라미터
   length_penalty_weight: 0.1

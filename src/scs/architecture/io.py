@@ -402,37 +402,32 @@ class OutputInterface(nn.Module):
         target_start_clk: int,
         attention_mask: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
-        """순수 Teacher Forcing 병렬 처리"""
+        """순수 Teacher Forcing 병렬 처리 - VRAM 중립적"""
         batch_size, max_clk, _, _ = grid_spikes.shape
         _, seq_len = target_tokens.shape
         device = grid_spikes.device
         
-        # BOS 토큰 추가
+        # BOS 토큰 추가하여 전체 decoder input 구성
         bos_tokens = torch.ones(batch_size, 1, dtype=torch.long, device=device)
-        decoder_input_ids = torch.cat([bos_tokens, target_tokens], dim=1)  # [B, seq_len+1]
+        full_decoder_input = torch.cat([bos_tokens, target_tokens], dim=1)  # [B, seq_len+1]
         
-        # 모든 타임스텝의 메모리 시퀀스 준비
-        all_memories = []
-        for t in range(seq_len):
-            current_clk = min(target_start_clk + t, max_clk - 1)
-            current_spikes = grid_spikes[:, current_clk, :, :]
-            memory = self._create_memory_sequence(current_spikes)
-            all_memories.append(memory)
+        # 전체 시퀀스에 대한 임베딩을 한번에 계산
+        all_embeds = self._prepare_target_embeddings(full_decoder_input)  # [B, seq_len+1, D]
         
-        stacked_memories = torch.stack(all_memories, dim=1)  # [B, seq_len, H*W, D]
-        
-        # 병렬 디코더 처리
         all_logits = []
         for t in range(seq_len):
-            decoder_input = decoder_input_ids[:, :t+1]  # [B, t+1]
-            current_memory = stacked_memories[:, t]     # [B, H*W, D]
+            # 현재 타임스텝의 스파이크만 사용 (추가 메모리 없음)
+            current_clk = min(target_start_clk + t, max_clk - 1)
+            current_spikes = grid_spikes[:, current_clk, :, :]
+            memory = self._create_memory_sequence(current_spikes)  # [B, H*W, D]
             
-            current_embeds = self._prepare_target_embeddings(decoder_input)
-            tgt_mask = self._generate_causal_mask(decoder_input.shape[1])
+            # 현재까지의 임베딩만 슬라이스 (추가 메모리 없음)
+            current_embeds = all_embeds[:, :t+1, :]  # [B, t+1, D]
+            tgt_mask = self._generate_causal_mask(t+1)
             
             decoder_output = self.transformer_decoder(
                 tgt=current_embeds,
-                memory=current_memory,
+                memory=memory,
                 tgt_mask=tgt_mask
             )
             

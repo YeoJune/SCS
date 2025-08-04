@@ -44,17 +44,32 @@ class SCSTrainer:
         loss_fn: Optional[SCSLoss] = None,
         optimizer: Optional[torch.optim.Optimizer] = None,
         scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
-        tokenizer: Optional[Any] = None
+        tokenizer: Optional[Any] = None,
+        unfreezing_config: Optional[Dict] = None  # 새로 추가
     ):
         self.model = model
         self.config = config
+
+        # 로깅
+        logging.basicConfig(level=logging.INFO)
+        self.logger = logging.getLogger(__name__)
         
         # 손실 함수 (pad_token_id 포함)
         self.loss_fn = loss_fn or SCSLoss(pad_token_id=config.pad_token_id)
         
+        # 점진적 해제 스케줄러 설정 (새로 추가)
+        self.unfreezing_scheduler = None
+        if unfreezing_config and unfreezing_config.get('enabled', False):
+            self.unfreezing_scheduler = GradualUnfreezingScheduler(
+                model=self.model,
+                unfreezing_schedule=unfreezing_config['schedule'],
+                logger=self.logger
+            )
+        
         # 최적화기와 스케줄러
         self.optimizer = optimizer or torch.optim.Adam(
-            model.parameters(), 
+            # unfreezing_scheduler가 있으면 학습 가능한 파라미터만, 없으면 전체
+            filter(lambda p: p.requires_grad, model.parameters()) if self.unfreezing_scheduler else model.parameters(),
             lr=config.learning_rate,
             weight_decay=config.weight_decay
         )
@@ -71,10 +86,6 @@ class SCSTrainer:
         self.best_model_path = None  # 최고 모델 경로 추가
 
         self.current_ss_prob = self.config.ss_start_prob
-        
-        # 로깅
-        logging.basicConfig(level=logging.INFO)
-        self.logger = logging.getLogger(__name__)
     
     def _update_scheduled_sampling_prob(self):
         """현재 에포크에 맞춰 스케줄 샘플링 확률(epsilon)을 업데이트합니다."""
@@ -118,38 +129,26 @@ class SCSTrainer:
         if save_path:
             save_dir = Path(save_path)
             save_dir.mkdir(parents=True, exist_ok=True)
-
-        # --- 새로운 로직: 동결/해제 설정 ---
-        unfreeze_epoch = 30  # 예시: 30 에포크가 끝난 후 임베딩을 해제
-
-        # 1. 초기: T5 임베딩 동결
-        self.logger.info("Freezing T5 embeddings for initial training.")
-        for name, param in self.model.named_parameters():
-            if 'token_embedding' in name or 'final_projection' in name:
-                param.requires_grad = False
-                
-        # 동결 후, 학습 가능한 파라미터만으로 옵티마이저 재생성
-        self.optimizer = torch.optim.AdamW(
-            filter(lambda p: p.requires_grad, self.model.parameters()), 
-            lr=self.config.learning_rate
-        )
-        # ------------------------------------
         
         for epoch in range(self.config.epochs):
             self.current_epoch = epoch
             
-            # --- 새로운 로직: 특정 에포크에 도달하면 해제 ---
-            if epoch == unfreeze_epoch:
-                self.logger.info("Unfreezing T5 embeddings for fine-tuning.")
-                for name, param in self.model.named_parameters():
-                    if 'token_embedding' in name or 'final_projection' in name:
-                        param.requires_grad = True
-                
-                self.optimizer = torch.optim.AdamW(
-                    self.model.parameters(), 
-                    lr=self.config.learning_rate
-                )
-            # ---------------------------------------------
+            # 점진적 해제 적용
+            if self.unfreezing_scheduler:
+                optimizer_needs_update = self.unfreezing_scheduler.step(epoch)
+                if optimizer_needs_update:
+                    # 옵티마이저 재생성 (새로 해제된 파라미터 포함)
+                    self.logger.info("📝 옵티마이저 재생성 - 새로 해제된 파라미터 포함")
+                    self.optimizer = torch.optim.AdamW(
+                        filter(lambda p: p.requires_grad, self.model.parameters()),
+                        lr=self.config.learning_rate,
+                        weight_decay=self.config.weight_decay
+                    )
+                    # 스케줄러도 재생성 (있는 경우)
+                    if self.scheduler:
+                        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                            self.optimizer, T_max=self.config.epochs - epoch
+                        )
 
             self._update_scheduled_sampling_prob()
             
@@ -718,22 +717,130 @@ class SCSTrainer:
             return f"decode_error: {tokens.tolist()}"
 
 class GradualUnfreezingScheduler:
-    """점진적 언프리징 스케줄러"""
+    """점진적 언프리징 스케줄러 - 설정 파일 기반 체계적 관리"""
     
-    def __init__(self, model, unfreezing_schedule: Dict[int, List[str]]):
+    def __init__(self, model, unfreezing_schedule: Dict[int, List[str]], logger=None):
+        """
+        Args:
+            model: SCS 모델
+            unfreezing_schedule: {epoch: [module_paths]} 형태의 해제 스케줄
+            logger: 로깅 객체
+        """
         self.model = model
         self.schedule = unfreezing_schedule
+        self.logger = logger
+        self.current_epoch = -1
+        self.unfrozen_modules = set()  # 이미 해제된 모듈 추적
         
-        # 초기에는 모든 파라미터 고정
+        # 초기에는 모든 파라미터 동결
+        self._freeze_all_parameters()
+        
+        # 에포크 0 설정이 있으면 적용
+        if 0 in self.schedule:
+            self._unfreeze_modules(self.schedule[0])
+            
+        if self.logger:
+            total_params = sum(p.numel() for p in self.model.parameters())
+            trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+            self.logger.info(f"🔒 초기 파라미터 상태: {trainable_params:,}/{total_params:,} 학습 가능")
+    
+    def _freeze_all_parameters(self):
+        """모든 파라미터 동결"""
         for param in self.model.parameters():
             param.requires_grad = False
     
-    def step(self, epoch: int):
-        """에포크에 따라 점진적으로 언프리징"""
-        if epoch in self.schedule:
-            modules_to_unfreeze = self.schedule[epoch]
-            for module_name in modules_to_unfreeze:
-                module = getattr(self.model, module_name, None)
-                if module:
+    def _unfreeze_modules(self, module_paths: List[str]) -> bool:
+        """지정된 모듈들 해제"""
+        newly_unfrozen = False
+        
+        for path in module_paths:
+            if path in self.unfrozen_modules:
+                continue  # 이미 해제된 모듈은 스킵
+                
+            try:
+                module = self._get_module_by_path(path)
+                if module is not None:
+                    param_count = 0
                     for param in module.parameters():
-                        param.requires_grad = True
+                        if not param.requires_grad:
+                            param.requires_grad = True
+                            param_count += param.numel()
+                    
+                    if param_count > 0:
+                        self.unfrozen_modules.add(path)
+                        newly_unfrozen = True
+                        if self.logger:
+                            self.logger.info(f"🔓 모듈 해제: {path} ({param_count:,} 파라미터)")
+                else:
+                    if self.logger:
+                        self.logger.warning(f"⚠️ 모듈을 찾을 수 없음: {path}")
+                        
+            except Exception as e:
+                if self.logger:
+                    self.logger.warning(f"⚠️ 모듈 해제 실패 {path}: {e}")
+        
+        return newly_unfrozen
+    
+    def _get_module_by_path(self, path: str):
+        """점진적 경로로 모듈 접근 (예: 'input_interface.token_embedding')"""
+        parts = path.split('.')
+        module = self.model
+        
+        for part in parts:
+            if hasattr(module, part):
+                module = getattr(module, part)
+            else:
+                return None
+        
+        return module
+    
+    def step(self, epoch: int) -> bool:
+        """
+        에포크 진행 시 호출. 새로운 모듈이 해제되면 True 반환 (옵티마이저 재생성 필요)
+        
+        Args:
+            epoch: 현재 에포크
+            
+        Returns:
+            bool: 옵티마이저 재생성이 필요한지 여부
+        """
+        if epoch == self.current_epoch:
+            return False
+            
+        self.current_epoch = epoch
+        
+        if epoch in self.schedule:
+            if self.logger:
+                self.logger.info(f"📅 에포크 {epoch}: 점진적 해제 실행")
+            
+            newly_unfrozen = self._unfreeze_modules(self.schedule[epoch])
+            
+            if newly_unfrozen:
+                # 학습 가능한 파라미터 통계 출력
+                total_params = sum(p.numel() for p in self.model.parameters())
+                trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+                
+                if self.logger:
+                    self.logger.info(f"📊 현재 학습 가능 파라미터: {trainable_params:,}/{total_params:,} "
+                                   f"({100*trainable_params/total_params:.1f}%)")
+                
+                return True  # 옵티마이저 재생성 필요
+        
+        return False
+    
+    def get_unfrozen_modules(self) -> List[str]:
+        """현재까지 해제된 모듈 목록 반환"""
+        return list(self.unfrozen_modules)
+    
+    def get_training_statistics(self) -> Dict[str, Any]:
+        """학습 통계 반환"""
+        total_params = sum(p.numel() for p in self.model.parameters())
+        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        
+        return {
+            'total_parameters': total_params,
+            'trainable_parameters': trainable_params,
+            'trainable_ratio': trainable_params / total_params if total_params > 0 else 0,
+            'unfrozen_modules': list(self.unfrozen_modules),
+            'current_epoch': self.current_epoch
+        }

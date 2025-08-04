@@ -98,6 +98,22 @@ learning:
   start_threshold: 0.5
   confidence_threshold: 0.7
 
+  gradual_unfreezing:
+    enabled: false # 기본은 비활성화
+    schedule:
+      0: # 처음부터: T5 외 모든 것 학습 가능
+        - "nodes"
+        - "local_connections"
+        - "axonal_connections"
+        - "input_interface.sequence_to_grid_attention"
+        - "input_interface.membrane_projection"
+        - "output_interface.spike_to_feature"
+        - "output_interface.transformer_decoder"
+      30: # 에포크 30: T5 임베딩 해제 (기존과 동일)
+        - "input_interface.token_embedding"
+        - "output_interface.token_embedding"
+        - "output_interface.final_projection"
+
 data:
   train_samples: -1 # -1은 전체 데이터, 양수는 해당 개수만
   val_samples: -1 # -1은 전체 데이터
@@ -110,6 +126,10 @@ data_loading:
   tokenizer:
     name: "t5-small"
     max_length: 128
+    pad_token_id: 0
+    eos_token_id: 1
+    bos_token_id: 2
+    unk_token_id: 3
 
 # === 작업 설정 ===
 task:

@@ -276,6 +276,7 @@ class SCSSystem(nn.Module):
         output_timing: AdaptiveOutputTiming,
         input_node: str = "PFC",
         output_node: str = "PFC",
+        eos_token_id: int = 1,
         device: str = "cuda"
     ):
         super().__init__()
@@ -296,8 +297,8 @@ class SCSSystem(nn.Module):
         self.previous_spikes = {}
         self._initialize_previous_spikes()
 
-        # 임시로 하드코딩
-        self.eos_token_id = 2  # 기본 EOS 토큰 ID (추후 수정 가능)
+        self.eos_token_id = eos_token_id
+        self.pad_token_id = output_interface.pad_token_id
     
     def _initialize_previous_spikes(self, batch_size: int = 1):
         """이전 스파이크 상태 초기화 (항상 배치)"""
@@ -373,21 +374,28 @@ class SCSSystem(nn.Module):
             
             # target 길이 조정
             if original_target_seq_len < fixed_len:
-                # target이 fixed_len보다 짧으면 EOS로 패딩
-                try:
-                    # tokenizer에서 EOS 토큰 가져오기 (추후 전달받도록 수정 예정)
-                    eos_token_id = getattr(self, 'eos_token_id', 2)  # 기본값 2
-                except:
-                    eos_token_id = 2  # 기본 EOS 토큰 ID
-                    
+                # EOS 1개 + 나머지는 PAD으로 채움
                 padding_length = fixed_len - original_target_seq_len
-                eos_padding = torch.full(
-                    (batch_size, padding_length), 
-                    eos_token_id, 
+                
+                # EOS 토큰 1개 추가
+                eos_token = torch.full(
+                    (batch_size, 1), 
+                    self.eos_token_id, 
                     dtype=target_schedule.dtype, 
                     device=target_schedule.device
                 )
-                target_schedule = torch.cat([target_schedule, eos_padding], dim=1)
+                
+                # 나머지는 PAD 토큰으로 채움
+                if padding_length > 1:
+                    pad_tokens = torch.full(
+                        (batch_size, padding_length - 1), 
+                        self.pad_token_id,
+                        dtype=target_schedule.dtype, 
+                        device=target_schedule.device
+                    )
+                    target_schedule = torch.cat([target_schedule, eos_token, pad_tokens], dim=1)
+                else:
+                    target_schedule = torch.cat([target_schedule, eos_token], dim=1)
                 
             elif original_target_seq_len > fixed_len:
                 # target이 fixed_len보다 길면 앞쪽만 자름

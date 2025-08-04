@@ -260,6 +260,8 @@ def extract_and_normalize_training_config(config: Dict[str, Any]) -> Tuple[Dict[
     """설정에서 학습 파라미터 추출 및 정규화"""
     # config 매핑 - base_model.yaml은 "learning", phase2는 "training" 사용
     raw_config = config.get("learning", config.get("training", {})).copy()
+
+    unfreezing_config = raw_config.pop("gradual_unfreezing", None)
     
     # 파라미터 이름 정규화 (확장)
     param_mapping = {
@@ -304,7 +306,7 @@ def extract_and_normalize_training_config(config: Dict[str, Any]) -> Tuple[Dict[
         if param in filtered_config:
             filtered_config[param] = bool(filtered_config[param])
     
-    return filtered_config, raw_config
+    return filtered_config, raw_config, unfreezing_config
 
 
 # --- 모드별 실행 함수 ---
@@ -338,7 +340,17 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
         # 3. 데이터 로더 생성
         logger.info("📊 데이터 로더 생성 중...")
         tokenizer = SCSTokenizer(config["data_loading"]["tokenizer"]["name"])
-        pad_token_id = tokenizer.tokenizer.pad_token_id
+
+        # 토크나이저 섹션에 special tokens 설정
+        tokenizer_config = config["data_loading"]["tokenizer"]
+        tokenizer_config["pad_token_id"] = getattr(tokenizer.tokenizer, 'pad_token_id', 0)
+        tokenizer_config["eos_token_id"] = getattr(tokenizer.tokenizer, 'eos_token_id', 1)
+        tokenizer_config["bos_token_id"] = getattr(tokenizer.tokenizer, 'bos_token_id', 2)
+        tokenizer_config["unk_token_id"] = getattr(tokenizer.tokenizer, 'unk_token_id', 3)
+
+        # 토크나이저 섹션에서 pad_token_id 가져오기
+        pad_token_id = tokenizer_config["pad_token_id"]
+
         dataset_name = get_dataset_name_from_config(config, logger)
 
         # 데이터 설정 추출 (표준적인 구조)
@@ -378,7 +390,6 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
         logger.info("🧠 SCS 모델 생성 중...")
         config["io_system"]["input_interface"]["vocab_size"] = tokenizer.vocab_size
         config["io_system"]["output_interface"]["vocab_size"] = tokenizer.vocab_size
-        config["io_system"]["output_interface"]["pad_token_id"] = pad_token_id
 
         model = ModelBuilder.build_scs_from_config(config, device=device)
         
@@ -391,7 +402,7 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
         # 5. 학습 시스템 구성
         logger.info("⚙️ 학습 시스템 구성 중...")
         
-        filtered_config, raw_config = extract_and_normalize_training_config(config)
+        filtered_config, raw_config, unfreezing_config = extract_and_normalize_training_config(config)
         
         training_config = TrainingConfig(pad_token_id=pad_token_id, device=device, **filtered_config)
         
@@ -413,13 +424,15 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
 
         # 6. 트레이너 생성 및 학습
         logger.info("🎯 학습 시작...")
+        
         trainer = SCSTrainer(
             model=model, 
             config=training_config, 
             loss_fn=loss_fn, 
             optimizer=optimizer, 
             scheduler=scheduler, 
-            tokenizer=tokenizer
+            tokenizer=tokenizer,
+            unfreezing_config=unfreezing_config
         )
         trainer.train(train_loader, val_loader, save_path=str(experiment_dir / "checkpoints"))
 
@@ -578,7 +591,17 @@ def evaluate_mode(args: argparse.Namespace):
         # 4. 데이터 로더 생성
         logger.info("📊 데이터 로더 생성 중...")
         tokenizer = SCSTokenizer(config["data_loading"]["tokenizer"]["name"])
-        pad_token_id = tokenizer.tokenizer.pad_token_id
+
+        # 토크나이저 섹션에 special tokens 설정 (train_mode와 동일하게)
+        tokenizer_config = config["data_loading"]["tokenizer"]
+
+        tokenizer_config["pad_token_id"] = getattr(tokenizer.tokenizer, 'pad_token_id', 0)
+        tokenizer_config["eos_token_id"] = getattr(tokenizer.tokenizer, 'eos_token_id', 1)
+        tokenizer_config["bos_token_id"] = getattr(tokenizer.tokenizer, 'bos_token_id', 2)
+        tokenizer_config["unk_token_id"] = getattr(tokenizer.tokenizer, 'unk_token_id', 3)
+
+        # 토크나이저 섹션에서 pad_token_id 가져오기
+        pad_token_id = tokenizer_config["pad_token_id"]
         dataset_name = get_dataset_name_from_config(config, logger)
 
         # 데이터 설정 추출
@@ -603,7 +626,6 @@ def evaluate_mode(args: argparse.Namespace):
         logger.info("🧠 모델 복원 중...")
         config["io_system"]["input_interface"]["vocab_size"] = tokenizer.vocab_size
         config["io_system"]["output_interface"]["vocab_size"] = tokenizer.vocab_size
-        config["io_system"]["output_interface"]["pad_token_id"] = pad_token_id
         
         model = load_model_with_checkpoint(config, checkpoint_path, device, logger)
         logger.info("✅ 모델 복원 완료")
@@ -611,7 +633,7 @@ def evaluate_mode(args: argparse.Namespace):
         # 6. 트레이너 생성 및 평가
         logger.info("📈 평가 실행 중...")
         
-        filtered_config, _ = extract_and_normalize_training_config(config)
+        filtered_config, _, _ = extract_and_normalize_training_config(config)
         
         training_config = TrainingConfig(pad_token_id=pad_token_id, device=device, **filtered_config)
         trainer = SCSTrainer(model=model, config=training_config, tokenizer=tokenizer)

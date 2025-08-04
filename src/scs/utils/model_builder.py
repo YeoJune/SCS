@@ -100,6 +100,11 @@ class ModelBuilder:
             
             input_h, input_w = node_grid_sizes[input_node_name]
             output_h, output_w = node_grid_sizes[output_node_name]
+
+            tokenizer_config = config["data_loading"]["tokenizer"]
+            pad_token_id = tokenizer_config.get("pad_token_id") or \
+                        config.get("io_system", {}).get("output_interface", {}).get("pad_token_id", 0)
+            eos_token_id = tokenizer_config.get("eos_token_id", 1)
             
             io_config = config["io_system"]
             input_interface = InputInterface(
@@ -121,7 +126,7 @@ class ModelBuilder:
                 vocab_size=io_config["output_interface"]["vocab_size"],
                 grid_height=output_h,
                 grid_width=output_w,
-                pad_token_id=config["io_system"]["output_interface"]["pad_token_id"],
+                pad_token_id=pad_token_id,
                 embedding_dim=io_config["output_interface"].get("embedding_dim", 256),
                 max_output_len=io_config["output_interface"].get("max_output_len", 128),
                 num_heads=io_config["output_interface"].get("num_heads", 4),
@@ -159,6 +164,7 @@ class ModelBuilder:
                 output_timing=output_timing,
                 input_node=input_node_name,
                 output_node=output_node_name,
+                eos_token_id=eos_token_id,
                 device=device
             )
             

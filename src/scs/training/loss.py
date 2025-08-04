@@ -44,9 +44,28 @@ class SCSLoss(nn.Module):
         
         # 길이 불일치 처리 (손실 계산용)
         if output_seq_len != target_seq_len:
-            min_len = min(output_seq_len, target_seq_len)
-            outputs = outputs[:, :min_len, :]
-            targets = targets[:, :min_len]
+            max_len = max(output_seq_len, target_seq_len)
+            
+            # outputs 패딩 (부족한 경우)
+            if output_seq_len < max_len:
+                pad_length = max_len - output_seq_len
+                # 0으로 채워진 로짓 (uniform 분포 효과)
+                pad_logits = torch.zeros(
+                    batch_size, pad_length, vocab_size, 
+                    device=outputs.device, dtype=outputs.dtype
+                )
+                outputs = torch.cat([outputs, pad_logits], dim=1)
+            
+            # targets 패딩 (부족한 경우) - ignore_index로 손실 계산에서 제외
+            if target_seq_len < max_len:
+                pad_length = max_len - target_seq_len
+                pad_targets = torch.full(
+                    (batch_size, pad_length), 
+                    self.base_loss.ignore_index,
+                    dtype=targets.dtype, 
+                    device=targets.device
+                )
+                targets = torch.cat([targets, pad_targets], dim=1)
         
         # 1. 기본 분류 손실
         base_loss = self.base_loss(outputs.reshape(-1, vocab_size), targets.reshape(-1))

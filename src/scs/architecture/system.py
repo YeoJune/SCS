@@ -166,18 +166,11 @@ class AxonalConnections(nn.Module):
             # 2D 그리드를 1D로 flatten
             flat_spikes = modulated_spikes.view(batch_size, -1)  # [B, source_size]
             
-            # 인접행렬 연산 수행
+            # 인접행렬 연산 수행 (벡터화)
             adjacency = self.adjacency_matrices[conn_key]  # [target_size, source_size]
             
-            # 배치별로 행렬곱 수행
-            batch_outputs = []
-            for b in range(batch_size):
-                # [target_size, source_size] × [source_size, 1] = [target_size, 1]
-                output = torch.mv(adjacency, flat_spikes[b])  # [target_size]
-                batch_outputs.append(output)
-            
-            # 배치 재구성
-            batch_output = torch.stack(batch_outputs, dim=0)  # [B, target_size]
+            # 배치 전체를 한번에 처리
+            batch_output = flat_spikes @ adjacency.T  # [B, source_size] @ [source_size, target_size] = [B, target_size]
             
             # 타겟 그리드 크기로 reshape
             target_h, target_w = self._get_grid_size(target)

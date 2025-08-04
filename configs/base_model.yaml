@@ -99,25 +99,13 @@ learning:
   confidence_threshold: 0.7
 
   gradual_unfreezing:
-    enabled: false # 기본은 비활성화
-    schedule:
-      0: # 처음부터: T5 외 모든 것 학습 가능
-        - "nodes"
-        - "local_connections"
-        - "axonal_connections"
-        # --- Input Interface (T5 제외) ---
-        - "input_interface.sequence_to_grid_attention"
-        - "input_interface.membrane_projection"
-        - "input_interface.grid_position_embedding"
-        - "input_interface.position_embedding"
-        - "input_interface.layer_norm"
-        # --- Output Interface (T5 제외) ---
-        - "output_interface.spike_to_feature"
-        - "output_interface.transformer_decoder"
-        - "output_interface.grid_position_embedding"
-        - "output_interface.position_embedding"
-        - "output_interface.layer_norm"
-      30: # 에포크 30: T5 임베딩 및 출력층 해제
+    enabled: false # 기본 비활성화
+    initial_frozen_patterns: # 시작할 때 동결할 파라미터들
+      - "input_interface.token_embedding"
+      - "output_interface.token_embedding"
+      - "output_interface.final_projection"
+    unfreeze_schedule: # 에포크별 해제 스케줄
+      30: # 에포크 30에 T5 임베딩 해제 (기존과 동일)
         - "input_interface.token_embedding"
         - "output_interface.token_embedding"
         - "output_interface.final_projection"

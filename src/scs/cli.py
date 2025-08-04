@@ -256,20 +256,19 @@ def get_dataset_name_from_config(config: Dict[str, Any], logger) -> str:
 
 
 # --- 학습 설정 추출 및 정규화 헬퍼 ---
-def extract_and_normalize_training_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def extract_and_normalize_training_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any], Optional[Dict]]:
     """설정에서 학습 파라미터 추출 및 정규화"""
-    # config 매핑 - base_model.yaml은 "learning", phase2는 "training" 사용
     raw_config = config.get("learning", config.get("training", {})).copy()
-
+    
+    # gradual_unfreezing 별도 추출
     unfreezing_config = raw_config.pop("gradual_unfreezing", None)
     
-    # 파라미터 이름 정규화 (확장)
+    # 파라미터 이름 정규화
     param_mapping = {
         "base_learning_rate": "learning_rate",
         "max_grad_norm": "gradient_clip_norm", 
         "eval_every_n_epochs": "eval_every",
         "save_every_n_epochs": "save_every",
-        # 새로 추가:
         "use_schedule_sampling": "use_scheduled_sampling",
         "scheduled_sampling_start": "ss_start_prob",
         "scheduled_sampling_end": "ss_end_prob",
@@ -280,19 +279,18 @@ def extract_and_normalize_training_config(config: Dict[str, Any]) -> Tuple[Dict[
         if old_name in raw_config:
             raw_config[new_name] = raw_config.pop(old_name)
     
-    # TrainingConfig가 허용하는 파라미터 확장
+    # TrainingConfig가 허용하는 파라미터
     valid_params = {
         "epochs", "learning_rate", "weight_decay", "gradient_clip_norm",
         "eval_every", "save_every", "early_stopping_patience", "max_clk_training",
-        # 새로 추가:
         "use_scheduled_sampling", "ss_start_prob", "ss_end_prob", "ss_decay_epochs"
     }
     filtered_config = {k: v for k, v in raw_config.items() if k in valid_params}
     
-    # 타입 변환 확장
+    # 타입 변환
     float_params = ["learning_rate", "weight_decay", "gradient_clip_norm", "ss_start_prob", "ss_end_prob"]
     int_params = ["epochs", "eval_every", "save_every", "early_stopping_patience", "max_clk_training", "ss_decay_epochs"]
-    bool_params = ["use_scheduled_sampling"]  # 새로 추가
+    bool_params = ["use_scheduled_sampling"]
     
     for param in float_params:
         if param in filtered_config:

@@ -60,9 +60,12 @@ class SCSTrainer:
         # 점진적 해제 스케줄러 설정 (새로 추가)
         self.unfreezing_scheduler = None
         if unfreezing_config and unfreezing_config.get('enabled', False):
+            frozen_patterns = unfreezing_config.get('initial_frozen_patterns', [])
+            unfreeze_schedule = unfreezing_config.get('unfreeze_schedule', {})
             self.unfreezing_scheduler = GradualUnfreezingScheduler(
                 model=self.model,
-                unfreezing_schedule=unfreezing_config['schedule'],
+                frozen_patterns=frozen_patterns,
+                unfreeze_schedule=unfreeze_schedule,
                 logger=self.logger
             )
         
@@ -717,86 +720,74 @@ class SCSTrainer:
             return f"decode_error: {tokens.tolist()}"
 
 class GradualUnfreezingScheduler:
-    """점진적 언프리징 스케줄러 - 설정 파일 기반 체계적 관리"""
+    """점진적 언프리징 스케줄러 - 동결 패턴 기반"""
     
-    def __init__(self, model, unfreezing_schedule: Dict[int, List[str]], logger=None):
+    def __init__(self, model, frozen_patterns: List[str], unfreeze_schedule: Dict[int, List[str]], logger=None):
         """
         Args:
             model: SCS 모델
-            unfreezing_schedule: {epoch: [module_paths]} 형태의 해제 스케줄
+            frozen_patterns: 초기에 동결할 파라미터 패턴들
+            unfreeze_schedule: {epoch: [patterns]} 형태의 해제 스케줄
             logger: 로깅 객체
         """
         self.model = model
-        self.schedule = unfreezing_schedule
+        self.frozen_patterns = frozen_patterns
+        self.unfreeze_schedule = unfreeze_schedule
         self.logger = logger
         self.current_epoch = -1
-        self.unfrozen_modules = set()  # 이미 해제된 모듈 추적
+        self.unfrozen_patterns = set()  # 이미 해제된 패턴들 추적
         
-        # 초기에는 모든 파라미터 동결
-        self._freeze_all_parameters()
-        
-        # 에포크 0 설정이 있으면 적용
-        if 0 in self.schedule:
-            self._unfreeze_modules(self.schedule[0])
+        # 지정된 패턴만 동결
+        if self.frozen_patterns:
+            self._freeze_by_patterns(self.frozen_patterns)
             
         if self.logger:
             total_params = sum(p.numel() for p in self.model.parameters())
             trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
             self.logger.info(f"🔒 초기 파라미터 상태: {trainable_params:,}/{total_params:,} 학습 가능")
     
-    def _freeze_all_parameters(self):
-        """모든 파라미터 동결"""
-        for param in self.model.parameters():
-            param.requires_grad = False
-    
-    def _unfreeze_modules(self, module_paths: List[str]) -> bool:
-        """지정된 모듈들 해제"""
-        newly_unfrozen = False
-        
-        for path in module_paths:
-            if path in self.unfrozen_modules:
-                continue  # 이미 해제된 모듈은 스킵
-                
-            try:
-                module = self._get_module_by_path(path)
-                if module is not None:
-                    param_count = 0
-                    for param in module.parameters():
-                        if not param.requires_grad:
-                            param.requires_grad = True
-                            param_count += param.numel()
-                    
-                    if param_count > 0:
-                        self.unfrozen_modules.add(path)
-                        newly_unfrozen = True
-                        if self.logger:
-                            self.logger.info(f"🔓 모듈 해제: {path} ({param_count:,} 파라미터)")
-                else:
+    def _freeze_by_patterns(self, patterns: List[str]):
+        """패턴에 매칭되는 파라미터들 동결"""
+        frozen_count = 0
+        for name, param in self.model.named_parameters():
+            for pattern in patterns:
+                if name.startswith(pattern):
+                    param.requires_grad = False
+                    frozen_count += param.numel()
                     if self.logger:
-                        self.logger.warning(f"⚠️ 모듈을 찾을 수 없음: {path}")
-                        
-            except Exception as e:
-                if self.logger:
-                    self.logger.warning(f"⚠️ 모듈 해제 실패 {path}: {e}")
+                        self.logger.info(f"🔒 동결: {name} ({param.numel():,} 파라미터)")
+                    break
+        
+        if self.logger and frozen_count > 0:
+            self.logger.info(f"총 {frozen_count:,}개 파라미터 동결 완료")
+    
+    def _unfreeze_by_patterns(self, patterns: List[str]) -> bool:
+        """패턴에 매칭되는 파라미터들 해제"""
+        newly_unfrozen = False
+        unfrozen_count = 0
+        
+        for pattern in patterns:
+            if pattern in self.unfrozen_patterns:
+                continue  # 이미 해제된 패턴은 스킵
+                
+            for name, param in self.model.named_parameters():
+                if name.startswith(pattern) and not param.requires_grad:
+                    param.requires_grad = True
+                    unfrozen_count += param.numel()
+                    newly_unfrozen = True
+                    if self.logger:
+                        self.logger.info(f"🔓 해제: {name} ({param.numel():,} 파라미터)")
+            
+            self.unfrozen_patterns.add(pattern)
+        
+        if self.logger and unfrozen_count > 0:
+            self.logger.info(f"총 {unfrozen_count:,}개 파라미터 해제 완료")
         
         return newly_unfrozen
     
-    def _get_module_by_path(self, path: str):
-        """점진적 경로로 모듈 접근 (예: 'input_interface.token_embedding')"""
-        parts = path.split('.')
-        module = self.model
-        
-        for part in parts:
-            if hasattr(module, part):
-                module = getattr(module, part)
-            else:
-                return None
-        
-        return module
-    
     def step(self, epoch: int) -> bool:
         """
-        에포크 진행 시 호출. 새로운 모듈이 해제되면 True 반환 (옵티마이저 재생성 필요)
+        에포크 진행 시 호출. 새로운 패턴이 해제되면 True 반환
         
         Args:
             epoch: 현재 에포크
@@ -809,11 +800,12 @@ class GradualUnfreezingScheduler:
             
         self.current_epoch = epoch
         
-        if epoch in self.schedule:
+        if epoch in self.unfreeze_schedule:
             if self.logger:
                 self.logger.info(f"📅 에포크 {epoch}: 점진적 해제 실행")
             
-            newly_unfrozen = self._unfreeze_modules(self.schedule[epoch])
+            patterns_to_unfreeze = self.unfreeze_schedule[epoch]
+            newly_unfrozen = self._unfreeze_by_patterns(patterns_to_unfreeze)
             
             if newly_unfrozen:
                 # 학습 가능한 파라미터 통계 출력
@@ -828,9 +820,9 @@ class GradualUnfreezingScheduler:
         
         return False
     
-    def get_unfrozen_modules(self) -> List[str]:
-        """현재까지 해제된 모듈 목록 반환"""
-        return list(self.unfrozen_modules)
+    def get_unfrozen_patterns(self) -> List[str]:
+        """현재까지 해제된 패턴 목록 반환"""
+        return list(self.unfrozen_patterns)
     
     def get_training_statistics(self) -> Dict[str, Any]:
         """학습 통계 반환"""
@@ -841,6 +833,7 @@ class GradualUnfreezingScheduler:
             'total_parameters': total_params,
             'trainable_parameters': trainable_params,
             'trainable_ratio': trainable_params / total_params if total_params > 0 else 0,
-            'unfrozen_modules': list(self.unfrozen_modules),
+            'unfrozen_patterns': list(self.unfrozen_patterns),
+            'frozen_patterns': self.frozen_patterns,
             'current_epoch': self.current_epoch
         }

@@ -100,8 +100,8 @@ task:
 
 # === 학습 설정 오버라이드 ===
 learning:
-  epochs: 12
-  learning_rate: 1e-4
+  epochs: 100
+  learning_rate: 5e-5
   max_clk_training: 550
   optimizer: "adamw"
   weight_decay: 0.01
@@ -114,6 +114,18 @@ learning:
   timing_weight: 0.1
   start_threshold: 0.5
   confidence_threshold: 0.8
+
+  gradual_unfreezing:
+    enabled: true
+    initial_frozen_patterns: # 시작할 때 동결할 파라미터들
+      - "input_interface.token_embedding"
+      - "output_interface.token_embedding"
+      - "output_interface.final_projection"
+    unfreeze_schedule: # 에포크별 해제 스케줄
+      30: # 에포크 30에 T5 임베딩 해제 (기존과 동일)
+        - "input_interface.token_embedding"
+        - "output_interface.token_embedding"
+        - "output_interface.final_projection"
 
 # === 적응적 타이밍 오버라이드 ===
 adaptive_output_timing:

@@ -43,6 +43,10 @@ class SpikeNode(nn.Module):
         self.surrogate_beta = surrogate_beta
         self.ema_alpha = ema_alpha
         self.device = device
+
+        self.influence_strength = nn.Parameter(
+            torch.ones(grid_height, grid_width, device=device)
+        )        
         
         # 상태 초기화 (단일 샘플용)
         self.reset_state()

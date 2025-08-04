@@ -342,6 +342,11 @@ class OutputInterface(nn.Module):
         _, seq_len = target_tokens.shape
         device = grid_spikes.device
 
+        if ss_prob >= 1.0:
+            return self._forward_training_parallel(
+                grid_spikes, target_tokens, target_start_clk, attention_mask
+            )
+
         # BOS 토큰으로 디코더 입력 초기화
         decoder_input_ids = torch.full((batch_size, 1), 1, dtype=torch.long, device=device)
         all_logits = []
@@ -390,6 +395,52 @@ class OutputInterface(nn.Module):
 
         return torch.stack(all_logits, dim=1)  # [B, seq_len, vocab_size]
     
+    def _forward_training_parallel(
+        self,
+        grid_spikes: torch.Tensor,              # [B, max_clk, H, W]
+        target_tokens: torch.Tensor,            # [B, seq_len]
+        target_start_clk: int,
+        attention_mask: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        """순수 Teacher Forcing 병렬 처리"""
+        batch_size, max_clk, _, _ = grid_spikes.shape
+        _, seq_len = target_tokens.shape
+        device = grid_spikes.device
+        
+        # BOS 토큰 추가
+        bos_tokens = torch.ones(batch_size, 1, dtype=torch.long, device=device)
+        decoder_input_ids = torch.cat([bos_tokens, target_tokens], dim=1)  # [B, seq_len+1]
+        
+        # 모든 타임스텝의 메모리 시퀀스 준비
+        all_memories = []
+        for t in range(seq_len):
+            current_clk = min(target_start_clk + t, max_clk - 1)
+            current_spikes = grid_spikes[:, current_clk, :, :]
+            memory = self._create_memory_sequence(current_spikes)
+            all_memories.append(memory)
+        
+        stacked_memories = torch.stack(all_memories, dim=1)  # [B, seq_len, H*W, D]
+        
+        # 병렬 디코더 처리
+        all_logits = []
+        for t in range(seq_len):
+            decoder_input = decoder_input_ids[:, :t+1]  # [B, t+1]
+            current_memory = stacked_memories[:, t]     # [B, H*W, D]
+            
+            current_embeds = self._prepare_target_embeddings(decoder_input)
+            tgt_mask = self._generate_causal_mask(decoder_input.shape[1])
+            
+            decoder_output = self.transformer_decoder(
+                tgt=current_embeds,
+                memory=current_memory,
+                tgt_mask=tgt_mask
+            )
+            
+            logits_t = self.final_projection(decoder_output[:, -1, :])
+            all_logits.append(logits_t)
+        
+        return torch.stack(all_logits, dim=1)
+
     def generate_token_at_clk(
         self, 
         grid_spikes: torch.Tensor,      # [B, H, W] 또는 [H, W]

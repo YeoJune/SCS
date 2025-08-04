@@ -366,6 +366,8 @@ class SCSSystem(nn.Module):
         batch_size, input_seq_len = input_schedule.shape
         _, original_target_seq_len = target_schedule.shape
 
+        effective_max_clk = max_clk
+
         # 고정 길이 모드 처리
         if self.output_timing.fixed_len > -1:
             fixed_len = self.output_timing.fixed_len
@@ -373,6 +375,8 @@ class SCSSystem(nn.Module):
             # target_start_clk를 input이 끝나는 시점으로 설정
             target_start_clk = input_seq_len
             target_end_clk = min(target_start_clk + fixed_len - 1, max_clk - 1)
+
+            effective_max_clk = min(target_start_clk + fixed_len, max_clk)
             
             # target 길이 조정
             if original_target_seq_len < fixed_len:
@@ -430,7 +434,7 @@ class SCSSystem(nn.Module):
         
         all_spikes = []
 
-        for clk in range(max_clk):
+        for clk in range(effective_max_clk):
             self.current_clk = clk
             
             # Phase 1-3: 기존과 동일
@@ -671,12 +675,18 @@ class SCSSystem(nn.Module):
         external_input: Optional[torch.Tensor],
         current_spikes: Dict[str, torch.Tensor]
     ):
-        """Phase 2: 입력 통합 및 상태 업데이트 (MultiScaleGrid 제거됨)"""
-        axonal_inputs = self.axonal_connections(self.previous_spikes)
+        """Phase 2: 입력 통합 및 상태 업데이트 (개별 뉴런 영향력 적용)"""
+        
+        modulated_previous_spikes = {}
+        for node_name, prev_spikes in self.previous_spikes.items():
+            influence = self.nodes[node_name].influence_strength
+            modulated_previous_spikes[node_name] = prev_spikes * influence
+        
+        axonal_inputs = self.axonal_connections(modulated_previous_spikes)
         
         for node_name, node in self.nodes.items():
             internal_input = self.local_connections[node_name](
-                self.previous_spikes[node_name]
+                modulated_previous_spikes[node_name]
             )
             
             axonal_input = axonal_inputs.get(node_name)

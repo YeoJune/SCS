@@ -118,9 +118,38 @@ class SCSTrainer:
         if save_path:
             save_dir = Path(save_path)
             save_dir.mkdir(parents=True, exist_ok=True)
+
+        # --- 새로운 로직: 동결/해제 설정 ---
+        unfreeze_epoch = 10  # 예시: 10 에포크가 끝난 후 임베딩을 해제
+
+        # 1. 초기: T5 임베딩 동결
+        self.logger.info("Freezing T5 embeddings for initial training.")
+        for name, param in self.model.named_parameters():
+            if 'token_embedding' in name or 'final_projection' in name:
+                param.requires_grad = False
+                
+        # 동결 후, 학습 가능한 파라미터만으로 옵티마이저 재생성
+        self.optimizer = torch.optim.AdamW(
+            filter(lambda p: p.requires_grad, self.model.parameters()), 
+            lr=self.config.learning_rate
+        )
+        # ------------------------------------
         
         for epoch in range(self.config.epochs):
             self.current_epoch = epoch
+            
+            # --- 새로운 로직: 특정 에포크에 도달하면 해제 ---
+            if epoch == unfreeze_epoch:
+                self.logger.info("Unfreezing T5 embeddings for fine-tuning.")
+                for name, param in self.model.named_parameters():
+                    if 'token_embedding' in name or 'final_projection' in name:
+                        param.requires_grad = True
+                
+                self.optimizer = torch.optim.AdamW(
+                    self.model.parameters(), 
+                    lr=self.config.learning_rate
+                )
+            # ---------------------------------------------
 
             self._update_scheduled_sampling_prob()
             

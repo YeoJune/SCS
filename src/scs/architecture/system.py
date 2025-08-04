@@ -673,7 +673,10 @@ class SCSSystem(nn.Module):
         modulated_previous_spikes = {}
         for node_name, prev_spikes in self.previous_spikes.items():
             influence = self.nodes[node_name].influence_strength
-            modulated_previous_spikes[node_name] = prev_spikes * influence
+            
+            clamped_influence = torch.clamp(influence, min=0.0, max=5.0)
+
+            modulated_previous_spikes[node_name] = prev_spikes * clamped_influence
         
         axonal_inputs = self.axonal_connections(modulated_previous_spikes)
         

@@ -326,7 +326,7 @@ class OutputInterface(nn.Module):
             return self._forward_training(memory, target_tokens)
         else:
             # 추론 모드: BOS 토큰으로 시작
-            bos_tokens = torch.ones(batch_size, 1, dtype=torch.long, device=grid_spikes.device)
+            bos_tokens = torch.zeros(batch_size, 1, dtype=torch.long, device=grid_spikes.device)
             return self._forward_training(memory, bos_tokens)
     
     def forward_training(

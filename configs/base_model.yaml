@@ -22,7 +22,7 @@ spike_dynamics:
   threshold: 10.0
   refractory_base: 1
   refractory_adaptive_factor: 1.0
-  surrogate_beta: 10.0
+  surrogate_beta: 3.0
   ema_alpha: 0.1
 
 # === 연결성 설정 ===
@@ -123,8 +123,8 @@ data_loading:
     max_length: 128
     pad_token_id: 0
     eos_token_id: 1
-    bos_token_id: 2
-    unk_token_id: 3
+    bos_token_id: 0
+    unk_token_id: 2
 
 # === 작업 설정 ===
 task:

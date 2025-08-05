@@ -81,7 +81,6 @@ class ModelBuilder:
             axonal_config = config["axonal_connections"]
             axonal_connections = AxonalConnections(
                 connections=axonal_config.get("connections", []),  # 연결이 없는 경우도 처리
-                excitatory_ratio=axonal_config["excitatory_ratio"],
                 node_grid_sizes=node_grid_sizes,  # 🔧 추가: 그리드 크기 정보 전달
                 device=device
             )
@@ -220,8 +219,6 @@ class ModelBuilder:
         
         # axonal_connections 구조 확인
         if "axonal_connections" in config:
-            if "excitatory_ratio" not in config["axonal_connections"]:
-                errors.append("axonal_connections에 'excitatory_ratio'가 필요합니다.")
             if "connections" not in config["axonal_connections"]:
                 errors.append("axonal_connections에 'connections' 리스트가 필요합니다.")
             else:

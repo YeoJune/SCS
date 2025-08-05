@@ -38,7 +38,6 @@ brain_regions:
 
 # === 축삭 연결 (완전 오버라이드) ===
 axonal_connections:
-  excitatory_ratio: 0.8
   connections:
     # 기본 정보 처리 경로
     - source: "IN"

@@ -44,9 +44,18 @@ class SpikeNode(nn.Module):
         self.ema_alpha = ema_alpha
         self.device = device
 
-        self.influence_strength = nn.Parameter(
-            torch.ones(grid_height, grid_width, device=device)
-        )        
+        # 약 80% 흥분성, 20% 억제성
+        influence_init = torch.randn(grid_height, grid_width, device=device) * 0.5
+        
+        # 생물학적 현실성을 위한 바이어스
+        excitatory_mask = torch.rand(grid_height, grid_width, device=device) < 0.8
+        influence_init = torch.where(
+            excitatory_mask, 
+            torch.abs(influence_init) + 0.5,  # 흥분성: 양수 바이어스
+            -torch.abs(influence_init) - 0.2   # 억제성: 음수 바이어스
+        )
+        
+        self.influence_strength = nn.Parameter(influence_init)
 
         self.input_normalizer = nn.LayerNorm(
             [grid_height, grid_width], elementwise_affine=False

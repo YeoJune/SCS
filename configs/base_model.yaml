@@ -89,11 +89,11 @@ learning:
   ss_decay_epochs: 10
 
   # 손실 함수 파라미터
-  spike_reg_weight: 0.0
+  spike_reg_weight: 0.3
   temporal_weight: 0.0
   length_penalty_weight: 0.0
   target_spike_rate: 0.1
-  timing_weight: 0.1
+  timing_weight: 0.0
   start_threshold: 0.5
   confidence_threshold: 0.7
 

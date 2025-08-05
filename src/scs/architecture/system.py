@@ -31,6 +31,10 @@ class AxonalConnections(nn.Module):
         self.adjacency_matrices = nn.ParameterDict()
         
         self._initialize_adjacency_connections()
+
+    def _get_grid_size(self, node_name: str) -> tuple:
+        """노드의 그리드 크기 가져오기"""
+        return self.node_grid_sizes.get(node_name, (64, 64))
     
     def _initialize_adjacency_connections(self):
         """Conv2d 설정을 기반으로 인접행렬 연결 초기화 - 자연스러운 양수/음수 혼합"""

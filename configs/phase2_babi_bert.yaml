@@ -101,7 +101,6 @@ task:
   # BERT 마스킹 설정
   bert_config:
     mask_probability: 0.15 # 15% 토큰 마스킹
-    mask_token: "[MASK]" # 마스크 토큰
     random_token_prob: 0.1 # 10% 랜덤 토큰으로 대체
     unchanged_prob: 0.1 # 10% 원본 유지
     min_masks: 1 # 최소 마스크 개수

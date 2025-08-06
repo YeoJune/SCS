@@ -66,27 +66,50 @@ class BERTStyleDataset(Dataset):
     
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         """
-        기존 데이터셋의 아이템을 BERT 스타일로 변환
+        기존 데이터셋의 아이템을 BERT 스타일로 변환 - 토큰 레벨 처리
         """
         try:
             # 기존 데이터셋에서 아이템 가져오기
             original_item = self.base_dataset[idx]
             
-            # input_text를 마스킹
-            original_text = original_item['input_text']
-            masked_text = self._apply_masking(original_text)
+            # 토큰 레벨에서 마스킹 처리 (텍스트가 아닌 토큰으로)
+            original_input_tokens = original_item.get('input_tokens', [])
+            original_target_tokens = original_item.get('target_tokens', [])
             
-            # BERT 스타일로 변환
+            if len(original_input_tokens) > 0:
+                # 입력 토큰을 마스킹
+                masked_input_tokens, mask_info = self._apply_token_masking(original_input_tokens)
+                
+                # 타겟은 원본 입력 토큰 (복원 목표)
+                target_tokens = original_input_tokens.copy()
+            else:
+                # 토큰이 없는 경우 텍스트로 폴백
+                original_text = original_item['input_text']
+                masked_text = self._apply_masking(original_text)
+                
+                # 이 경우는 BaseDataset의 _tokenize_item에서 처리됨
+                return {
+                    'input_text': masked_text,
+                    'target_text': original_text,
+                    'metadata': {
+                        **original_item.get('metadata', {}),
+                        'bert_style': True,
+                        'text_fallback': True
+                    }
+                }
+            
+            # BERT 스타일로 변환 (토큰 기반)
             bert_item = {
-                'input_text': masked_text,               # 마스크된 텍스트
-                'target_text': original_text,            # 원본 텍스트 (복원 목표)
-                'input_tokens': original_item.get('input_tokens', []),  # 기존 토큰 유지
-                'target_tokens': original_item.get('target_tokens', []), # 기존 토큰 유지
+                'input_text': original_item['input_text'],  # 원본 텍스트 유지
+                'target_text': original_item['input_text'], # 타겟도 원본 입력으로
+                'input_tokens': masked_input_tokens,        # 마스크된 토큰
+                'target_tokens': target_tokens,             # 원본 토큰 (복원 목표)
                 'metadata': {
                     **original_item.get('metadata', {}),
                     'bert_style': True,
                     'mask_probability': self.mask_probability,
-                    'original_target': original_item.get('target_text', ''),  # 원래 target 보존
+                    'mask_info': mask_info,
+                    'original_target': original_item.get('target_text', ''),
                     'masking_applied': True
                 }
             }
@@ -102,7 +125,68 @@ class BERTStyleDataset(Dataset):
             fallback_item['metadata']['masking_applied'] = False
             return fallback_item
     
-    def _apply_masking(self, text: str) -> str:
+    def _apply_token_masking(self, tokens: List[int]) -> Tuple[List[int], Dict[str, Any]]:
+        """
+        토큰 레벨에서 BERT 스타일 마스킹 적용 (안전한 방식)
+        
+        Args:
+            tokens: 원본 토큰 ID 리스트
+            
+        Returns:
+            masked_tokens: 마스크된 토큰 리스트
+            mask_info: 마스킹 정보
+        """
+        try:
+            if len(tokens) < 2:
+                return tokens.copy(), {'masks_applied': 0}
+            
+            # 마스킹할 위치 선택
+            num_tokens = len(tokens)
+            max_masks = max(self.min_masks, int(num_tokens * self.max_masks_ratio))
+            
+            mask_indices = []
+            for i in range(num_tokens):
+                if random.random() < self.mask_probability:
+                    mask_indices.append(i)
+            
+            # 최소/최대 마스크 개수 조정
+            if len(mask_indices) < self.min_masks:
+                remaining_indices = [i for i in range(num_tokens) if i not in mask_indices]
+                additional_needed = min(self.min_masks - len(mask_indices), len(remaining_indices))
+                if additional_needed > 0:
+                    additional_indices = random.sample(remaining_indices, additional_needed)
+                    mask_indices.extend(additional_indices)
+            elif len(mask_indices) > max_masks:
+                mask_indices = random.sample(mask_indices, max_masks)
+            
+            # 안전한 토큰 마스킹 적용
+            masked_tokens = tokens.copy()
+            mask_token_id = 32000  # T5의 일반적인 [MASK] 토큰 ID
+            
+            for idx in mask_indices:
+                rand_val = random.random()
+                
+                if rand_val < (1.0 - self.random_token_prob - self.unchanged_prob):
+                    # 80% 확률: [MASK] 토큰으로 변경
+                    masked_tokens[idx] = mask_token_id
+                elif rand_val < (1.0 - self.unchanged_prob):
+                    # 10% 확률: 어휘 범위 내의 랜덤 토큰으로 변경
+                    # T5 어휘에서 안전한 범위의 토큰만 사용 (0-31999)
+                    safe_vocab_size = 31999  # T5 어휘 크기보다 작게
+                    masked_tokens[idx] = random.randint(100, safe_vocab_size)  # 특수 토큰 피하기
+                # 나머지 10% 확률: 원본 유지 (아무것도 하지 않음)
+            
+            mask_info = {
+                'masks_applied': len(mask_indices),
+                'mask_positions': mask_indices,
+                'mask_ratio': len(mask_indices) / num_tokens if num_tokens > 0 else 0
+            }
+            
+            return masked_tokens, mask_info
+            
+        except Exception as e:
+            logger.warning(f"Token masking failed: {e}")
+            return tokens.copy(), {'masks_applied': 0, 'error': str(e)}
         """
         텍스트에 BERT 스타일 마스킹 적용
         
@@ -161,7 +245,7 @@ class BERTStyleDataset(Dataset):
             logger.warning(f"Masking failed for text: {text[:50]}... Error: {e}")
             return text  # 마스킹 실패 시 원본 반환
     
-    def get_masking_stats(self, num_samples: int = 100) -> Dict[str, float]:
+    def _apply_masking(self, text: str) -> str:
         """
         마스킹 통계 정보 반환 (디버깅용)
         """

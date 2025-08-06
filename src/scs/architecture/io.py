@@ -337,63 +337,14 @@ class OutputInterface(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         ss_prob: float = 1.0
     ) -> torch.Tensor:
-        """시간적 스파이크 시퀀스를 사용한 학습용 forward pass"""
-        batch_size, max_clk, _, _ = grid_spikes.shape
-        _, seq_len = target_tokens.shape
-        device = grid_spikes.device
-
-        if ss_prob >= 1.0:
-            return self._forward_training_parallel(
-                grid_spikes, target_tokens, target_start_clk, attention_mask
-            )
-
-        # BOS 토큰으로 디코더 입력 초기화
-        decoder_input_ids = torch.full((batch_size, 1), 1, dtype=torch.long, device=device)
-        all_logits = []
-
-        for t in range(seq_len):
-            # 현재 타임스텝에 해당하는 스파이크 선택
-            current_clk = min(target_start_clk + t, max_clk - 1)
-            current_spikes = grid_spikes[:, current_clk, :, :]  # [B, H, W]
-            
-            # 현재 스파이크를 메모리로 변환
-            memory = self._create_memory_sequence(current_spikes)  # [B, H*W, D]
-            
-            # 디코더 입력 임베딩
-            current_embeds = self._prepare_target_embeddings(decoder_input_ids)
-            tgt_mask = self._generate_causal_mask(decoder_input_ids.shape[1])
-            
-            # 트랜스포머 디코더 실행
-            decoder_output = self.transformer_decoder(
-                tgt=current_embeds,
-                memory=memory,
-                tgt_mask=tgt_mask
-            )
-            
-            # 마지막 위치의 로짓 계산
-            logits_t = self.final_projection(decoder_output[:, -1, :])
-            all_logits.append(logits_t)
-
-            # 스케줄 샘플링
-            use_teacher_forcing = torch.rand(1).item() < ss_prob
-            
-            if use_teacher_forcing:
-                chosen_input = target_tokens[:, t:t+1]
-            else:
-                chosen_input = logits_t.argmax(dim=-1, keepdim=True)
-
-            # 어텐션 마스크 적용 (패딩 처리)
-            if attention_mask is not None:
-                is_real_token = attention_mask[:, t:t+1]
-                padding_input = torch.full_like(chosen_input, self.pad_token_id)
-                next_input_id = torch.where(is_real_token, chosen_input, padding_input)
-            else:
-                next_input_id = chosen_input
-            
-            # 다음 스텝을 위해 입력 업데이트
-            decoder_input_ids = torch.cat([decoder_input_ids, next_input_id], dim=1)
-
-        return torch.stack(all_logits, dim=1)  # [B, seq_len, vocab_size]
+        """
+        [DEPRECATED] 이 메서드는 더 이상 사용되지 않습니다.
+        훈련 로직이 SCSSystem._forward_training의 on-the-fly 방식으로 통합되었습니다.
+        """
+        raise NotImplementedError(
+            "OutputInterface.forward_training is deprecated. "
+            "Training logic has been integrated into SCSSystem._forward_training with on-the-fly processing."
+        )
     
     def _forward_training_parallel(
         self,

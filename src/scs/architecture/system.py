@@ -459,7 +459,9 @@ class SCSSystem(nn.Module):
             'fixed_delay': self.output_timing.fixed_delay if self.output_timing.fixed_delay >= 0 else None
         }
         
-        all_spikes = []
+        # On-the-fly 디코딩을 위한 변수들 초기화
+        all_logits = []
+        decoder_input_ids = torch.full((batch_size, 1), 1, dtype=torch.long, device=self.device)  # BOS 토큰 (기존과 동일)
 
         for clk in range(effective_max_clk):
             self.current_clk = clk
@@ -476,7 +478,9 @@ class SCSSystem(nn.Module):
 
                 # output_confidence 계산을 위한 임시 로짓
                 try:
-                    temp_logits = self.output_interface.generate_token_at_clk(current_spikes[self.output_node])
+                    # BOS 토큰으로 구성된 임시 입력 (배치 크기 맞춤)
+                    temp_input = torch.full((batch_size, 1), 1, dtype=torch.long, device=self.device)
+                    temp_logits = self.output_interface.generate_token_at_clk(current_spikes[self.output_node], temp_input)
                     
                     # 타겟 토큰에 대한 신뢰도 계산
                     current_target_token_idx = clk - target_start_clk
@@ -502,28 +506,67 @@ class SCSSystem(nn.Module):
                         'clk': clk
                     }
 
-            all_spikes.append(current_spikes[self.output_node])
+            # --- On-the-fly 디코딩 로직 ---
+            # 디코딩을 시작할 CLK인지 확인
+            if clk >= target_start_clk:
+                current_decoding_step = clk - target_start_clk
+
+                # 생성할 총 길이를 넘어가면 루프 조기 종료 (효율성)
+                if current_decoding_step >= target_seq_len:
+                    break
+
+                # 현재 CLK의 스파이크를 메모리로 사용 (On-the-fly)
+                memory = self.output_interface._create_memory_sequence(current_spikes[self.output_node])
+
+                # Teacher Forcing 또는 Scheduled Sampling을 위한 디코더 입력 준비
+                use_teacher_forcing = torch.rand(1).item() < ss_prob
+
+                if use_teacher_forcing:
+                    # Teacher Forcing: 이전 스텝까지의 정답 토큰을 사용
+                    current_decoder_input = torch.cat(
+                        [decoder_input_ids[:, :1], target_schedule[:, :current_decoding_step]], dim=1
+                    )
+                else:
+                    # Scheduled Sampling: 이전 스텝까지 모델이 생성한 토큰을 사용
+                    current_decoder_input = decoder_input_ids
+
+                # 디코더를 통해 다음 토큰의 로짓 계산
+                current_embeds = self.output_interface._prepare_target_embeddings(current_decoder_input)
+                tgt_mask = self.output_interface._generate_causal_mask(current_decoder_input.shape[1])
+
+                decoder_output = self.output_interface.transformer_decoder(
+                    tgt=current_embeds, memory=memory, tgt_mask=tgt_mask
+                )
+                
+                logits_t = self.output_interface.final_projection(decoder_output[:, -1, :])
+                all_logits.append(logits_t)
+
+                # (Scheduled Sampling용) 다음 스텝의 decoder_input_ids 업데이트
+                if not use_teacher_forcing:
+                    next_token_ids = logits_t.argmax(dim=-1, keepdim=True)
+                    # attention_mask가 있다면 패딩 처리
+                    if attention_mask is not None and current_decoding_step < attention_mask.shape[1]:
+                        is_real_token = attention_mask[:, current_decoding_step:current_decoding_step+1]
+                        padding_input = torch.full_like(next_token_ids, self.pad_token_id)
+                        next_token_ids = torch.where(is_real_token, next_token_ids, padding_input)
+                    decoder_input_ids = torch.cat([decoder_input_ids, next_token_ids], dim=1)
+
             self.previous_spikes = {k: v.clone() for k, v in current_spikes.items()}
         
-        # 모든 타임스텝의 스파이크를 사용하여 출력 생성
-        output_spikes = torch.stack(all_spikes, dim=1)  # [B, max_clk, H, W]
-        
-        # Teacher Forcing을 사용한 출력 생성
-        output_logits = self.output_interface.forward_training(
-            grid_spikes=output_spikes,
-            target_tokens=target_schedule,
-            target_start_clk=target_start_clk,
-            attention_mask=attention_mask,
-            ss_prob=ss_prob
-        )  # [B, seq_len, vocab_size]
+        # 최종 출력 구성
+        if not all_logits:
+            # 디코딩이 한 번도 실행되지 않은 경우 (예: max_clk가 너무 작을 때)
+            output_logits = torch.zeros(batch_size, 0, self.output_interface.vocab_size, device=self.device)
+        else:
+            output_logits = torch.stack(all_logits, dim=1)  # [B, seq_len, vocab_size]
         
         processing_info = {
-            "processing_clk": max_clk,
+            "processing_clk": self.current_clk + 1,
             "batch_size": batch_size,
             "sequence_length": target_seq_len,
             "training_mode": True,
             "timing_info": timing_info,  # 수집된 타이밍 정보
-            "tokens_generated": target_seq_len,  # 학습 시에는 타겟 시퀀스 길이
+            "tokens_generated": len(all_logits),  # 실제 생성된 토큰 수
             "output_started": True,  # 학습 모드에서는 항상 True
             "convergence_achieved": True,  # 학습 모드에서는 항상 True (완료됨)
             "final_acc_activity": 0.0  # 학습 모드에서는 기본값
@@ -576,11 +619,18 @@ class SCSSystem(nn.Module):
             if output_started:
                 output_spikes = current_spikes[self.output_node]  # [B, H, W]
                 
-                # **수정된 호출 방식**
-                token_logits = self.output_interface.generate_token_at_clk(
-                    output_spikes, generated_ids
-                ) # [B, vocab_size]
+                # Training 모드와 동일한 디코더 처리 방식 사용
+                memory = self.output_interface._create_memory_sequence(output_spikes)
                 
+                # 현재까지 생성된 토큰들로 임베딩 구성 (Training 모드와 동일)
+                current_embeds = self.output_interface._prepare_target_embeddings(generated_ids)
+                tgt_mask = self.output_interface._generate_causal_mask(generated_ids.shape[1])
+
+                decoder_output = self.output_interface.transformer_decoder(
+                    tgt=current_embeds, memory=memory, tgt_mask=tgt_mask
+                )
+                
+                token_logits = self.output_interface.final_projection(decoder_output[:, -1, :])
                 generated_logits.append(token_logits)
                 
                 # **추가된 자기회귀 로직**

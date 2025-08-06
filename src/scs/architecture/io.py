@@ -329,64 +329,6 @@ class OutputInterface(nn.Module):
             bos_tokens = torch.zeros(batch_size, 1, dtype=torch.long, device=grid_spikes.device)
             return self._forward_training(memory, bos_tokens)
     
-    def forward_training(
-        self,
-        grid_spikes: torch.Tensor,              # [B, max_clk, H, W]
-        target_tokens: torch.Tensor,            # [B, seq_len]
-        target_start_clk: int,
-        attention_mask: Optional[torch.Tensor] = None,
-        ss_prob: float = 1.0
-    ) -> torch.Tensor:
-        """
-        [DEPRECATED] 이 메서드는 더 이상 사용되지 않습니다.
-        훈련 로직이 SCSSystem._forward_training의 on-the-fly 방식으로 통합되었습니다.
-        """
-        raise NotImplementedError(
-            "OutputInterface.forward_training is deprecated. "
-            "Training logic has been integrated into SCSSystem._forward_training with on-the-fly processing."
-        )
-    
-    def _forward_training_parallel(
-        self,
-        grid_spikes: torch.Tensor,              # [B, max_clk, H, W]
-        target_tokens: torch.Tensor,            # [B, seq_len]
-        target_start_clk: int,
-        attention_mask: Optional[torch.Tensor] = None
-    ) -> torch.Tensor:
-        """순수 Teacher Forcing 병렬 처리 - VRAM 중립적"""
-        batch_size, max_clk, _, _ = grid_spikes.shape
-        _, seq_len = target_tokens.shape
-        device = grid_spikes.device
-        
-        # BOS 토큰 추가하여 전체 decoder input 구성
-        bos_tokens = torch.ones(batch_size, 1, dtype=torch.long, device=device)
-        full_decoder_input = torch.cat([bos_tokens, target_tokens], dim=1)  # [B, seq_len+1]
-        
-        # 전체 시퀀스에 대한 임베딩을 한번에 계산
-        all_embeds = self._prepare_target_embeddings(full_decoder_input)  # [B, seq_len+1, D]
-        
-        all_logits = []
-        for t in range(seq_len):
-            # 현재 타임스텝의 스파이크만 사용 (추가 메모리 없음)
-            current_clk = min(target_start_clk + t, max_clk - 1)
-            current_spikes = grid_spikes[:, current_clk, :, :]
-            memory = self._create_memory_sequence(current_spikes)  # [B, H*W, D]
-            
-            # 현재까지의 임베딩만 슬라이스 (추가 메모리 없음)
-            current_embeds = all_embeds[:, :t+1, :]  # [B, t+1, D]
-            tgt_mask = self._generate_causal_mask(t+1)
-            
-            decoder_output = self.transformer_decoder(
-                tgt=current_embeds,
-                memory=memory,
-                tgt_mask=tgt_mask
-            )
-            
-            logits_t = self.final_projection(decoder_output[:, -1, :])
-            all_logits.append(logits_t)
-        
-        return torch.stack(all_logits, dim=1)
-
     def generate_token_at_clk(
         self, 
         grid_spikes: torch.Tensor,      # [B, H, W] 또는 [H, W]

@@ -173,7 +173,7 @@ class AdaptiveOutputTiming:
         """출력 시작 시점 결정 - fixed_delay 지원 추가"""
         
         # 고정 지연 모드: input 시작(CLK 0) + fixed_delay 후 출력 시작
-        if self.fixed_delay >= 0:
+        if self.fixed_delay > -1:
             return current_clk >= self.fixed_delay
         
         # 기존 로직: fixed_len 모드
@@ -195,6 +195,10 @@ class AdaptiveOutputTiming:
         input_seq_len: int = 0
     ) -> bool:
         """출력 종료 시점 결정 - 기존 로직 유지"""
+
+        # 고정 지연 모드: input_seq_len만큼 생성되었으면 종료
+        if self.fixed_delay > -1:
+            return generated_length >= input_seq_len
         
         # 고정 길이 모드: fixed_len만큼 생성했으면 종료
         if self.fixed_len > -1:

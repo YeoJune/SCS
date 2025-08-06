@@ -336,7 +336,6 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
         logger.info("✅ 설정 파일 구조 및 차원 검증 완료")
 
         # 3. 데이터 로더 생성
-        
         logger.info("📊 데이터 로더 생성 중...")
         tokenizer = SCSTokenizer(config["data_loading"]["tokenizer"]["name"])
 
@@ -350,7 +349,7 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
 
         dataset_name = get_dataset_name_from_config(config, logger)
         
-        # learning_style과 BERT 설정 추출
+        # 새로 추가: learning_style과 BERT 설정 추출
         task_config = config.get("task", {})
         learning_style = task_config.get("learning_style", "generative")
         bert_config = task_config.get("bert_config", None)
@@ -365,14 +364,13 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
 
         # 데이터 설정 추출 (기존과 동일)
         data_config = config.get("data", {})
-        task_config = config.get("task", {})
         
         train_samples = data_config.get("train_samples", -1)
         val_samples = data_config.get("val_samples", -1)
         test_samples = data_config.get("test_samples", -1)
         task_id = task_config.get("task_id", 1)
         
-        # 데이터 로더 생성 (새 파라미터 전달)
+        # 훈련 데이터 로더 생성 (새 파라미터 전달)
         train_loader = create_dataloader(
             dataset_name=dataset_name, 
             split="train", 
@@ -385,6 +383,7 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
             bert_config=bert_config  # 새로 추가된 파라미터
         )
 
+        # 검증 데이터 로더 생성 (새 파라미터 전달)
         val_loader = create_dataloader(
             dataset_name=dataset_name, 
             split="validation", 
@@ -573,7 +572,7 @@ def load_model_with_checkpoint(config: Dict[str, Any], checkpoint_path: Path, de
         return ModelBuilder.build_scs_from_config(config, device=device)
     
 def evaluate_mode(args: argparse.Namespace):
-    """평가 모드 실행 (개선된 체크포인트 로드)"""
+    """평가 모드 실행 (BERT 스타일 지원 추가)"""
     # 1. 환경 설정
     experiment_dir = Path(args.experiment_dir)
     config_path = experiment_dir / "config.yaml"
@@ -603,41 +602,54 @@ def evaluate_mode(args: argparse.Namespace):
             for error in all_errors[:3]:  # 처음 3개만 표시
                 logger.warning(f"   - {error}")
 
-        # 4. 데이터 로더 생성
+        # 4. 데이터 로더 생성 (BERT 스타일 지원 추가)
         logger.info("📊 데이터 로더 생성 중...")
         tokenizer = SCSTokenizer(config["data_loading"]["tokenizer"]["name"])
 
-        # 토크나이저 섹션에 special tokens 설정 (train_mode와 동일하게)
+        # 토크나이저 설정 (기존과 동일)
         tokenizer_config = config["data_loading"]["tokenizer"]
-
         tokenizer_config["pad_token_id"] = getattr(tokenizer.tokenizer, 'pad_token_id', 0)
         tokenizer_config["eos_token_id"] = getattr(tokenizer.tokenizer, 'eos_token_id', 1)
         tokenizer_config["bos_token_id"] = getattr(tokenizer.tokenizer, 'bos_token_id', 2)
         tokenizer_config["unk_token_id"] = getattr(tokenizer.tokenizer, 'unk_token_id', 3)
-
-        # 토크나이저 섹션에서 pad_token_id 가져오기
         pad_token_id = tokenizer_config["pad_token_id"]
         dataset_name = get_dataset_name_from_config(config, logger)
 
-        # 데이터 설정 추출
-        data_config = config.get("data", {})
+        # 새로 추가: learning_style과 BERT 설정 추출
         task_config = config.get("task", {})
+        learning_style = task_config.get("learning_style", "generative")
+        bert_config = task_config.get("bert_config", None)
+        
+        # 로깅
+        if learning_style == "bert":
+            logger.info(f"🎭 BERT 스타일 평가 모드")
+            if bert_config:
+                logger.info(f"📝 BERT 설정: {bert_config}")
+        else:
+            logger.info(f"🎯 기존 생성형(Generative) 평가 모드")
+
+        # 데이터 설정 추출 (기존과 동일)
+        data_config = config.get("data", {})
         
         test_samples = data_config.get("test_samples", -1)
         task_id = task_config.get("task_id", 1)
-        dataset_name = get_dataset_name_from_config(config, logger)
         
+        # 테스트 데이터 로더 생성 (새 파라미터 전달)
         test_loader = create_dataloader(
             dataset_name=dataset_name, 
             split="test", 
             batch_size=1, 
             max_length=config["data_loading"]["tokenizer"]["max_length"], 
             tokenizer=tokenizer,
-            num_samples=test_samples,  # 변경
-            task_id=task_id
+            num_samples=test_samples,
+            task_id=task_id,
+            learning_style=learning_style,  # 새로 추가된 파라미터
+            bert_config=bert_config  # 새로 추가된 파라미터
         )
         
-        # 5. 모델 로드 (개선된 에러 핸들링)
+        logger.info(f"✅ 테스트 데이터 로더 생성 완료 (스타일: {learning_style})")
+        
+        # 5. 모델 로드 (기존 코드)
         logger.info("🧠 모델 복원 중...")
         config["io_system"]["input_interface"]["vocab_size"] = tokenizer.vocab_size
         config["io_system"]["output_interface"]["vocab_size"] = tokenizer.vocab_size
@@ -645,7 +657,7 @@ def evaluate_mode(args: argparse.Namespace):
         model = load_model_with_checkpoint(config, checkpoint_path, device, logger)
         logger.info("✅ 모델 복원 완료")
 
-        # 6. 트레이너 생성 및 평가
+        # 6. 트레이너 생성 및 평가 (기존 코드)
         logger.info("📈 평가 실행 중...")
         
         filtered_config, _, _ = extract_and_normalize_training_config(config)
@@ -658,7 +670,7 @@ def evaluate_mode(args: argparse.Namespace):
         
         results = trainer.evaluate(test_loader, save_examples=save_examples)
         
-        # 결과 저장 및 출력
+        # 결과 저장 및 출력 (기존 코드)
         results_path = experiment_dir / f"eval_results_{datetime.now().strftime('%Y%m%d_%H%M')}.yaml"
         save_config(results, results_path)
         
@@ -673,7 +685,6 @@ def evaluate_mode(args: argparse.Namespace):
         
         logger.info(f"💾 저장된 예시 개수: {results['num_examples_saved']}")
         logger.info(f"📂 결과 저장 위치: {results_path}")
-
 
     except Exception as e:
         logger.error(f"❌ 평가 중 오류 발생: {e}", exc_info=True)

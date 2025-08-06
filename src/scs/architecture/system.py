@@ -196,9 +196,9 @@ class AdaptiveOutputTiming:
     ) -> bool:
         """출력 종료 시점 결정 - 기존 로직 유지"""
 
-        # 고정 지연 모드: input_seq_len만큼 생성되었으면 종료
+        # 고정 지연 모드: 자동 종료
         if self.fixed_delay > -1:
-            return generated_length >= input_seq_len
+            return False
         
         # 고정 길이 모드: fixed_len만큼 생성했으면 종료
         if self.fixed_len > -1:

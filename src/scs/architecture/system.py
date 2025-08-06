@@ -329,8 +329,65 @@ class SCSSystem(nn.Module):
 
         effective_max_clk = max_clk
 
-        # 고정 길이 모드 처리
-        if self.output_timing.fixed_len > -1:
+        # 우선순위 기반 타이밍 모드 처리 (fixed_delay > fixed_len > adaptive)
+        if self.output_timing.fixed_delay >= 0:
+            # 1순위: 고정 지연 모드 - 절대적 CLK 기준
+            target_start_clk = self.output_timing.fixed_delay
+            
+            # fixed_len이 함께 설정된 경우 해당 길이 사용, 아니면 원래 target 길이
+            if self.output_timing.fixed_len > -1:
+                target_seq_len = self.output_timing.fixed_len
+                
+                # target 길이 조정 로직 (fixed_len 모드와 동일)
+                if original_target_seq_len < target_seq_len:
+                    # EOS 1개 + 나머지는 PAD으로 채움
+                    padding_length = target_seq_len - original_target_seq_len
+                    
+                    # EOS 토큰 1개 추가
+                    eos_token = torch.full(
+                        (batch_size, 1), 
+                        self.eos_token_id, 
+                        dtype=target_schedule.dtype, 
+                        device=target_schedule.device
+                    )
+                    
+                    # 나머지는 PAD 토큰으로 채움
+                    if padding_length > 1:
+                        pad_tokens = torch.full(
+                            (batch_size, padding_length - 1), 
+                            self.pad_token_id,
+                            dtype=target_schedule.dtype, 
+                            device=target_schedule.device
+                        )
+                        target_schedule = torch.cat([target_schedule, eos_token, pad_tokens], dim=1)
+                    else:
+                        target_schedule = torch.cat([target_schedule, eos_token], dim=1)
+                    
+                elif original_target_seq_len > target_seq_len:
+                    # target이 fixed_len보다 길면 앞쪽만 자름
+                    target_schedule = target_schedule[:, :target_seq_len]
+                
+                # attention_mask도 조정 (있는 경우)
+                if attention_mask is not None:
+                    if attention_mask.shape[1] < target_seq_len:
+                        # 패딩 부분은 False로 설정
+                        mask_padding = torch.zeros(
+                            (batch_size, target_seq_len - attention_mask.shape[1]),
+                            dtype=attention_mask.dtype,
+                            device=attention_mask.device
+                        )
+                        attention_mask = torch.cat([attention_mask, mask_padding], dim=1)
+                    elif attention_mask.shape[1] > target_seq_len:
+                        attention_mask = attention_mask[:, :target_seq_len]
+            else:
+                # fixed_len이 설정되지 않은 경우 원래 target 길이 사용
+                target_seq_len = original_target_seq_len
+            
+            target_end_clk = min(target_start_clk + target_seq_len - 1, max_clk - 1)
+            effective_max_clk = min(target_start_clk + target_seq_len, max_clk)
+            
+        elif self.output_timing.fixed_len > -1:
+            # 2순위: 고정 길이 모드 (기존 로직)
             fixed_len = self.output_timing.fixed_len
             
             # target_start_clk를 input이 끝나는 시점으로 설정
@@ -384,7 +441,7 @@ class SCSSystem(nn.Module):
             target_seq_len = fixed_len
             
         else:
-            # 적응적 모드: 기존 로직
+            # 3순위: 적응적 모드 (기존 로직)
             target_seq_len = original_target_seq_len
             if target_start_clk is None:
                 target_start_clk = min(input_seq_len, max_clk - target_seq_len - 1)
@@ -396,8 +453,10 @@ class SCSSystem(nn.Module):
             'target_end_clk': target_end_clk,
             'start_conditions': None,
             'end_conditions': None,
-            'mode': 'fixed_length' if self.output_timing.fixed_len > -1 else 'adaptive',
-            'fixed_len': self.output_timing.fixed_len if self.output_timing.fixed_len > -1 else None
+            'mode': ('fixed_delay' if self.output_timing.fixed_delay >= 0 else 
+                    ('fixed_length' if self.output_timing.fixed_len > -1 else 'adaptive')),
+            'fixed_len': self.output_timing.fixed_len if self.output_timing.fixed_len > -1 else None,
+            'fixed_delay': self.output_timing.fixed_delay if self.output_timing.fixed_delay >= 0 else None
         }
         
         all_spikes = []

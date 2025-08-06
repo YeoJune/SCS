@@ -52,16 +52,19 @@ class DataProcessor:
             logger.info(f"✅ Successfully created dataset with {len(dataset)} examples")
             
             # BERT 스타일인 경우 마스킹 통계 출력
-            if learning_style == "bert" and hasattr(dataset, 'get_masking_stats'):
-                stats = dataset.get_masking_stats(num_samples=min(10, len(dataset)))
-                logger.info(f"📊 BERT masking stats: {stats}")
+            if learning_style == "bert" and hasattr(dataset, 'get_masking_statistics'):
+                try:
+                    stats = dataset.get_masking_statistics(num_samples=min(10, len(dataset)))
+                    logger.info(f"📊 BERT masking stats: {stats}")
+                except Exception as e:
+                    logger.warning(f"마스킹 통계 계산 실패: {e}")
             
             return dataset
             
         except Exception as e:
             logger.error(f"❌ Failed to create dataset {dataset_name}: {e}")
             raise
-    
+        
     def get_supported_datasets(self) -> List[str]:
         """지원되는 데이터셋 목록"""
         return [

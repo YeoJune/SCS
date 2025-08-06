@@ -492,19 +492,24 @@ def create_dataset(
         # BERT 설정 기본값
         default_bert_config = {
             'mask_probability': 0.15,
-            'mask_token': '[MASK]',
+            'mask_token_id': None,  # 자동 감지
             'random_token_prob': 0.1,
             'unchanged_prob': 0.1,
             'min_masks': 1,
-            'max_masks_ratio': 0.5
+            'max_masks_ratio': 0.5,
+            'special_tokens': None  # 자동 설정
         }
         
         # 사용자 설정 병합
         if bert_config:
             default_bert_config.update(bert_config)
         
-        # BERTStyleDataset으로 래핑
-        return BERTStyleDataset(base_dataset, **default_bert_config)
+        # BERTStyleDataset으로 래핑 (토크나이저 전달)
+        return BERTStyleDataset(
+            base_dataset=base_dataset,
+            tokenizer=tokenizer,  # 토크나이저 전달 (중요!)
+            **default_bert_config
+        )
     
     else:
         # 기존 generative 방식 그대로 반환

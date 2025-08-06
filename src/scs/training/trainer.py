@@ -384,20 +384,13 @@ class SCSTrainer:
                 input_tokens = batch['input_tokens'].to(self.device)
                 target_tokens = batch['target_tokens'].to(self.device)
                 attention_mask = batch['attention_mask'].to(self.device)
-                
-                input_seq_len = input_tokens.shape[1]
-                target_seq_len = target_tokens.shape[1]
-                latest_possible_start = max(0, self.config.max_clk_training - target_seq_len - 1)
-                target_start_clk = min(input_seq_len, latest_possible_start)
 
-                # Teacher Forcing 사용으로 공정한 비교
                 output_logits, processing_info = self.model(
                     input_schedule=input_tokens,
                     max_clk=self.config.max_clk_training,
                     training=False,
                     target_schedule=target_tokens,
                     attention_mask=attention_mask,
-                    target_start_clk=target_start_clk  # **새로 추가**
                 )
                 
                 batch_loss = self.loss_fn(output_logits, target_tokens, processing_info)

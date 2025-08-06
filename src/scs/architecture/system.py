@@ -308,7 +308,6 @@ class SCSSystem(nn.Module):
         self.reset_state(batch_size)
         
         if training:
-            # **수정됨**: target_start_clk 인자 전달
             return self._forward_training(input_schedule, target_schedule, attention_mask, max_clk, target_start_clk, ss_prob=ss_prob)
         else:
             return self._forward_inference(input_schedule, max_clk, batch_size)
@@ -584,7 +583,6 @@ class SCSSystem(nn.Module):
         """추론 모드 forward pass - 고정 길이 지원"""
         output_started = False
         
-        # **수정됨**: 생성된 토큰 로짓과 실제 토큰 ID를 관리할 리스트
         generated_logits = []
         # BOS 토큰으로 초기화. [B, 1] 형태
         generated_ids = torch.ones((batch_size, 1), dtype=torch.long, device=self.device) 
@@ -603,9 +601,7 @@ class SCSSystem(nn.Module):
             current_spikes = self._phase1_compute_spikes()
             
             if isinstance(input_schedule, dict):
-                external_input = self._get_external_input_at_clk(input_schedule, clk, batch_size)
-            else:
-                external_input = self._get_external_input_sequence(input_schedule, clk)
+                external_input = self._get_external_input_at_clk(input_schedule, clk)
             
             self._phase2_update_states(external_input, current_spikes)
             self._phase3_post_spike_processing(current_spikes)
@@ -702,23 +698,10 @@ class SCSSystem(nn.Module):
         # InputInterface를 통해 배치 처리 (squeeze 제거하여 일관성 유지)
         return self.input_interface(token_ids.squeeze(-1))  # [B] -> [B, H, W]
     
-    def _get_external_input_sequence(
-        self,
-        input_sequence: Optional[torch.Tensor],  # [B, seq_len] (이미 배치화됨)
-        clk: int
-    ) -> Optional[torch.Tensor]:
-        """추론 시 시퀀스에서의 외부 입력 처리 (배치 출력)"""
-        if input_sequence is None or clk >= input_sequence.shape[1]:
-            return None
-        
-        token_id = input_sequence[:, clk:clk+1]  # [B, 1]
-        return self.input_interface(token_id.squeeze(-1))  # [B] -> [B, H, W]
-    
     def _get_external_input_at_clk(
         self,
         input_schedule: Dict[int, torch.Tensor],
-        clk: int,
-        batch_size: int
+        clk: int
     ) -> Optional[torch.Tensor]:
         """추론 시 특정 CLK에서의 외부 입력 처리 (배치 출력)"""
         if clk not in input_schedule:

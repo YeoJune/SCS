@@ -1,0 +1,175 @@
+# configs/phase1_squad_bert.yaml
+# SQuAD 독해 태스크 전용 설정
+
+# === 기본 설정 상속 ===
+defaults:
+  - base_model
+
+# === 실험 메타정보 ===
+experiment:
+  name: "Phase1_SQuAD_Reading"
+  description: "SQuAD Reading Comprehension with Direct Attention"
+  phase: 1
+  expected_runtime: "30-60분"
+
+# === 시스템 역할 (base와 동일하므로 생략 가능) ===
+system_roles:
+  input_node: "IN"
+  output_node: "OUT"
+
+# === 뇌 영역 구성 (완전 오버라이드) ===
+brain_regions:
+  IN:
+    grid_size: [64, 64]
+    decay_rate: 0.95
+    distance_tau: 1.5
+  ACC:
+    grid_size: [64, 64]
+    decay_rate: 0.88
+    distance_tau: 2.0
+  ADJ:
+    grid_size: [64, 64]
+    decay_rate: 0.92
+    distance_tau: 2.5
+  OUT:
+    grid_size: [64, 64]
+    decay_rate: 0.97
+    distance_tau: 3.0
+
+# === 축삭 연결 (완전 오버라이드) ===
+axonal_connections:
+  connections:
+    # 기본 정보 처리 경로
+    - source: "IN"
+      target: "ADJ"
+      kernel_size: 5
+      stride: 1
+      padding: 2
+      dilation: 1
+      weight_scale: 0.7
+
+    - source: "ADJ"
+      target: "OUT"
+      kernel_size: 3
+      stride: 1
+      padding: 1
+      dilation: 1
+      weight_scale: 0.9
+
+    # 모니터링 및 조절 경로
+    - source: "ADJ"
+      target: "ACC"
+      kernel_size: 3
+      stride: 1
+      padding: 1
+      dilation: 1
+      weight_scale: 0.6
+
+    - source: "ACC"
+      target: "ADJ"
+      kernel_size: 7
+      stride: 1
+      padding: 3
+      dilation: 1
+      weight_scale: 0.4
+
+    # 보조 경로 (컨텍스트 유지)
+    - source: "IN"
+      target: "ACC"
+      kernel_size: 1
+      stride: 1
+      padding: 0
+      dilation: 1
+      weight_scale: 0.3
+
+    - source: "IN"
+      target: "OUT"
+      kernel_size: 1
+      stride: 1
+      padding: 0
+      dilation: 1
+      weight_scale: 0.3
+
+# === 작업 설정 오버라이드 ===
+task:
+  name: "SQuAD"
+  type: "reading_comprehension"
+  dataset_name: "rajpurkar/squad"
+  learning_style: "bert"
+
+  # BERT 마스킹 설정
+  bert_config:
+    mask_probability: 0.15 # 15% 토큰 마스킹
+    mask_token: "[MASK]" # 마스크 토큰
+    random_token_prob: 0.1 # 10% 랜덤 토큰으로 대체
+    unchanged_prob: 0.1 # 10% 원본 유지
+    min_masks: 1 # 최소 마스크 개수
+    max_masks_ratio: 0.5 # 최대 50% 마스킹
+
+# === 학습 설정 오버라이드 ===
+learning:
+  epochs: 100
+  learning_rate: 5e-5
+  max_clk_training: 550
+  optimizer: "adamw"
+  weight_decay: 0.01
+  eval_every: 3
+  save_every: 1
+  early_stopping_patience: 5
+
+  # TimingLoss 특화 파라미터
+  length_penalty_weight: 0.1
+  timing_weight: 0.1
+  start_threshold: 0.5
+  confidence_threshold: 0.8
+
+  gradual_unfreezing:
+    enabled: true
+    initial_frozen_patterns: # 시작할 때 동결할 파라미터들
+      - "input_interface.token_embedding"
+      - "output_interface.token_embedding"
+      - "output_interface.final_projection"
+    unfreeze_schedule: # 에포크별 해제 스케줄
+      30: # 에포크 30에 T5 임베딩 해제 (기존과 동일)
+        - "input_interface.token_embedding"
+        - "output_interface.token_embedding"
+        - "output_interface.final_projection"
+
+# === 적응적 타이밍 오버라이드 ===
+adaptive_output_timing:
+  min_processing_clk: 100
+  max_processing_clk: 300
+  convergence_threshold: 0.1
+  confidence_threshold: 0.8
+  stability_window: 10
+  start_output_threshold: 0.5
+  min_output_length: 10
+  fixed_len: -1
+  fixed_delay: 5
+
+# === 데이터 로딩 오버라이드 ===
+data_loading:
+  batch_size: 8
+  tokenizer:
+    name: "t5-small"
+    max_length: 512
+
+data:
+  train_samples: 1000
+  val_samples: 100
+  test_samples: 100
+
+# === 평가 설정 ===
+evaluation:
+  save_examples: 5
+
+# === 추가 실험 설정 ===
+tracking:
+  use_wandb: false
+  save_spike_patterns: true
+  analyze_connectivity: true
+
+# === 로깅 설정 ===
+logging:
+  log_metrics: ["loss", "accuracy", "f1"]
+  log_frequency: 10

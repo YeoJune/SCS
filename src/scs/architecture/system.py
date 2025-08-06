@@ -153,7 +153,8 @@ class AdaptiveOutputTiming:
         stability_window: int = 10,
         start_output_threshold: float = 0.5,
         min_output_length: int = 10,
-        fixed_len: int = -1  # 변경: force_fixed_length -> fixed_len
+        fixed_len: int = -1,
+        fixed_delay: int = -1
     ):
         self.min_processing_clk = min_processing_clk
         self.max_processing_clk = max_processing_clk
@@ -162,20 +163,28 @@ class AdaptiveOutputTiming:
         self.stability_window = stability_window
         self.start_output_threshold = start_output_threshold
         self.min_output_length = min_output_length
-        self.fixed_len = fixed_len  # -1: adaptive, >-1: 고정 길이
+        self.fixed_len = fixed_len  # -1: adaptive, > -1: 고정 길이
+        self.fixed_delay = fixed_delay  # 새로 추가: -1: adaptive, > -1: 고정 지연
         
         self.acc_history = []
         
+    
     def should_start_output(self, current_clk: int, acc_activity: float, input_seq_len: int = 0) -> bool:
-        """출력 시작 시점 결정"""
+        """출력 시작 시점 결정 - fixed_delay 지원 추가"""
+        
+        # 고정 지연 모드: input 시작(CLK 0) + fixed_delay 후 출력 시작
+        if self.fixed_delay >= 0:
+            return current_clk >= self.fixed_delay
+        
+        # 기존 로직: fixed_len 모드
         if self.fixed_len > -1:
             # 고정 길이 모드: input이 끝나는 CLK부터 출력 시작
             return current_clk >= input_seq_len
-        else:
-            # 적응적 모드: 기존 로직
-            if current_clk < self.min_processing_clk:
-                return False
-            return acc_activity > self.start_output_threshold
+        
+        # 기존 로직: 완전 적응적 모드
+        if current_clk < self.min_processing_clk:
+            return False
+        return acc_activity > self.start_output_threshold
     
     def should_end_output(
         self, 
@@ -185,24 +194,25 @@ class AdaptiveOutputTiming:
         generated_length: int = 0,
         input_seq_len: int = 0
     ) -> bool:
-        """출력 종료 시점 결정"""
+        """출력 종료 시점 결정 - 기존 로직 유지"""
+        
+        # 고정 길이 모드: fixed_len만큼 생성했으면 종료
         if self.fixed_len > -1:
-            # 고정 길이 모드: fixed_len만큼 생성했으면 종료
             return generated_length >= self.fixed_len
-        else:
-            # 적응적 모드: 기존 로직
-            if current_clk >= self.max_processing_clk:
-                return True
-            
-            if generated_length < self.min_output_length:
-                return False
-            
-            self.acc_history.append(acc_activity)
-            
-            convergence_ok = self._check_convergence()
-            confidence_ok = output_confidence > self.confidence_threshold
-            
-            return convergence_ok and confidence_ok
+        
+        # 적응적 모드: 기존 로직
+        if current_clk >= self.max_processing_clk:
+            return True
+        
+        if generated_length < self.min_output_length:
+            return False
+        
+        self.acc_history.append(acc_activity)
+        
+        convergence_ok = self._check_convergence()
+        confidence_ok = output_confidence > self.confidence_threshold
+        
+        return convergence_ok and confidence_ok
     
     def _check_convergence(self) -> bool:
         """ACC 활성도 안정화 확인"""

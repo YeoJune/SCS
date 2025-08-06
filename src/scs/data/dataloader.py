@@ -70,7 +70,7 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
 
 
 class SCSDataLoader:
-    """SCS용 배치 데이터 로더 (PyTorch DataLoader 래퍼)"""
+    """SCS용 배치 데이터 로더 (PyTorch DataLoader 래퍼) - BERT 스타일 지원 추가"""
     def __init__(
         self,
         dataset_name: str,
@@ -83,6 +83,8 @@ class SCSDataLoader:
         tokenizer=None,
         num_samples: int = -1,
         task_id: int = 1,
+        learning_style: str = "generative",  # 새로 추가된 파라미터
+        bert_config: Optional[Dict[str, Any]] = None  # 새로 추가된 파라미터
     ):
         # 토크나이저 생성
         if tokenizer is None:
@@ -92,17 +94,19 @@ class SCSDataLoader:
         if processor is None:
             processor = DataProcessor()
         
-        # 데이터셋 생성
+        # 데이터셋 생성 (새 파라미터 전달)
         self.dataset = processor.create_dataset(
             dataset_name=dataset_name,
             split=split,
             tokenizer=tokenizer,
             max_length=max_length,
-            num_samples=num_samples,  # 변경
-            task_id=task_id
+            num_samples=num_samples,
+            task_id=task_id,
+            learning_style=learning_style,  # 새로 추가된 파라미터 전달
+            bert_config=bert_config  # 새로 추가된 파라미터 전달
         )
         
-        # PyTorch DataLoader 생성
+        # PyTorch DataLoader 생성 (기존과 동일)
         self.dataloader = DataLoader(
             dataset=self.dataset,
             batch_size=batch_size,
@@ -113,7 +117,7 @@ class SCSDataLoader:
         )
         
     def __iter__(self) -> Iterator[Dict[str, torch.Tensor]]:
-        """배치 데이터 순회"""
+        """배치 데이터 순회 - 기존과 동일"""
         return iter(self.dataloader)
     
     def __len__(self) -> int:
@@ -133,9 +137,11 @@ def create_dataloader(
     processor=None,
     tokenizer=None,
     num_samples: int = -1,
-    task_id: int = 1
+    task_id: int = 1,
+    learning_style: str = "generative",  # 새로 추가된 파라미터
+    bert_config: Optional[Dict[str, Any]] = None  # 새로 추가된 파라미터
 ) -> SCSDataLoader:
-    """SCS 배치 데이터 로더 생성"""
+    """SCS 배치 데이터 로더 생성 - BERT 스타일 지원 추가"""
     
     if shuffle is None:
         shuffle = (split == "train")
@@ -150,5 +156,7 @@ def create_dataloader(
         processor=processor,
         tokenizer=tokenizer,
         num_samples=num_samples,
-        task_id=task_id
+        task_id=task_id,
+        learning_style=learning_style,  # 새로 추가된 파라미터 전달
+        bert_config=bert_config  # 새로 추가된 파라미터 전달
     )

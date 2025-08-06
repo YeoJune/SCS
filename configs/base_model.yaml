@@ -69,6 +69,7 @@ adaptive_output_timing:
   start_output_threshold: 0.5
   min_output_length: 10
   fixed_len: -1
+  fixed_delay: -1
 
 # === 학습 설정 ===
 learning:

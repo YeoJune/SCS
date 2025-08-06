@@ -10,6 +10,7 @@ from datasets import load_dataset
 import logging
 
 from .tokenizer import SCSTokenizer
+from .bert_dataset import BERTStyleDataset
 
 logger = logging.getLogger(__name__)
 
@@ -467,16 +468,44 @@ def create_dataset(
     dataset_name: str,
     tokenizer: SCSTokenizer,
     split: str = "train",
-    num_samples: int = -1,  # max_samples → num_samples
-    task_id: int = 1
+    num_samples: int = -1,
+    task_id: int = 1,
+    learning_style: str = "generative",  # 새로 추가된 파라미터
+    bert_config: Optional[Dict[str, Any]] = None  # 새로 추가된 파라미터
 ) -> BaseDataset:
-    """데이터셋 생성 팩토리 함수"""
+    """데이터셋 생성 팩토리 함수 - BERT 스타일 지원 추가"""
     
+    # 1단계: 기존 방식으로 베이스 데이터셋 생성
     if "babi" in dataset_name.lower():
-        return bAbIDataset(tokenizer, task_id=task_id, split=split, num_samples=num_samples)
+        base_dataset = bAbIDataset(tokenizer, task_id=task_id, split=split, num_samples=num_samples)
     elif "logiqa" in dataset_name.lower():
-        return LogiQADataset(tokenizer, split, num_samples=num_samples)
+        base_dataset = LogiQADataset(tokenizer, split, num_samples=num_samples)
     elif "squad" in dataset_name.lower():
-        return SQuADDataset(tokenizer, split, num_samples=num_samples)
+        base_dataset = SQuADDataset(tokenizer, split, num_samples=num_samples)
     else:
-        return MultiDataset(dataset_name, tokenizer, split, num_samples=num_samples)
+        base_dataset = MultiDataset(dataset_name, tokenizer, split, num_samples=num_samples)
+    
+    # 2단계: learning_style에 따라 BERT 스타일 변환 적용
+    if learning_style == "bert":
+        logger.info(f"Converting to BERT style dataset with learning_style='{learning_style}'")
+        
+        # BERT 설정 기본값
+        default_bert_config = {
+            'mask_probability': 0.15,
+            'mask_token': '[MASK]',
+            'random_token_prob': 0.1,
+            'unchanged_prob': 0.1,
+            'min_masks': 1,
+            'max_masks_ratio': 0.5
+        }
+        
+        # 사용자 설정 병합
+        if bert_config:
+            default_bert_config.update(bert_config)
+        
+        # BERTStyleDataset으로 래핑
+        return BERTStyleDataset(base_dataset, **default_bert_config)
+    
+    else:
+        # 기존 generative 방식 그대로 반환
+        return base_dataset

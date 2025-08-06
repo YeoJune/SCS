@@ -336,41 +336,53 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
         logger.info("✅ 설정 파일 구조 및 차원 검증 완료")
 
         # 3. 데이터 로더 생성
+        
         logger.info("📊 데이터 로더 생성 중...")
         tokenizer = SCSTokenizer(config["data_loading"]["tokenizer"]["name"])
 
-        # 토크나이저 섹션에 special tokens 설정
+        # 토크나이저 설정 (기존과 동일)
         tokenizer_config = config["data_loading"]["tokenizer"]
         tokenizer_config["pad_token_id"] = getattr(tokenizer.tokenizer, 'pad_token_id', 0)
         tokenizer_config["eos_token_id"] = getattr(tokenizer.tokenizer, 'eos_token_id', 1)
         tokenizer_config["bos_token_id"] = getattr(tokenizer.tokenizer, 'bos_token_id', 2)
         tokenizer_config["unk_token_id"] = getattr(tokenizer.tokenizer, 'unk_token_id', 3)
-
-        # 토크나이저 섹션에서 pad_token_id 가져오기
         pad_token_id = tokenizer_config["pad_token_id"]
 
         dataset_name = get_dataset_name_from_config(config, logger)
+        
+        # learning_style과 BERT 설정 추출
+        task_config = config.get("task", {})
+        learning_style = task_config.get("learning_style", "generative")
+        bert_config = task_config.get("bert_config", None)
+        
+        # 로깅
+        if learning_style == "bert":
+            logger.info(f"🎭 BERT 스타일 학습 모드 활성화")
+            if bert_config:
+                logger.info(f"📝 BERT 설정: {bert_config}")
+        else:
+            logger.info(f"🎯 기존 생성형(Generative) 학습 모드")
 
-        # 데이터 설정 추출 (표준적인 구조)
+        # 데이터 설정 추출 (기존과 동일)
         data_config = config.get("data", {})
         task_config = config.get("task", {})
         
-        # 샘플 개수 설정 추출
-        train_samples = data_config.get("train_samples", -1)  # -1은 전체
+        train_samples = data_config.get("train_samples", -1)
         val_samples = data_config.get("val_samples", -1)
         test_samples = data_config.get("test_samples", -1)
-        
         task_id = task_config.get("task_id", 1)
-        dataset_name = get_dataset_name_from_config(config, logger)
         
+        # 데이터 로더 생성 (새 파라미터 전달)
         train_loader = create_dataloader(
             dataset_name=dataset_name, 
             split="train", 
             batch_size=config["data_loading"]["batch_size"], 
             max_length=config["data_loading"]["tokenizer"]["max_length"], 
             tokenizer=tokenizer,
-            num_samples=train_samples,  # 변경
-            task_id=task_id
+            num_samples=train_samples,
+            task_id=task_id,
+            learning_style=learning_style,  # 새로 추가된 파라미터
+            bert_config=bert_config  # 새로 추가된 파라미터
         )
 
         val_loader = create_dataloader(
@@ -379,10 +391,13 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
             batch_size=1, 
             max_length=config["data_loading"]["tokenizer"]["max_length"], 
             tokenizer=tokenizer,
-            num_samples=val_samples,  # 변경
-            task_id=task_id
+            num_samples=val_samples,
+            task_id=task_id,
+            learning_style=learning_style,  # 새로 추가된 파라미터
+            bert_config=bert_config  # 새로 추가된 파라미터
         )
-        logger.info(f"✅ 데이터 로더 생성 완료 (데이터셋: {dataset_name})")
+        
+        logger.info(f"✅ 데이터 로더 생성 완료 (데이터셋: {dataset_name}, 스타일: {learning_style})")
 
         # 4. 모델 인스턴스화 (새로운 선언적 조립 방식)
         logger.info("🧠 SCS 모델 생성 중...")
@@ -443,7 +458,9 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
             max_length=config["data_loading"]["tokenizer"]["max_length"], 
             tokenizer=tokenizer,
             num_samples=test_samples,
-            task_id=task_id
+            task_id=task_id,
+            learning_style=learning_style,
+            bert_config=bert_config
         )
         
         # 예시 저장 개수 설정 (config에서 가져오거나 기본값 10)

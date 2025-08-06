@@ -604,8 +604,7 @@ class SCSSystem(nn.Module):
             # Phase 1-3 동일
             current_spikes = self._phase1_compute_spikes()
             
-            if isinstance(input_schedule, dict):
-                external_input = self._get_external_input_at_clk(input_schedule, clk)
+            external_input = self._get_external_input_at_clk(input_schedule, clk)
             
             self._phase2_update_states(external_input, current_spikes)
             self._phase3_post_spike_processing(current_spikes)

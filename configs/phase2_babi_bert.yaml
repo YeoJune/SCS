@@ -108,13 +108,13 @@ task:
 
 # === 학습 설정 오버라이드 ===
 learning:
-  epochs: 100
+  epochs: 30
   learning_rate: 1e-4
   max_clk_training: 100
   optimizer: "adamw"
   weight_decay: 0.01
-  eval_every: 3
-  save_every: 1
+  eval_every: 5
+  save_every: 10
   early_stopping_patience: 100
 
   # TimingLoss 특화 파라미터
@@ -137,7 +137,7 @@ adaptive_output_timing:
 
 # === 데이터 로딩 오버라이드 ===
 data_loading:
-  batch_size: 32
+  batch_size: 1
   tokenizer:
     name: "t5-small"
     max_length: 128

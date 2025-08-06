@@ -104,8 +104,8 @@ learning:
   max_clk_training: 550
   optimizer: "adamw"
   weight_decay: 0.01
-  eval_every: 3
-  save_every: 1
+  eval_every: 5
+  save_every: 10
   early_stopping_patience: 5
 
   # TimingLoss 특화 파라미터

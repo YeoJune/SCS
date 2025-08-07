@@ -418,13 +418,18 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
         
         training_config = TrainingConfig(pad_token_id=pad_token_id, device=device, **filtered_config)
         
-        # TimingLoss 사용
+        # TimingLoss 사용 (새로운 파라미터 구조)
         loss_fn = TimingLoss(
             pad_token_id=pad_token_id,
+            # SCSLoss 기본 파라미터들
+            spike_reg_weight=raw_config.get("spike_reg_weight", 0.0),
+            temporal_weight=raw_config.get("temporal_weight", 0.0),
             length_penalty_weight=raw_config.get("length_penalty_weight", 0.0),
-            timing_weight=raw_config.get("timing_weight", 0.1),
-            start_threshold=raw_config.get("start_threshold", 0.5),
-            confidence_threshold=raw_config.get("confidence_threshold", 0.7)
+            target_spike_rate=raw_config.get("target_spike_rate", 0.1),
+            # TimingLoss 전용 파라미터들
+            timing_weight=raw_config.get("timing_weight", 1.0),
+            sync_target_start=raw_config.get("sync_target_start", 1.0),
+            sync_target_end=raw_config.get("sync_target_end", 0.0)
         )
         
         # 옵티마이저 생성

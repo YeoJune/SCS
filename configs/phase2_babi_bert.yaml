@@ -81,6 +81,14 @@ axonal_connections:
       dilation: 1
       weight_scale: 0.3
 
+    - source: "ADJ"
+      target: "ACC"
+      kernel_size: 3
+      stride: 1
+      padding: 1
+      dilation: 1
+      weight_scale: 0.3
+
 # === 작업 설정 오버라이드 ===
 task:
   name: "bAbI"

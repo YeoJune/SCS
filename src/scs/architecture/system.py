@@ -142,7 +142,7 @@ class AxonalConnections(nn.Module):
         return axonal_inputs
 
 class AdaptiveOutputTiming:
-    """적응적 출력 타이밍 제어 - fixed_len 파라미터로 동작 모드 결정"""
+    """적응적 출력 타이밍 제어 - 순수 적응적 모드만 담당"""
     
     def __init__(
         self,
@@ -163,25 +163,15 @@ class AdaptiveOutputTiming:
         self.stability_window = stability_window
         self.start_output_threshold = start_output_threshold
         self.min_output_length = min_output_length
-        self.fixed_len = fixed_len  # -1: adaptive, > -1: 고정 길이
-        self.fixed_delay = fixed_delay  # 새로 추가: -1: adaptive, > -1: 고정 지연
+        self.fixed_len = fixed_len  # 설정값 저장용 (직접 관리는 SCSSystem에서)
+        self.fixed_delay = fixed_delay  # 설정값 저장용 (직접 관리는 SCSSystem에서)
         
         self.acc_history = []
         
     
     def should_start_output(self, current_clk: int, acc_activity: float, input_seq_len: int = 0) -> bool:
-        """출력 시작 시점 결정 - fixed_delay 지원 추가"""
-        
-        # 고정 지연 모드: input 시작(CLK 0) + fixed_delay 후 출력 시작
-        if self.fixed_delay > -1:
-            return current_clk >= self.fixed_delay
-        
-        # 기존 로직: fixed_len 모드
-        if self.fixed_len > -1:
-            # 고정 길이 모드: input이 끝나는 CLK부터 출력 시작
-            return current_clk >= input_seq_len
-        
-        # 기존 로직: 완전 적응적 모드
+        """출력 시작 시점 결정 - 순수 적응적 모드만"""
+        # 고정 모드들은 SCSSystem에서 직접 관리하므로 여기서는 적응적 로직만
         if current_clk < self.min_processing_clk:
             return False
         return acc_activity > self.start_output_threshold
@@ -194,17 +184,8 @@ class AdaptiveOutputTiming:
         generated_length: int = 0,
         input_seq_len: int = 0
     ) -> bool:
-        """출력 종료 시점 결정 - 기존 로직 유지"""
-
-        # 고정 지연 모드: 자동 종료
-        if self.fixed_delay > -1:
-            return False
-        
-        # 고정 길이 모드: fixed_len만큼 생성했으면 종료
-        if self.fixed_len > -1:
-            return generated_length >= self.fixed_len
-        
-        # 적응적 모드: 기존 로직
+        """출력 종료 시점 결정 - 순수 적응적 모드만"""
+        # 고정 모드들은 SCSSystem에서 직접 관리하므로 여기서는 적응적 로직만
         if current_clk >= self.max_processing_clk:
             return True
         
@@ -587,8 +568,7 @@ class SCSSystem(nn.Module):
         max_clk: int,
         batch_size: int
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
-        """추론 모드 forward pass - 단순화된 입력 처리"""
-        output_started = False
+        """추론 모드 forward pass - _forward_training과 동일한 타이밍 관리"""
         generated_logits = []
         generated_ids = torch.ones((batch_size, 1), dtype=torch.long, device=self.device) 
         self.output_timing.reset()
@@ -597,6 +577,38 @@ class SCSSystem(nn.Module):
         input_seq_len = 0
         if input_schedule is not None:
             input_seq_len = input_schedule.shape[1]
+
+        # 우선순위 기반 타이밍 모드 처리 (fixed_delay > fixed_len > adaptive)
+        output_start_clk = None
+        max_output_length = None
+        
+        if self.output_timing.fixed_delay >= 0:
+            # 1순위: 고정 지연 모드 - 절대적 CLK 기준
+            output_start_clk = self.output_timing.fixed_delay
+            
+            # fixed_len이 함께 설정된 경우 해당 길이 사용
+            if self.output_timing.fixed_len > -1:
+                max_output_length = self.output_timing.fixed_len
+            # 아니면 무제한 생성 (max_clk까지)
+            
+        elif self.output_timing.fixed_len > -1:
+            # 2순위: 고정 길이 모드
+            output_start_clk = input_seq_len
+            max_output_length = self.output_timing.fixed_len
+            
+        # 3순위: 적응적 모드는 기존 로직 사용 (output_start_clk = None)
+
+        # 타이밍 정보 구성
+        timing_info = {
+            'output_start_clk': output_start_clk,
+            'max_output_length': max_output_length,
+            'mode': ('fixed_delay' if self.output_timing.fixed_delay >= 0 else 
+                    ('fixed_length' if self.output_timing.fixed_len > -1 else 'adaptive')),
+            'fixed_len': self.output_timing.fixed_len if self.output_timing.fixed_len > -1 else None,
+            'fixed_delay': self.output_timing.fixed_delay if self.output_timing.fixed_delay >= 0 else None
+        }
+
+        output_started = False
 
         for clk in range(max_clk):
             self.current_clk = clk
@@ -607,11 +619,18 @@ class SCSSystem(nn.Module):
             self._phase2_update_states(external_input, current_spikes)
             self._phase3_post_spike_processing(current_spikes)
             
-            # 출력 처리 (기존과 동일)
             acc_activity = self._get_acc_activity(current_spikes)
             
-            if not output_started and self.output_timing.should_start_output(clk, acc_activity, input_seq_len):
-                output_started = True
+            # 출력 시작 결정 - 직접 관리
+            if not output_started:
+                if output_start_clk is not None:
+                    # fixed_delay 또는 fixed_len 모드: 정확한 CLK에서 시작
+                    if clk >= output_start_clk:
+                        output_started = True
+                else:
+                    # 적응적 모드: AdaptiveOutputTiming 사용
+                    if self.output_timing.should_start_output(clk, acc_activity, input_seq_len):
+                        output_started = True
             
             if output_started:
                 output_spikes = current_spikes[self.output_node]
@@ -628,14 +647,26 @@ class SCSSystem(nn.Module):
                 next_token_ids = torch.argmax(token_logits, dim=-1, keepdim=True)
                 generated_ids = torch.cat([generated_ids, next_token_ids], dim=1)
 
-                output_confidence = torch.softmax(token_logits[0], dim=-1).max().item()
                 generated_length = generated_ids.shape[1] - 1
                 
-                if self.output_timing.should_end_output(
-                    clk, acc_activity, output_confidence, 
-                    generated_length=generated_length, 
-                    input_seq_len=input_seq_len
-                ):
+                # 출력 종료 결정 - 직접 관리
+                should_end = False
+                
+                if max_output_length is not None:
+                    # fixed_delay + fixed_len 또는 fixed_len 모드: 정확한 길이에서 종료
+                    if generated_length >= max_output_length:
+                        should_end = True
+                else:
+                    # 적응적 모드 또는 fixed_delay만 설정된 경우: AdaptiveOutputTiming 사용
+                    output_confidence = torch.softmax(token_logits[0], dim=-1).max().item()
+                    if self.output_timing.should_end_output(
+                        clk, acc_activity, output_confidence, 
+                        generated_length=generated_length, 
+                        input_seq_len=input_seq_len
+                    ):
+                        should_end = True
+                
+                if should_end:
                     break
             
             self.previous_spikes = {k: v.clone() for k, v in current_spikes.items()}
@@ -654,8 +685,7 @@ class SCSSystem(nn.Module):
             "final_acc_activity": acc_activity if 'acc_activity' in locals() else 0.0,
             "batch_size": batch_size,
             "generated_ids": generated_ids[:, 1:],
-            "mode": 'fixed_delay' if self.output_timing.fixed_delay >= 0 else (
-                    'fixed_length' if self.output_timing.fixed_len > -1 else 'adaptive')
+            "timing_info": timing_info
         }
         
         return output_tokens, processing_info

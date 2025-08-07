@@ -81,14 +81,6 @@ axonal_connections:
       dilation: 1
       weight_scale: 0.3
 
-    - source: "ADJ"
-      target: "ACC"
-      kernel_size: 3
-      stride: 1
-      padding: 1
-      dilation: 1
-      weight_scale: 0.3
-
 # === 작업 설정 오버라이드 ===
 task:
   name: "bAbI"
@@ -108,7 +100,7 @@ task:
 # === 학습 설정 오버라이드 ===
 learning:
   epochs: 31
-  learning_rate: 2e-4
+  learning_rate: 1e-4
   max_clk_training: 50
   optimizer: "adamw"
   weight_decay: 0.01

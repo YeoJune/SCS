@@ -224,7 +224,7 @@ class bAbIDataset(BaseDataset):
                 return None
             
             # 입력 형식: "Context: [지문] Question: [질문]"
-            input_text = f"Answer the question based on context: Context: {passage_text} Question: {question_text}"
+            input_text = f"Context: {passage_text} Question: {question_text}"
             
             return {
                 'input_text': input_text,
@@ -277,7 +277,7 @@ class SQuADDataset(BaseDataset):
                 target_text = "unanswerable"
             
             # 입력 텍스트 구성
-            input_parts = ["Answer the question based on the given context:"]
+            input_parts = []
             
             if title:
                 input_parts.append(f"Title: {title}")

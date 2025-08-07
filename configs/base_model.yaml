@@ -92,10 +92,9 @@ learning:
   ss_end_prob: 0.05
   ss_decay_epochs: 10
 
-  spike_reg_weight: 0.3 # 스파이크 정규화 가중치
-  temporal_weight: 0.0 # 시간적 일관성 가중치
-  length_penalty_weight: 0.0 # 길이 페널티 가중치
+  spike_reg_weight: 0.0 # 스파이크 정규화 가중치
   target_spike_rate: 0.1 # 목표 스파이크율
+  temporal_weight: 0.0 # 시간적 일관성 가중치
   timing_weight: 0.1 # 타이밍 손실 가중치
   sync_target_start: 1.0 # 시작 시점 동기화 목표
   sync_target_end: 0.0 # 종료 시점 동기화 목표

@@ -138,6 +138,7 @@ class ModelBuilder:
                     io_config["output_interface"].get("positional_encoding", True)
                 ),
                 t5_model_name=io_config["output_interface"].get("t5_model_name", "t5-base"),
+                spike_gain=io_config["output_interface"].get("spike_gain", 5.0),
                 device=device
             )
                         

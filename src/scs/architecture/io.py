@@ -222,6 +222,7 @@ class OutputInterface(nn.Module):
         dropout: float = 0.1,
         use_positional_encoding: bool = True,  # 새로 추가된 파라미터
         t5_model_name: Optional[str] = None,   # T5 임베딩 사용 시 모델명
+        spike_gain: float = 5.0,
         device: str = "cuda"
     ):
         super().__init__()
@@ -235,6 +236,7 @@ class OutputInterface(nn.Module):
         self.num_heads = num_heads
         self.num_decoder_layers = num_decoder_layers
         self.use_positional_encoding = use_positional_encoding
+        self.spike_gain = spike_gain
         self.device = device
         
         # T5 임베딩 로드 및 초기화
@@ -365,7 +367,7 @@ class OutputInterface(nn.Module):
         spikes_with_feature = grid_spikes.unsqueeze(-1).float()
         
         # 스파이크 값을 임베딩 벡터로 변환: [B, H, W, 1] -> [B, H, W, D]
-        spike_features = self.spike_to_feature(spikes_with_feature)
+        spike_features = self.spike_to_feature(spikes_with_feature * self.spike_gain)
         
         # 위치 정보 추가: [B, H, W, D] + [H, W, D] -> [B, H, W, D]
         contextual_features = spike_features + self.grid_position_embedding

@@ -144,21 +144,21 @@ class SCSLoss(nn.Module):
 
 class TimingLoss(SCSLoss):
     """
-    AdaptiveOutputTiming 학습을 위한 손실 함수.
-    기본 SCSLoss에 타이밍 정합성(alignment) 손실을 추가합니다.
+    TimingManager의 동기화 지표를 직접 학습하는 손실 함수.
     """
     def __init__(
         self, 
         pad_token_id: int, 
-        timing_weight: float = 0.1,
-        start_threshold: float = 0.5,
-        confidence_threshold: float = 0.7,
+        timing_weight: float = 1.0,
+        sync_target_start: float = 1.0,
+        sync_target_end: float = 0.0,
         **kwargs
     ):
         super().__init__(pad_token_id, **kwargs)
         self.timing_weight = timing_weight
-        self.start_threshold = start_threshold
-        self.confidence_threshold = confidence_threshold
+        self.sync_target_start = sync_target_start
+        self.sync_target_end = sync_target_end
+        self.mse_loss = nn.MSELoss()
 
     def forward(
         self, 
@@ -182,28 +182,19 @@ class TimingLoss(SCSLoss):
         start_loss = torch.tensor(0.0, device=device)
         end_loss = torch.tensor(0.0, device=device)
         
-        # 1. 시작 시점 손실: target_start_clk에서 acc_activity가 임계값을 넘도록 유도
+        # 시작 손실 계산
         if timing_info.get('start_conditions'):
             start_info = timing_info['start_conditions']
-            # acc_activity를 tensor로 변환 후 relu 적용
-            acc_activity_tensor = torch.tensor(start_info['acc_activity'], device=device)
-            start_loss = torch.relu(self.start_threshold - acc_activity_tensor)
+            sync_at_start = start_info['stable_sync_index'].to(device)
+            target = torch.full_like(sync_at_start, self.sync_target_start)
+            start_loss = self.mse_loss(sync_at_start, target)
 
-        # 2. 종료 시점 손실: target_end_clk에서 confidence가 임계값을 넘도록 유도
+        # 종료 손실 계산
         if timing_info.get('end_conditions'):
             end_info = timing_info['end_conditions']
-            # confidence가 confidence_threshold보다 작으면 페널티
-            if 'raw_confidence_batch' in end_info:
-                confidence_batch = end_info['raw_confidence_batch']
-                
-                # **수정됨**: 안전한 tensor 변환 추가
-                if not isinstance(confidence_batch, torch.Tensor):
-                    confidence_batch = torch.tensor(confidence_batch, device=device)
-                else:
-                    # 이미 tensor이지만 디바이스가 다를 수 있음
-                    confidence_batch = confidence_batch.to(device)
-                    
-                end_loss = torch.relu(self.confidence_threshold - confidence_batch).mean()
+            sync_at_end = end_info['stable_sync_index'].to(device)
+            target = torch.full_like(sync_at_end, self.sync_target_end)
+            end_loss = self.mse_loss(sync_at_end, target)
             
         return start_loss + end_loss
 

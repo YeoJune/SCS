@@ -6,7 +6,7 @@
 from .architecture import (
     SpikeNode, LocalConnectivity,
     InputInterface, OutputInterface,
-    SCSSystem, AxonalConnections, AdaptiveOutputTiming,
+    SCSSystem, AxonalConnections, TimingManager,
 )
 
 # Training 모듈
@@ -35,7 +35,7 @@ __all__ = [
     # 아키텍처 구성요소
     "SpikeNode", "LocalConnectivity",
     "InputInterface", "OutputInterface", 
-    "SCSSystem", "AxonalConnections", "AdaptiveOutputTiming",
+    "SCSSystem", "AxonalConnections", "TimingManager",
     
     # 학습 시스템
     "SCSTrainer", "TrainingConfig", "GradualUnfreezingScheduler",

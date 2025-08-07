@@ -8,9 +8,9 @@ from .node import SpikeNode, LocalConnectivity
 from .io import InputInterface, OutputInterface
 from .system import (
     SCSSystem, 
-    AxonalConnections, 
-    AdaptiveOutputTiming
+    AxonalConnections
 )
+from .timing import TimingManager
 
 __all__ = [
     # 기본 노드 구성요소
@@ -24,5 +24,7 @@ __all__ = [
     # 시스템 구성요소
     "SCSSystem",
     "AxonalConnections",
-    "AdaptiveOutputTiming"
+    
+    # 타이밍 관리
+    "TimingManager"
 ]

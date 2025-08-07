@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple, Any
 
 from .node import SpikeNode, LocalConnectivity
 from .io import InputInterface, OutputInterface
+from .timing import TimingManager
 
 class AxonalConnections(nn.Module):
     """
@@ -141,78 +142,6 @@ class AxonalConnections(nn.Module):
         
         return axonal_inputs
 
-class AdaptiveOutputTiming:
-    """적응적 출력 타이밍 제어 - 순수 적응적 모드만 담당"""
-    
-    def __init__(
-        self,
-        min_processing_clk: int = 100,
-        max_processing_clk: int = 500,
-        convergence_threshold: float = 0.1,
-        confidence_threshold: float = 0.8,
-        stability_window: int = 10,
-        start_output_threshold: float = 0.5,
-        min_output_length: int = 10,
-        fixed_len: int = -1,
-        fixed_delay: int = -1
-    ):
-        self.min_processing_clk = min_processing_clk
-        self.max_processing_clk = max_processing_clk
-        self.convergence_threshold = convergence_threshold
-        self.confidence_threshold = confidence_threshold
-        self.stability_window = stability_window
-        self.start_output_threshold = start_output_threshold
-        self.min_output_length = min_output_length
-        self.fixed_len = fixed_len  # 설정값 저장용 (직접 관리는 SCSSystem에서)
-        self.fixed_delay = fixed_delay  # 설정값 저장용 (직접 관리는 SCSSystem에서)
-        
-        self.acc_history = []
-        
-    
-    def should_start_output(self, current_clk: int, acc_activity: float, input_seq_len: int = 0) -> bool:
-        """출력 시작 시점 결정 - 순수 적응적 모드만"""
-        # 고정 모드들은 SCSSystem에서 직접 관리하므로 여기서는 적응적 로직만
-        if current_clk < self.min_processing_clk:
-            return False
-        return acc_activity > self.start_output_threshold
-    
-    def should_end_output(
-        self, 
-        current_clk: int, 
-        acc_activity: float, 
-        output_confidence: float,
-        generated_length: int = 0,
-        input_seq_len: int = 0
-    ) -> bool:
-        """출력 종료 시점 결정 - 순수 적응적 모드만"""
-        # 고정 모드들은 SCSSystem에서 직접 관리하므로 여기서는 적응적 로직만
-        if current_clk >= self.max_processing_clk:
-            return True
-        
-        if generated_length < self.min_output_length:
-            return False
-        
-        self.acc_history.append(acc_activity)
-        
-        convergence_ok = self._check_convergence()
-        confidence_ok = output_confidence > self.confidence_threshold
-        
-        return convergence_ok and confidence_ok
-    
-    def _check_convergence(self) -> bool:
-        """ACC 활성도 안정화 확인"""
-        if len(self.acc_history) < self.stability_window:
-            return False
-        
-        recent = self.acc_history[-self.stability_window:]
-        stability = torch.tensor(recent).std().item()
-        
-        return stability < self.convergence_threshold
-    
-    def reset(self):
-        """상태 초기화"""
-        self.acc_history = []
-
 class SCSSystem(nn.Module):
     """
     SCS 시스템: CLK 기반 동기화된 이산 spike 신호 처리
@@ -225,9 +154,10 @@ class SCSSystem(nn.Module):
         axonal_connections: AxonalConnections,
         input_interface: InputInterface,
         output_interface: OutputInterface,
-        output_timing: AdaptiveOutputTiming,
+        timing_manager: TimingManager,
         input_node: str = "PFC",
         output_node: str = "PFC",
+        acc_node: str = "ACC",
         eos_token_id: int = 1,
         device: str = "cuda"
     ):
@@ -236,6 +166,7 @@ class SCSSystem(nn.Module):
         self.device = device
         self.input_node = input_node
         self.output_node = output_node
+        self.acc_node = acc_node
         
         self.current_clk = 0
         
@@ -244,7 +175,7 @@ class SCSSystem(nn.Module):
         self.axonal_connections = axonal_connections
         self.input_interface = input_interface
         self.output_interface = output_interface
-        self.output_timing = output_timing
+        self.timing_manager = timing_manager
         
         self.previous_spikes = {}
         self._initialize_previous_spikes()
@@ -266,28 +197,29 @@ class SCSSystem(nn.Module):
         training: bool = False,
         target_schedule: Optional[torch.Tensor] = None,  # [B, seq_len] ONLY
         attention_mask: Optional[torch.Tensor] = None,   # [B, seq_len] ONLY
-        target_start_clk: Optional[int] = None,
         ss_prob: float = 1.0
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
         """
-        전체 시스템 처리 - 통일된 입력 형식 사용
-        
-        모든 입력은 [B, seq_len] 형태로 전달되어야 함
-        호출부에서 적절히 변환하여 전달 필요
+        전체 시스템 처리 - TimingManager 기반 통합 처리
         """
         if max_clk is None:
-            max_clk = self.output_timing.max_processing_clk
+            max_clk = self.timing_manager.max_processing_clk
         
-        # 입력 검증
+        # 입력 검증 및 초기화
         if input_schedule is not None:
             assert input_schedule.dim() == 2, f"input_schedule must be [B, seq_len], got {input_schedule.shape}"
             batch_size = input_schedule.shape[0]
+            input_seq_len = input_schedule.shape[1]
         else:
             batch_size = 1
+            input_seq_len = 0
         
         if target_schedule is not None:
             assert target_schedule.dim() == 2, f"target_schedule must be [B, seq_len], got {target_schedule.shape}"
             assert target_schedule.shape[0] == batch_size, "Batch size mismatch between input and target"
+            target_seq_len = target_schedule.shape[1]
+        else:
+            target_seq_len = 0
         
         if attention_mask is not None:
             assert attention_mask.dim() == 2, f"attention_mask must be [B, seq_len], got {attention_mask.shape}"
@@ -295,406 +227,100 @@ class SCSSystem(nn.Module):
         
         self.reset_state(batch_size)
         
-        if training:
-            return self._forward_training(input_schedule, target_schedule, attention_mask, max_clk, target_start_clk, ss_prob=ss_prob)
-        else:
-            return self._forward_inference(input_schedule, max_clk, batch_size)
-
-
-    def _forward_training(
-        self,
-        input_schedule: torch.Tensor,     # [B, seq_len]
-        target_schedule: torch.Tensor,    # [B, seq_len]
-        attention_mask: Optional[torch.Tensor],  # [B, seq_len]
-        max_clk: int,
-        target_start_clk: Optional[int] = None,
-        ss_prob: float = 1.0
-    ) -> Tuple[torch.Tensor, Dict[str, Any]]:
-        """학습 모드 forward pass - 단순화된 입력 처리"""
-        batch_size, input_seq_len = input_schedule.shape
-        _, original_target_seq_len = target_schedule.shape
-
-        effective_max_clk = max_clk
-
-        # 우선순위 기반 타이밍 모드 처리 (fixed_delay > fixed_len > adaptive)
-        if self.output_timing.fixed_delay >= 0:
-            # 1순위: 고정 지연 모드 - 절대적 CLK 기준
-            target_start_clk = self.output_timing.fixed_delay
-            
-            # fixed_len이 함께 설정된 경우 해당 길이 사용, 아니면 원래 target 길이
-            if self.output_timing.fixed_len > -1:
-                target_seq_len = self.output_timing.fixed_len
-                
-                # target 길이 조정 로직 (fixed_len 모드와 동일)
-                if original_target_seq_len < target_seq_len:
-                    # EOS 1개 + 나머지는 PAD으로 채움
-                    padding_length = target_seq_len - original_target_seq_len
-                    
-                    # EOS 토큰 1개 추가
-                    eos_token = torch.full(
-                        (batch_size, 1), 
-                        self.eos_token_id, 
-                        dtype=target_schedule.dtype, 
-                        device=target_schedule.device
-                    )
-                    
-                    # 나머지는 PAD 토큰으로 채움
-                    if padding_length > 1:
-                        pad_tokens = torch.full(
-                            (batch_size, padding_length - 1), 
-                            self.pad_token_id,
-                            dtype=target_schedule.dtype, 
-                            device=target_schedule.device
-                        )
-                        target_schedule = torch.cat([target_schedule, eos_token, pad_tokens], dim=1)
-                    else:
-                        target_schedule = torch.cat([target_schedule, eos_token], dim=1)
-                    
-                elif original_target_seq_len > target_seq_len:
-                    # target이 fixed_len보다 길면 앞쪽만 자름
-                    target_schedule = target_schedule[:, :target_seq_len]
-                
-                # attention_mask도 조정 (있는 경우)
-                if attention_mask is not None:
-                    if attention_mask.shape[1] < target_seq_len:
-                        # 패딩 부분은 False로 설정
-                        mask_padding = torch.zeros(
-                            (batch_size, target_seq_len - attention_mask.shape[1]),
-                            dtype=attention_mask.dtype,
-                            device=attention_mask.device
-                        )
-                        attention_mask = torch.cat([attention_mask, mask_padding], dim=1)
-                    elif attention_mask.shape[1] > target_seq_len:
-                        attention_mask = attention_mask[:, :target_seq_len]
-            else:
-                # fixed_len이 설정되지 않은 경우 원래 target 길이 사용
-                target_seq_len = original_target_seq_len
-            
-            target_end_clk = min(target_start_clk + target_seq_len - 1, max_clk - 1)
-            effective_max_clk = min(target_start_clk + target_seq_len, max_clk)
-            
-        elif self.output_timing.fixed_len > -1:
-            # 2순위: 고정 길이 모드 (기존 로직)
-            fixed_len = self.output_timing.fixed_len
-            
-            # target_start_clk를 input이 끝나는 시점으로 설정
-            target_start_clk = input_seq_len
-            target_end_clk = min(target_start_clk + fixed_len - 1, max_clk - 1)
-
-            effective_max_clk = min(target_start_clk + fixed_len, max_clk)
-            
-            # target 길이 조정
-            if original_target_seq_len < fixed_len:
-                # EOS 1개 + 나머지는 PAD으로 채움
-                padding_length = fixed_len - original_target_seq_len
-                
-                # EOS 토큰 1개 추가
-                eos_token = torch.full(
-                    (batch_size, 1), 
-                    self.eos_token_id, 
-                    dtype=target_schedule.dtype, 
-                    device=target_schedule.device
-                )
-                
-                # 나머지는 PAD 토큰으로 채움
-                if padding_length > 1:
-                    pad_tokens = torch.full(
-                        (batch_size, padding_length - 1), 
-                        self.pad_token_id,
-                        dtype=target_schedule.dtype, 
-                        device=target_schedule.device
-                    )
-                    target_schedule = torch.cat([target_schedule, eos_token, pad_tokens], dim=1)
-                else:
-                    target_schedule = torch.cat([target_schedule, eos_token], dim=1)
-                
-            elif original_target_seq_len > fixed_len:
-                # target이 fixed_len보다 길면 앞쪽만 자름
-                target_schedule = target_schedule[:, :fixed_len]
-            
-            # attention_mask도 조정 (있는 경우)
-            if attention_mask is not None:
-                if attention_mask.shape[1] < fixed_len:
-                    # 패딩 부분은 False로 설정
-                    mask_padding = torch.zeros(
-                        (batch_size, fixed_len - attention_mask.shape[1]),
-                        dtype=attention_mask.dtype,
-                        device=attention_mask.device
-                    )
-                    attention_mask = torch.cat([attention_mask, mask_padding], dim=1)
-                elif attention_mask.shape[1] > fixed_len:
-                    attention_mask = attention_mask[:, :fixed_len]
-            
-            target_seq_len = fixed_len
-            
-        else:
-            # 3순위: 적응적 모드 (기존 로직)
-            target_seq_len = original_target_seq_len
-            if target_start_clk is None:
-                target_start_clk = min(input_seq_len, max_clk - target_seq_len - 1)
-            target_end_clk = min(target_start_clk + target_seq_len - 1, max_clk - 1)
-
-        # 타이밍 정보를 담을 딕셔너리
-        timing_info = {
-            'target_start_clk': target_start_clk,
-            'target_end_clk': target_end_clk,
-            'start_conditions': None,
-            'end_conditions': None,
-            'mode': ('fixed_delay' if self.output_timing.fixed_delay >= 0 else 
-                    ('fixed_length' if self.output_timing.fixed_len > -1 else 'adaptive')),
-            'fixed_len': self.output_timing.fixed_len if self.output_timing.fixed_len > -1 else None,
-            'fixed_delay': self.output_timing.fixed_delay if self.output_timing.fixed_delay >= 0 else None
-        }
-        
-        # On-the-fly 디코딩을 위한 변수들 초기화
         all_logits = []
-        decoder_input_ids = torch.full((batch_size, 1), 1, dtype=torch.long, device=self.device)  # BOS 토큰 (기존과 동일)
-
-        for clk in range(effective_max_clk):
-            self.current_clk = clk
-            
-            # Phase 1-3: 통일된 입력 처리 사용
-            current_spikes = self._phase1_compute_spikes()
-            external_input = self._get_external_input_at_clk(input_schedule, clk, attention_mask)
-            self._phase2_update_states(external_input, current_spikes)
-            self._phase3_post_spike_processing(current_spikes)
-            
-            # --- 타이밍 정보 수집 로직 ---
-            if clk == target_start_clk or clk == target_end_clk:
-                acc_activity = self._get_acc_activity(current_spikes)
-
-                # output_confidence 계산을 위한 임시 로짓
-                try:
-                    # BOS 토큰으로 구성된 임시 입력 (배치 크기 맞춤)
-                    temp_input = torch.full((batch_size, 1), 1, dtype=torch.long, device=self.device)
-                    temp_logits = self.output_interface.generate_token_at_clk(current_spikes[self.output_node], temp_input)
-                    
-                    # 타겟 토큰에 대한 신뢰도 계산
-                    current_target_token_idx = clk - target_start_clk
-                    if 0 <= current_target_token_idx < target_seq_len:
-                        current_target_tokens = target_schedule[:, current_target_token_idx]  # [B]
-                        confidence = torch.softmax(temp_logits, dim=-1).gather(1, current_target_tokens.unsqueeze(-1)).squeeze()  # [B]
-                    else:
-                        confidence = torch.zeros(batch_size, device=self.device)
-                except Exception:
-                    confidence = torch.zeros(batch_size, device=self.device)
-
-                # 정보 저장
-                if clk == target_start_clk:
-                    timing_info['start_conditions'] = {
-                        'acc_activity': acc_activity,
-                        'clk': clk
-                    }
-                elif clk == target_end_clk:
-                    timing_info['end_conditions'] = {
-                        'acc_activity': acc_activity,
-                        'confidence': confidence.mean().item(),
-                        'raw_confidence_batch': confidence,
-                        'clk': clk
-                    }
-
-            # --- On-the-fly 디코딩 로직 ---
-            # 디코딩을 시작할 CLK인지 확인
-            if clk >= target_start_clk:
-                current_decoding_step = clk - target_start_clk
-
-                # 생성할 총 길이를 넘어가면 루프 조기 종료 (효율성)
-                if current_decoding_step >= target_seq_len:
-                    break
-
-                # 현재 CLK의 스파이크를 메모리로 사용 (On-the-fly)
-                memory = self.output_interface._create_memory_sequence(current_spikes[self.output_node])
-
-                # Teacher Forcing 또는 Scheduled Sampling을 위한 디코더 입력 준비
-                use_teacher_forcing = torch.rand(1).item() < ss_prob
-
-                if use_teacher_forcing:
-                    # Teacher Forcing: 이전 스텝까지의 정답 토큰을 사용
-                    current_decoder_input = torch.cat(
-                        [decoder_input_ids[:, :1], target_schedule[:, :current_decoding_step]], dim=1
-                    )
-                else:
-                    # Scheduled Sampling: 이전 스텝까지 모델이 생성한 토큰을 사용
-                    current_decoder_input = decoder_input_ids
-
-                # 디코더를 통해 다음 토큰의 로짓 계산
-                current_embeds = self.output_interface._prepare_target_embeddings(current_decoder_input)
-                tgt_mask = self.output_interface._generate_causal_mask(current_decoder_input.shape[1])
-
-                decoder_output = self.output_interface.transformer_decoder(
-                    tgt=current_embeds, memory=memory, tgt_mask=tgt_mask
-                )
-                
-                logits_t = self.output_interface.final_projection(decoder_output[:, -1, :])
-                all_logits.append(logits_t)
-
-                # (Scheduled Sampling용) 다음 스텝의 decoder_input_ids 업데이트
-                if not use_teacher_forcing:
-                    next_token_ids = logits_t.argmax(dim=-1, keepdim=True)
-                    # attention_mask가 있다면 패딩 처리
-                    if attention_mask is not None and current_decoding_step < attention_mask.shape[1]:
-                        is_real_token = attention_mask[:, current_decoding_step:current_decoding_step+1]
-                        padding_input = torch.full_like(next_token_ids, self.pad_token_id)
-                        next_token_ids = torch.where(is_real_token, next_token_ids, padding_input)
-                    decoder_input_ids = torch.cat([decoder_input_ids, next_token_ids], dim=1)
-
-            self.previous_spikes = {k: v.clone() for k, v in current_spikes.items()}
-        
-        # 최종 출력 구성
-        if not all_logits:
-            # 디코딩이 한 번도 실행되지 않은 경우 (예: max_clk가 너무 작을 때)
-            output_logits = torch.zeros(batch_size, 0, self.output_interface.vocab_size, device=self.device)
-        else:
-            output_logits = torch.stack(all_logits, dim=1)  # [B, seq_len, vocab_size]
-        
-        processing_info = {
-            "processing_clk": self.current_clk + 1,
-            "batch_size": batch_size,
-            "sequence_length": target_seq_len,
-            "training_mode": True,
-            "timing_info": timing_info,  # 수집된 타이밍 정보
-            "tokens_generated": len(all_logits),  # 실제 생성된 토큰 수
-            "output_started": True,  # 학습 모드에서는 항상 True
-            "convergence_achieved": True,  # 학습 모드에서는 항상 True (완료됨)
-            "final_acc_activity": 0.0  # 학습 모드에서는 기본값
-        }
-        
-        return output_logits, processing_info
-
-
-    def _forward_inference(
-        self,
-        input_schedule: Optional[torch.Tensor],  # [B, seq_len]
-        max_clk: int,
-        batch_size: int
-    ) -> Tuple[torch.Tensor, Dict[str, Any]]:
-        """추론 모드 forward pass - _forward_training과 동일한 타이밍 관리"""
-        generated_logits = []
-        generated_ids = torch.ones((batch_size, 1), dtype=torch.long, device=self.device) 
-        self.output_timing.reset()
-        
-        # 입력 시퀀스 길이 계산
-        input_seq_len = 0
-        if input_schedule is not None:
-            input_seq_len = input_schedule.shape[1]
-
-        # 우선순위 기반 타이밍 모드 처리 (fixed_delay > fixed_len > adaptive)
-        output_start_clk = None
-        max_output_length = None
-        
-        if self.output_timing.fixed_delay >= 0:
-            # 1순위: 고정 지연 모드 - 절대적 CLK 기준
-            output_start_clk = self.output_timing.fixed_delay
-            
-            # fixed_len이 함께 설정된 경우 해당 길이 사용
-            if self.output_timing.fixed_len > -1:
-                max_output_length = self.output_timing.fixed_len
-            
-        elif self.output_timing.fixed_len > -1:
-            # 2순위: 고정 길이 모드
-            output_start_clk = input_seq_len
-            max_output_length = self.output_timing.fixed_len
-            
-        # 3순위: 적응적 모드는 기존 로직 사용 (output_start_clk = None)
-
-        # 타이밍 정보 구성
-        timing_info = {
-            'output_start_clk': output_start_clk,
-            'max_output_length': max_output_length,
-            'mode': ('fixed_delay' if self.output_timing.fixed_delay >= 0 else 
-                    ('fixed_length' if self.output_timing.fixed_len > -1 else 'adaptive')),
-            'fixed_len': self.output_timing.fixed_len if self.output_timing.fixed_len > -1 else None,
-            'fixed_delay': self.output_timing.fixed_delay if self.output_timing.fixed_delay >= 0 else None
-        }
-
-        output_started = False
+        decoder_input_ids = torch.full((batch_size, 1), 1, dtype=torch.long, device=self.device)
+        loss_timing_info = {'start_conditions': None, 'end_conditions': None}
+        last_token_id = None
 
         for clk in range(max_clk):
             self.current_clk = clk
             
-            # 통일된 입력 처리
+            # 시스템 업데이트
             current_spikes = self._phase1_compute_spikes()
-            external_input = self._get_external_input_at_clk(input_schedule, clk)
+            external_input = self._get_external_input_at_clk(input_schedule, clk, attention_mask)
             self._phase2_update_states(external_input, current_spikes)
-            self._phase3_post_spike_processing(current_spikes)
             
-            acc_activity = self._get_acc_activity(current_spikes)
+            # TimingManager 업데이트
+            acc_spikes = current_spikes.get(self.acc_node, torch.zeros_like(current_spikes[self.input_node]))
+            self.timing_manager.step(clk, acc_spikes, training, input_seq_len, target_seq_len)
+
+            # 출력 시작 결정
+            self.timing_manager.should_start_output(training, input_seq_len)
             
-            # 출력 시작 결정 - 직접 관리
-            if not output_started:
-                if output_start_clk is not None:
-                    # fixed_delay 또는 fixed_len 모드: 정확한 CLK에서 시작
-                    if clk >= output_start_clk:
-                        output_started = True
-                else:
-                    # 적응적 모드: AdaptiveOutputTiming 사용
-                    if self.output_timing.should_start_output(clk, acc_activity, input_seq_len):
-                        output_started = True
-            
-            if output_started:
+            # 출력 생성
+            if self.timing_manager.output_started:
+                # On-the-fly 디코딩 로직
                 output_spikes = current_spikes[self.output_node]
                 memory = self.output_interface._create_memory_sequence(output_spikes)
-                current_embeds = self.output_interface._prepare_target_embeddings(generated_ids)
-                tgt_mask = self.output_interface._generate_causal_mask(generated_ids.shape[1])
+                
+                if training and target_schedule is not None:
+                    # 학습 모드: scheduled sampling 적용
+                    current_pos = self.timing_manager.generated_length
+                    if current_pos < target_seq_len:
+                        use_teacher = torch.rand(1).item() < ss_prob
+                        if use_teacher:
+                            next_token = target_schedule[:, current_pos].unsqueeze(1)
+                        else:
+                            next_token = torch.argmax(all_logits[-1] if all_logits else torch.zeros(batch_size, self.output_interface.vocab_size, device=self.device), dim=-1, keepdim=True)
+                        decoder_input_ids = torch.cat([decoder_input_ids, next_token], dim=1)
+                else:
+                    # 추론 모드 또는 학습에서 타겟 없음
+                    if all_logits:
+                        next_token_ids = torch.argmax(all_logits[-1], dim=-1, keepdim=True)
+                        decoder_input_ids = torch.cat([decoder_input_ids, next_token_ids], dim=1)
+                        # v1.1 수정: 마지막 토큰 ID 저장 (배치의 첫 번째 샘플)
+                        last_token_id = next_token_ids[0].item()
+                
+                current_embeds = self.output_interface._prepare_target_embeddings(decoder_input_ids)
+                tgt_mask = self.output_interface._generate_causal_mask(decoder_input_ids.shape[1])
                 decoder_output = self.output_interface.transformer_decoder(
                     tgt=current_embeds, memory=memory, tgt_mask=tgt_mask
                 )
                 
                 token_logits = self.output_interface.final_projection(decoder_output[:, -1, :])
-                generated_logits.append(token_logits)
+                all_logits.append(token_logits)
                 
-                next_token_ids = torch.argmax(token_logits, dim=-1, keepdim=True)
-                generated_ids = torch.cat([generated_ids, next_token_ids], dim=1)
-
-                generated_length = generated_ids.shape[1] - 1
-                
-                # 출력 종료 결정 - 직접 관리
-                should_end = False
-                
-                if max_output_length is not None:
-                    # fixed_delay + fixed_len 또는 fixed_len 모드: 정확한 길이에서 종료
-                    if generated_length >= max_output_length:
-                        should_end = True
-                else:
-                    # fixed_delay 모드 (fixed_len 없음): EOS 토큰만 체크
-                    if self.output_timing.fixed_delay >= 0:
-                        # fixed_delay 모드: EOS 토큰 체크만
-                        # if next_token_ids.item() == self.eos_token_id:
-                        #     should_end = True
-                        should_end = False
-                    else:
-                        # adaptive 모드: 기존 AdaptiveOutputTiming 사용
-                        output_confidence = torch.softmax(token_logits[0], dim=-1).max().item()
-                        if self.output_timing.should_end_output(
-                            clk, acc_activity, output_confidence, 
-                            generated_length=generated_length, 
-                            input_seq_len=input_seq_len
-                        ):
-                            should_end = True
-                
-                if should_end:
+                # v1.1 수정: should_end_output 호출 시 마지막 토큰 ID 전달
+                if self.timing_manager.should_end_output(
+                    training, 
+                    target_seq_len,
+                    last_generated_token_id=last_token_id,
+                    eos_token_id=self.eos_token_id
+                ):
                     break
             
+            # 손실 계산을 위한 정보 수집 (학습 시에만)
+            if training:
+                info = self.timing_manager.get_timing_info_for_loss()
+                if info:
+                    if info['type'] == 'start':
+                        loss_timing_info['start_conditions'] = info
+                    else:
+                        loss_timing_info['end_conditions'] = info
+            
+            # 후처리
+            self._phase3_post_spike_processing(current_spikes)
             self.previous_spikes = {k: v.clone() for k, v in current_spikes.items()}
-        
-        # 최종 출력
-        if generated_logits:
-            output_tokens = torch.stack(generated_logits, dim=1)
-        else:
-            output_tokens = torch.zeros(batch_size, 0, self.output_interface.vocab_size, device=self.device)
 
+        # 최종 출력 및 processing_info 구성
+        if all_logits:
+            output_logits = torch.stack(all_logits, dim=1)
+        else:
+            output_logits = torch.zeros(batch_size, 0, self.output_interface.vocab_size, device=self.device)
+        
         processing_info = {
             "processing_clk": self.current_clk + 1,
-            "output_started": output_started,
-            "tokens_generated": len(generated_logits),
-            "convergence_achieved": clk < max_clk - 1 if 'clk' in locals() else False,
-            "final_acc_activity": acc_activity if 'acc_activity' in locals() else 0.0,
             "batch_size": batch_size,
-            "generated_ids": generated_ids[:, 1:],
-            "timing_info": timing_info
+            "sequence_length": output_logits.shape[1],
+            "training_mode": training,
+            "timing_info": loss_timing_info,
+            "tokens_generated": len(all_logits),
+            "output_started": self.timing_manager.output_started,
+            "convergence_achieved": clk < max_clk - 1 if 'clk' in locals() else False,
+            "final_acc_activity": self.timing_manager.stable_sync_index.mean().item() if hasattr(self.timing_manager.stable_sync_index, 'mean') else 0.0
         }
         
-        return output_tokens, processing_info
+        return output_logits, processing_info
 
     def _get_external_input_at_clk(
         self,
@@ -797,7 +423,7 @@ class SCSSystem(nn.Module):
     def reset_state(self, batch_size: int = 1):
         """전체 시스템 상태 초기화 (항상 배치)"""
         self.current_clk = 0
-        self.output_timing.reset()
+        self.timing_manager.reset()
         
         for node in self.nodes.values():
             node.reset_state(batch_size)

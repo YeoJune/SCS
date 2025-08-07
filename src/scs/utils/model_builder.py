@@ -33,8 +33,9 @@ class ModelBuilder:
             # 필요한 모듈들을 동적으로 import
             from ..architecture import (
                 SpikeNode, LocalConnectivity, AxonalConnections,
-                InputInterface, OutputInterface, SCSSystem, AdaptiveOutputTiming
+                InputInterface, OutputInterface, SCSSystem
             )
+            from ..architecture.timing import TimingManager
             import torch.nn as nn
             
             # --- 단계 1: 뇌 영역(노드) 객체 생성 ---
@@ -140,17 +141,17 @@ class ModelBuilder:
                 device=device
             )
                         
-            # --- 단계 4: 적응적 타이밍 객체 생성 ---
-            timing_config = config.get("adaptive_output_timing", config.get("timing", {}))
-            output_timing = AdaptiveOutputTiming(
-                min_processing_clk=timing_config.get("min_processing_clk", 100),
+            # --- 단계 4: TimingManager 객체 생성 ---
+            timing_config = config.get("timing_manager", config.get("adaptive_output_timing", config.get("timing", {})))
+            timing_manager = TimingManager(
+                sync_ema_alpha=timing_config.get("sync_ema_alpha", 0.1),
+                sync_threshold_start=timing_config.get("sync_threshold_start", 0.6),
+                sync_threshold_end=timing_config.get("sync_threshold_end", 0.2),
+                min_processing_clk=timing_config.get("min_processing_clk", 50),
                 max_processing_clk=timing_config.get("max_processing_clk", 500),
-                convergence_threshold=timing_config.get("convergence_threshold", 0.1),
-                confidence_threshold=timing_config.get("confidence_threshold", 0.8),
-                stability_window=timing_config.get("stability_window", 10),
-                start_output_threshold=timing_config.get("start_output_threshold", 0.5),
-                min_output_length=timing_config.get("min_output_length", 10),
-                fixed_len=timing_config.get("fixed_len", -1)  # 변경: force_fixed_length -> fixed_len
+                min_output_length=timing_config.get("min_output_length", 5),
+                fixed_len=timing_config.get("fixed_len", -1),
+                fixed_delay=timing_config.get("fixed_delay", -1)
             )
             
             # --- 단계 5: 최종 SCS 시스템 조립 ---
@@ -160,9 +161,10 @@ class ModelBuilder:
                 axonal_connections=axonal_connections,
                 input_interface=input_interface,
                 output_interface=output_interface,
-                output_timing=output_timing,
+                timing_manager=timing_manager,
                 input_node=input_node_name,
                 output_node=output_node_name,
+                acc_node=config['system_roles'].get('acc_node', 'ACC'),
                 eos_token_id=eos_token_id,
                 device=device
             )
@@ -254,8 +256,9 @@ class ModelBuilder:
          # 타이밍 섹션 검증 추가
         has_timing = "timing" in config
         has_adaptive_timing = "adaptive_output_timing" in config
-        if not (has_timing or has_adaptive_timing):
-            errors.append("'timing' 또는 'adaptive_output_timing' 섹션이 필요합니다.")
+        has_timing_manager = "timing_manager" in config
+        if not (has_timing or has_adaptive_timing or has_timing_manager):
+            errors.append("'timing', 'adaptive_output_timing', 또는 'timing_manager' 섹션이 필요합니다.")
         
         # IO System 상세 검증 추가
         if "io_system" in config:

@@ -5,6 +5,7 @@
 system_roles:
   input_node: "IN"
   output_node: "OUT"
+  acc_node: "ACC"
 
 # === 뇌 영역 구성 (단순한 IN→OUT 구조) ===
 brain_regions:
@@ -13,6 +14,10 @@ brain_regions:
     decay_rate: 0.9
     distance_tau: 1.0
   OUT:
+    grid_size: [16, 16]
+    decay_rate: 0.9
+    distance_tau: 1.0
+  ACC:
     grid_size: [16, 16]
     decay_rate: 0.9
     distance_tau: 1.0
@@ -59,17 +64,15 @@ io_system:
     use_positional_encoding: true
     t5_model_name: "t5-small"
 
-# === 적응적 출력 타이밍 ===
-adaptive_output_timing:
-  min_processing_clk: 100
-  max_processing_clk: 500
-  convergence_threshold: 0.1
-  confidence_threshold: 0.8
-  stability_window: 10
-  start_output_threshold: 0.5
-  min_output_length: 10
-  fixed_len: -1
-  fixed_delay: -1
+timing_manager:
+  sync_ema_alpha: 0.1 # EMA 필터링 강도
+  sync_threshold_start: 0.6 # 시작 임계값
+  sync_threshold_end: 0.2 # 종료 임계값
+  min_processing_clk: 50 # 최소 처리 시간
+  max_processing_clk: 500 # 최대 처리 시간
+  min_output_length: 5 # 최소 출력 길이
+  fixed_len: -1 # -1: 적응 모드, >0: 고정 길이
+  fixed_delay: -1 # -1: 적응 모드, ≥0: 고정 지연
 
 # === 학습 설정 ===
 learning:
@@ -89,23 +92,22 @@ learning:
   ss_end_prob: 0.05
   ss_decay_epochs: 10
 
-  # 손실 함수 파라미터
-  spike_reg_weight: 0.3
-  temporal_weight: 0.0
-  length_penalty_weight: 0.0
-  target_spike_rate: 0.1
-  timing_weight: 0.0
-  start_threshold: 0.5
-  confidence_threshold: 0.7
+  spike_reg_weight: 0.3 # 스파이크 정규화 가중치
+  temporal_weight: 0.0 # 시간적 일관성 가중치
+  length_penalty_weight: 0.0 # 길이 페널티 가중치
+  target_spike_rate: 0.1 # 목표 스파이크율
+  timing_weight: 0.1 # 타이밍 손실 가중치
+  sync_target_start: 1.0 # 시작 시점 동기화 목표
+  sync_target_end: 0.0 # 종료 시점 동기화 목표
 
   gradual_unfreezing:
-    enabled: false # 기본 비활성화
+    enabled: true
     initial_frozen_patterns: # 시작할 때 동결할 파라미터들
       - "input_interface.token_embedding"
       - "output_interface.token_embedding"
       - "output_interface.final_projection"
     unfreeze_schedule: # 에포크별 해제 스케줄
-      30: # 에포크 30에 T5 임베딩 해제 (기존과 동일)
+      100: # 에포크 100에 T5 임베딩 해제
         - "input_interface.token_embedding"
         - "output_interface.token_embedding"
         - "output_interface.final_projection"

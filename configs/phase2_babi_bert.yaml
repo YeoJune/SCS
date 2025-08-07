@@ -126,13 +126,13 @@ data_loading:
     max_length: 128
 
 data:
-  train_samples: -1
-  val_samples: -1
-  test_samples: -1
+  train_samples: 100
+  val_samples: 20
+  test_samples: 20
 
 # === 평가 설정 ===
 evaluation:
-  save_examples: 5
+  save_examples: 20
 
 # === 추가 실험 설정 ===
 tracking:

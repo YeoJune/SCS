@@ -50,28 +50,12 @@ axonal_connections:
       weight_scale: 0.9
 
     - source: "ADJ"
-      target: "IN"
-      kernel_size: 5
-      stride: 1
-      padding: 2
-      dilation: 1
-      weight_scale: 0.7
-
-    - source: "ADJ"
       target: "OUT"
       kernel_size: 3
       stride: 1
       padding: 1
       dilation: 1
       weight_scale: 0.9
-
-    - source: "OUT"
-      target: "ADJ"
-      kernel_size: 5
-      stride: 1
-      padding: 2
-      dilation: 1
-      weight_scale: 0.6
 
     - source: "IN"
       target: "OUT"

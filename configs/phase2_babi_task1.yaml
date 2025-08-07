@@ -16,25 +16,26 @@ experiment:
 system_roles:
   input_node: "IN"
   output_node: "OUT"
+  acc_node: "ACC"
 
 # === 뇌 영역 구성 (완전 오버라이드) ===
 brain_regions:
   IN:
     grid_size: [64, 64]
-    decay_rate: 0.95
-    distance_tau: 1.5
+    decay_rate: 0.9
+    distance_tau: 1.0
   ACC:
     grid_size: [64, 64]
-    decay_rate: 0.88
-    distance_tau: 2.0
+    decay_rate: 0.9
+    distance_tau: 1.0
   ADJ:
     grid_size: [64, 64]
-    decay_rate: 0.92
-    distance_tau: 2.5
+    decay_rate: 0.9
+    distance_tau: 1.0
   OUT:
     grid_size: [64, 64]
-    decay_rate: 0.97
-    distance_tau: 3.0
+    decay_rate: 0.9
+    distance_tau: 1.0
 
 # === 축삭 연결 (완전 오버라이드) ===
 axonal_connections:
@@ -42,6 +43,14 @@ axonal_connections:
     # 기본 정보 처리 경로
     - source: "IN"
       target: "ADJ"
+      kernel_size: 3
+      stride: 1
+      padding: 1
+      dilation: 1
+      weight_scale: 0.9
+
+    - source: "ADJ"
+      target: "IN"
       kernel_size: 5
       stride: 1
       padding: 2
@@ -56,37 +65,19 @@ axonal_connections:
       dilation: 1
       weight_scale: 0.9
 
-    # 모니터링 및 조절 경로
-    - source: "ADJ"
-      target: "ACC"
-      kernel_size: 3
+    - source: "OUT"
+      target: "ADJ"
+      kernel_size: 5
       stride: 1
-      padding: 1
+      padding: 2
       dilation: 1
       weight_scale: 0.6
 
-    - source: "ACC"
-      target: "ADJ"
-      kernel_size: 7
-      stride: 1
-      padding: 3
-      dilation: 1
-      weight_scale: 0.4
-
-    # 보조 경로 (컨텍스트 유지)
-    - source: "IN"
-      target: "ACC"
-      kernel_size: 1
-      stride: 1
-      padding: 0
-      dilation: 1
-      weight_scale: 0.3
-
     - source: "IN"
       target: "OUT"
-      kernel_size: 1
+      kernel_size: 3
       stride: 1
-      padding: 0
+      padding: 1
       dilation: 1
       weight_scale: 0.3
 
@@ -99,7 +90,7 @@ task:
 
 # === 학습 설정 오버라이드 ===
 learning:
-  epochs: 100
+  epochs: 31
   learning_rate: 1e-4
   max_clk_training: 100
   optimizer: "adamw"
@@ -109,14 +100,14 @@ learning:
   early_stopping_patience: 100
 
 timing_manager:
-  sync_ema_alpha: 0.1 # EMA 필터링 강도
-  sync_threshold_start: 0.6 # 시작 임계값
-  sync_threshold_end: 0.2 # 종료 임계값
-  min_processing_clk: 50 # 최소 처리 시간
+  sync_ema_alpha: 0.2 # EMA 필터링 강도
+  sync_threshold_start: 0.4 # 시작 임계값
+  sync_threshold_end: 0.1 # 종료 임계값
+  min_processing_clk: 0 # 최소 처리 시간
   max_processing_clk: 500 # 최대 처리 시간
   min_output_length: 5 # 최소 출력 길이
-  fixed_len: 2 # -1: 적응 모드, >0: 고정 길이
-  fixed_delay: -1 # -1: 적응 모드, ≥0: 고정 지연
+  fixed_len: -1 # -1: 적응 모드, >0: 고정 길이
+  fixed_delay: 5 # -1: 적응 모드, ≥0: 고정 지연
 
 # === 데이터 로딩 오버라이드 ===
 data_loading:

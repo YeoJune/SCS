@@ -91,7 +91,7 @@ learning:
   use_scheduled_sampling: true
   ss_start_prob: 1.0
   ss_end_prob: 0.05
-  ss_decay_epochs: 10
+  ss_decay_epochs: 30
 
   spike_reg_weight: 0.0 # 스파이크 정규화 가중치
   target_spike_rate: 0.1 # 목표 스파이크율

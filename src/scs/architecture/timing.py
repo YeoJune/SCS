@@ -129,6 +129,9 @@ class TimingManager:
             
             # v1.1 수정: fixed_delay 단독 모드의 새로운 종료 규칙
             if self._mode == 'fixed_delay':
+                # TEMP
+                if self.generated_length >= target_seq_len:
+                    return True
                 # EOS 토큰이 생성되었는지 확인
                 if last_generated_token_id is not None and eos_token_id is not None and last_generated_token_id == eos_token_id:
                     return True

@@ -52,23 +52,23 @@ io_system:
     embedding_dim: 512
     max_seq_len: 128
     num_heads: 8
-    use_positional_encoding: true
+    use_positional_encoding: false
     t5_model_name: "t5-small"
   output_interface:
     embedding_dim: 512
     max_output_len: 128
     num_heads: 8
-    num_decoder_layers: 2
+    num_decoder_layers: 1
     dim_feedforward: 2048
     dropout: 0.1
-    use_positional_encoding: true
+    use_positional_encoding: false
     t5_model_name: "t5-small"
 
 timing_manager:
   sync_ema_alpha: 0.1 # EMA 필터링 강도
-  sync_threshold_start: 0.6 # 시작 임계값
+  sync_threshold_start: 0.4 # 시작 임계값
   sync_threshold_end: 0.2 # 종료 임계값
-  min_processing_clk: 50 # 최소 처리 시간
+  min_processing_clk: 0 # 최소 처리 시간
   max_processing_clk: 500 # 최대 처리 시간
   min_output_length: 5 # 최소 출력 길이
   fixed_len: -1 # -1: 적응 모드, >0: 고정 길이
@@ -79,7 +79,7 @@ learning:
   epochs: 15
   learning_rate: 1e-4
   weight_decay: 1e-4
-  gradient_clip_norm: .5
+  gradient_clip_norm: 1.0
   eval_every: 3
   save_every: 10
   early_stopping_patience: 20
@@ -95,7 +95,7 @@ learning:
   spike_reg_weight: 0.0 # 스파이크 정규화 가중치
   target_spike_rate: 0.1 # 목표 스파이크율
   temporal_weight: 0.0 # 시간적 일관성 가중치
-  timing_weight: 0.1 # 타이밍 손실 가중치
+  timing_weight: 0.0 # 타이밍 손실 가중치
   sync_target_start: 1.0 # 시작 시점 동기화 목표
   sync_target_end: 0.0 # 종료 시점 동기화 목표
 

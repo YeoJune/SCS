@@ -659,8 +659,9 @@ class SCSSystem(nn.Module):
                     # fixed_delay 모드 (fixed_len 없음): EOS 토큰만 체크
                     if self.output_timing.fixed_delay >= 0:
                         # fixed_delay 모드: EOS 토큰 체크만
-                        if next_token_ids.item() == self.eos_token_id:
-                            should_end = True
+                        # if next_token_ids.item() == self.eos_token_id:
+                        #     should_end = True
+                        should_end = False
                     else:
                         # adaptive 모드: 기존 AdaptiveOutputTiming 사용
                         output_confidence = torch.softmax(token_logits[0], dim=-1).max().item()

@@ -327,18 +327,12 @@ class SCSTrainer:
         
         # 3. Forward Pass (모델에 배치 전체를 전달)
         # 모델의 forward는 내부적으로 CLK 루프를 돌고 최종 로짓 [B, seq_len, vocab_size]를 반환
-        input_seq_len = input_tokens.shape[1]
-        target_seq_len = target_tokens.shape[1]
-        latest_possible_start = max(0, self.config.max_clk_training - target_seq_len - 1)
-        target_start_clk = min(input_seq_len, latest_possible_start)
-
         output_logits, processing_info = self.model(
             input_schedule=input_tokens,
             max_clk=self.config.max_clk_training,  # YAML 설정에서 가져온 고정 CLK
             training=True,
             target_schedule=target_tokens,
             attention_mask=attention_mask,
-            target_start_clk=target_start_clk,
             ss_prob=self.current_ss_prob
         )
         
@@ -390,7 +384,7 @@ class SCSTrainer:
                     max_clk=self.config.max_clk_training,
                     training=False,
                     target_schedule=target_tokens,
-                    attention_mask=attention_mask,
+                    attention_mask=attention_mask
                 )
                 
                 batch_loss = self.loss_fn(output_logits, target_tokens, processing_info)
@@ -529,24 +523,15 @@ class SCSTrainer:
             target_text = self._decode_tokens_to_text(batch['target_tokens'][sample_idx])
             
             # =====================================
-            # 2. 기존 evaluate와 동일한 파라미터 계산
-            # =====================================
-            input_seq_len = single_input.shape[1]
-            target_seq_len = single_target.shape[1]
-            latest_possible_start = max(0, self.config.max_clk_training - target_seq_len - 1)
-            target_start_clk = min(input_seq_len, latest_possible_start)
-            
-            # =====================================
-            # 3. ✅ 기존과 완전히 동일한 모델 호출
+            # 3. ✅ 새로운 모델 호출 (target_start_clk 제거)
             # =====================================
             output_logits, processing_info = self.model(
                 input_schedule=single_input,
                 max_clk=self.config.max_clk_training,
-                training=False,  # 기존과 동일
+                training=False,  # 추론 모드
                 target_schedule=single_target,
                 attention_mask=single_mask,
-                target_start_clk=target_start_clk,  # ✅ 기존과 동일
-                ss_prob=1.0  # ✅ 기존과 동일 (기본값)
+                ss_prob=1.0  # Teacher forcing
             )
             
             # =====================================

@@ -589,7 +589,6 @@ class SCSSystem(nn.Module):
             # fixed_len이 함께 설정된 경우 해당 길이 사용
             if self.output_timing.fixed_len > -1:
                 max_output_length = self.output_timing.fixed_len
-            # 아니면 무제한 생성 (max_clk까지)
             
         elif self.output_timing.fixed_len > -1:
             # 2순위: 고정 길이 모드
@@ -657,14 +656,20 @@ class SCSSystem(nn.Module):
                     if generated_length >= max_output_length:
                         should_end = True
                 else:
-                    # 적응적 모드 또는 fixed_delay만 설정된 경우: AdaptiveOutputTiming 사용
-                    output_confidence = torch.softmax(token_logits[0], dim=-1).max().item()
-                    if self.output_timing.should_end_output(
-                        clk, acc_activity, output_confidence, 
-                        generated_length=generated_length, 
-                        input_seq_len=input_seq_len
-                    ):
-                        should_end = True
+                    # fixed_delay 모드 (fixed_len 없음): EOS 토큰만 체크
+                    if self.output_timing.fixed_delay >= 0:
+                        # fixed_delay 모드: EOS 토큰 체크만
+                        if next_token_ids.item() == self.eos_token_id:
+                            should_end = True
+                    else:
+                        # adaptive 모드: 기존 AdaptiveOutputTiming 사용
+                        output_confidence = torch.softmax(token_logits[0], dim=-1).max().item()
+                        if self.output_timing.should_end_output(
+                            clk, acc_activity, output_confidence, 
+                            generated_length=generated_length, 
+                            input_seq_len=input_seq_len
+                        ):
+                            should_end = True
                 
                 if should_end:
                     break

@@ -116,7 +116,7 @@ timing_manager:
   max_processing_clk: 500 # 최대 처리 시간
   min_output_length: 5 # 최소 출력 길이
   fixed_len: -1 # -1: 적응 모드, >0: 고정 길이
-  fixed_delay: 5 # -1: 적응 모드, ≥0: 고정 지연
+  fixed_delay: 3 # -1: 적응 모드, ≥0: 고정 지연
 
 # === 데이터 로딩 오버라이드 ===
 data_loading:
@@ -126,9 +126,9 @@ data_loading:
     max_length: 128
 
 data:
-  train_samples: -1
-  val_samples: -1
-  test_samples: -1
+  train_samples: 100
+  val_samples: 20
+  test_samples: 20
 
 # === 평가 설정 ===
 evaluation:

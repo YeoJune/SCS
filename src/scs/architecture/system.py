@@ -228,6 +228,7 @@ class SCSSystem(nn.Module):
         self.reset_state(batch_size)
         
         all_logits = []
+        all_logits_with_clk = []  # CLK 정보와 함께 저장
         decoder_input_ids = torch.full((batch_size, 1), 1, dtype=torch.long, device=self.device)
         loss_timing_info = {'start_conditions': None, 'end_conditions': None}
         last_token_id = None
@@ -262,6 +263,7 @@ class SCSSystem(nn.Module):
                 
                 token_logits = self.output_interface.final_projection(decoder_output[:, -1, :])
                 all_logits.append(token_logits)
+                all_logits_with_clk.append((token_logits, clk))  # CLK 정보와 함께 저장
                 
                 # 다음 스텝을 위한 토큰 선택 및 decoder_input_ids 업데이트
                 current_pos = self.timing_manager.generated_length
@@ -315,6 +317,13 @@ class SCSSystem(nn.Module):
         else:
             output_logits = torch.zeros(batch_size, 0, self.output_interface.vocab_size, device=self.device)
         
+        # CLK 정보 추출 및 processing_info에 추가
+        if all_logits_with_clk:
+            output_logits_list, clk_list = zip(*all_logits_with_clk)
+            generation_clks = torch.tensor(clk_list, device=self.device)
+        else:
+            generation_clks = torch.empty(0, device=self.device)
+        
         processing_info = {
             "processing_clk": self.current_clk + 1,
             "batch_size": batch_size,
@@ -324,7 +333,8 @@ class SCSSystem(nn.Module):
             "tokens_generated": len(all_logits),
             "output_started": self.timing_manager.output_started,
             "convergence_achieved": clk < max_clk - 1 if 'clk' in locals() else False,
-            "final_acc_activity": self.timing_manager.stable_sync_index.mean().item() if hasattr(self.timing_manager.stable_sync_index, 'mean') else 0.0
+            "final_acc_activity": self.timing_manager.stable_sync_index.mean().item() if hasattr(self.timing_manager.stable_sync_index, 'mean') else 0.0,
+            "generation_clks": generation_clks  # 시간적 가중치를 위한 CLK 정보 추가
         }
         
         return output_logits, processing_info
@@ -390,8 +400,7 @@ class SCSSystem(nn.Module):
         for node_name, prev_spikes in self.previous_spikes.items():
             influence = self.nodes[node_name].influence_strength
             
-            # 억제성 뉴런의 영향력을 음수로 허용
-            clamped_influence = torch.clamp(influence, min=-3.0, max=5.0)
+            clamped_influence = torch.clamp(influence, min=-10.0, max=10.0)
             
             modulated_previous_spikes[node_name] = prev_spikes * clamped_influence
         

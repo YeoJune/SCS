@@ -24,10 +24,10 @@ brain_regions:
 
 # === 스파이크 역학 ===
 spike_dynamics:
-  threshold: 10.0
+  threshold: 5.0
   refractory_base: 1
-  refractory_adaptive_factor: 0.0
-  surrogate_beta: 1.0
+  refractory_adaptive_factor: 1.0
+  surrogate_beta: 3.0
   ema_alpha: 0.1
 
 # === 연결성 설정 ===
@@ -100,12 +100,18 @@ learning:
   sync_target_start: 1.0 # 시작 시점 동기화 목표
   sync_target_end: 0.0 # 종료 시점 동기화 목표
 
+  use_temporal_weighting: true
+  initial_temporal_weight: 5.0 # 초기 CLK에 높은 중요도
+  final_temporal_weight: 1.0 # 나중 CLK에 기본 중요도
+
   gradual_unfreezing:
     enabled: true
     initial_frozen_patterns: # 시작할 때 동결할 파라미터들
       - "input_interface.token_embedding"
       - "output_interface.token_embedding"
       - "output_interface.final_projection"
+      - "output_interface.transformer_decoder.layers.0.self_attn"
+      - "output_interface.transformer_decoder.layers.0.linear"
     unfreeze_schedule: # 에포크별 해제 스케줄
       100: # 에포크 100에 T5 임베딩 해제
         - "input_interface.token_embedding"

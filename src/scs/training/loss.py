@@ -16,7 +16,11 @@ class SCSLoss(nn.Module):
         spike_reg_weight: float = 0.0,
         temporal_weight: float = 0.0,
         length_penalty_weight: float = 0.0,  # 새로 추가
-        target_spike_rate: float = 0.1
+        target_spike_rate: float = 0.1,
+        # === v2.0 추가: 시간적 가중치 파라미터 ===
+        use_temporal_weighting: bool = False,
+        initial_temporal_weight: float = 2.0,
+        final_temporal_weight: float = 1.0
     ):
         super().__init__()
         self.spike_reg_weight = spike_reg_weight
@@ -24,7 +28,12 @@ class SCSLoss(nn.Module):
         self.length_penalty_weight = length_penalty_weight  # 새로 추가
         self.target_spike_rate = target_spike_rate
         
-        self.base_loss = nn.CrossEntropyLoss(ignore_index=pad_token_id)
+        # === v2.0 추가: 시간적 가중치 설정 ===
+        self.use_temporal_weighting = use_temporal_weighting
+        self.initial_temporal_weight = initial_temporal_weight
+        self.final_temporal_weight = final_temporal_weight
+        
+        self.base_loss = nn.CrossEntropyLoss(ignore_index=pad_token_id, reduction='none')
     
     def forward(
         self, 
@@ -68,7 +77,32 @@ class SCSLoss(nn.Module):
                 targets = torch.cat([targets, pad_targets], dim=1)
         
         # 1. 기본 분류 손실
-        base_loss = self.base_loss(outputs.reshape(-1, vocab_size), targets.reshape(-1))
+        if self.use_temporal_weighting and 'generation_clks' in processing_info:
+            # 시간적 가중치 적용된 손실 계산
+            base_loss_unweighted = self.base_loss(outputs.reshape(-1, vocab_size), targets.reshape(-1))
+            base_loss_unweighted = base_loss_unweighted.view(batch_size, -1)
+            
+            # 패딩 마스크 생성
+            mask = (targets != self.base_loss.ignore_index).float()
+            
+            # 시간적 가중치 계산 및 적용
+            generation_clks = processing_info['generation_clks']
+            temporal_weights = self._compute_temporal_weights(generation_clks, outputs.device)
+            
+            # 가중치를 브로드캐스팅하여 적용 [1, seq_len] -> [batch_size, seq_len]
+            weights = temporal_weights.unsqueeze(0).expand_as(base_loss_unweighted)
+            
+            # 가중치와 마스크를 모두 적용하여 최종 손실 계산
+            weighted_loss = base_loss_unweighted * weights
+            base_loss = (weighted_loss * mask).sum() / mask.sum().clamp(min=1.0)
+        else:
+            # 기존 방식: 평균 손실 (reduction='none' 호환성 유지)
+            base_loss_unweighted = self.base_loss(outputs.reshape(-1, vocab_size), targets.reshape(-1))
+            base_loss_unweighted = base_loss_unweighted.view(batch_size, -1)
+            
+            # 패딩 마스크 적용
+            mask = (targets != self.base_loss.ignore_index).float()
+            base_loss = (base_loss_unweighted * mask).sum() / mask.sum().clamp(min=1.0)
         
         # 2. 스파이크 정규화
         spike_reg = self._spike_regularization(processing_info, outputs.device)
@@ -89,6 +123,31 @@ class SCSLoss(nn.Module):
         )
         
         return total_loss
+    
+    def _compute_temporal_weights(self, generation_clks: torch.Tensor, device: torch.device) -> torch.Tensor:
+        """
+        선형 감쇠(Linear Decay) 방식의 시간 가중치를 계산합니다.
+        초기 CLK에는 높은 가중치를, 나중 CLK에는 낮은 가중치를 적용합니다.
+        
+        Args:
+            generation_clks: 생성 과정에서의 CLK 정보
+            device: 텐서 장치
+            
+        Returns:
+            각 토큰별 시간적 가중치 텐서
+        """
+        num_clks = generation_clks.numel()
+        if num_clks <= 1:
+            return torch.full_like(generation_clks, self.initial_temporal_weight, dtype=torch.float, device=device)
+        
+        # 선형 감쇠: 초기값에서 최종값으로 선형적으로 감소
+        weights = torch.linspace(
+            self.initial_temporal_weight, 
+            self.final_temporal_weight, 
+            steps=num_clks, 
+            device=device
+        )
+        return weights
     
     def _length_penalty(
         self, 
@@ -154,7 +213,7 @@ class TimingLoss(SCSLoss):
         sync_target_end: float = 0.0,
         **kwargs
     ):
-        super().__init__(pad_token_id, **kwargs)
+        super().__init__(pad_token_id, **kwargs)  # 모든 SCSLoss 파라미터를 부모에게 전달
         self.timing_weight = timing_weight
         self.sync_target_start = sync_target_start
         self.sync_target_end = sync_target_end

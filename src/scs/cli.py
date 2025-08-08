@@ -426,6 +426,10 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
             temporal_weight=raw_config.get("temporal_weight", 0.0),
             length_penalty_weight=raw_config.get("length_penalty_weight", 0.0),
             target_spike_rate=raw_config.get("target_spike_rate", 0.1),
+            # === v2.0 추가: 시간적 가중치 파라미터들 ===
+            use_temporal_weighting=raw_config.get("use_temporal_weighting", False),
+            initial_temporal_weight=raw_config.get("initial_temporal_weight", 2.0),
+            final_temporal_weight=raw_config.get("final_temporal_weight", 1.0),
             # TimingLoss 전용 파라미터들
             timing_weight=raw_config.get("timing_weight", 1.0),
             sync_target_start=raw_config.get("sync_target_start", 1.0),

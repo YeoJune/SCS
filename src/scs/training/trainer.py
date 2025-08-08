@@ -33,6 +33,7 @@ class TrainingConfig:
     ss_start_prob: float = 1.0
     ss_end_prob: float = 0.05
     ss_decay_epochs: int = 10
+    eta_min: float = 0.0
 
 class SCSTrainer:
     """SCS 배치 처리 최적화 학습 시스템"""
@@ -149,8 +150,11 @@ class SCSTrainer:
                     )
                     # 스케줄러도 재생성 (있는 경우)
                     if self.scheduler:
+                        eta_min = getattr(self.config, 'eta_min', 0.0)
                         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                            self.optimizer, T_max=self.config.epochs - epoch
+                            self.optimizer, 
+                            T_max=self.config.epochs - epoch,
+                            eta_min=eta_min
                         )
 
             self._update_scheduled_sampling_prob()
@@ -159,6 +163,10 @@ class SCSTrainer:
             train_metrics = self._train_epoch(train_loader)
             history['train_loss'].append(train_metrics['loss'])
             history['train_accuracy'].append(train_metrics['accuracy'])
+            
+            # 스케줄러 스텝 (에포크마다 호출 - 표준적인 CosineAnnealingLR 사용법)
+            if self.scheduler:
+                self.scheduler.step()
             
             # 검증
             if val_loader and epoch % self.config.eval_every == 0:
@@ -215,6 +223,7 @@ class SCSTrainer:
             'ss_start_prob': self.config.ss_start_prob,
             'ss_end_prob': self.config.ss_end_prob,
             'ss_decay_epochs': self.config.ss_decay_epochs,
+            'eta_min': self.config.eta_min,
         }
         
         checkpoint = {
@@ -257,6 +266,7 @@ class SCSTrainer:
             'ss_start_prob': self.config.ss_start_prob,
             'ss_end_prob': self.config.ss_end_prob,
             'ss_decay_epochs': self.config.ss_decay_epochs,
+            'eta_min': self.config.eta_min,
         }
         
         checkpoint = {
@@ -351,9 +361,8 @@ class SCSTrainer:
         
         # 7. 파라미터 업데이트
         self.optimizer.step()
-        if self.scheduler:
-            self.scheduler.step()
-            
+        # 스케줄러는 에포크마다 호출 (표준적인 CosineAnnealingLR 사용법)
+        
         # 8. 메트릭 계산 (정확도)
         with torch.no_grad():
             accuracy = SCSMetrics.accuracy(

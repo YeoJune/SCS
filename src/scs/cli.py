@@ -283,12 +283,13 @@ def extract_and_normalize_training_config(config: Dict[str, Any]) -> Tuple[Dict[
     valid_params = {
         "epochs", "learning_rate", "weight_decay", "gradient_clip_norm",
         "eval_every", "save_every", "early_stopping_patience", "max_clk_training",
-        "use_scheduled_sampling", "ss_start_prob", "ss_end_prob", "ss_decay_epochs"
+        "use_scheduled_sampling", "ss_start_prob", "ss_end_prob", "ss_decay_epochs",
+        "eta_min"
     }
     filtered_config = {k: v for k, v in raw_config.items() if k in valid_params}
     
     # 타입 변환
-    float_params = ["learning_rate", "weight_decay", "gradient_clip_norm", "ss_start_prob", "ss_end_prob"]
+    float_params = ["learning_rate", "weight_decay", "gradient_clip_norm", "ss_start_prob", "ss_end_prob", "eta_min"]
     int_params = ["epochs", "eval_every", "save_every", "early_stopping_patience", "max_clk_training", "ss_decay_epochs"]
     bool_params = ["use_scheduled_sampling"]
     
@@ -439,7 +440,11 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
         # 옵티마이저 생성
         optimizer_type = raw_config.get("optimizer", "adamw").lower()
         optimizer = OptimizerFactory.create(optimizer_type=optimizer_type, model=model, config=training_config)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=training_config.epochs)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, 
+            T_max=training_config.epochs,
+            eta_min=training_config.eta_min
+        )
         
         logger.info(f"✅ 학습 시스템 구성 완료 (옵티마이저: {optimizer_type})")
 

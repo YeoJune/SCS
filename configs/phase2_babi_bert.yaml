@@ -100,7 +100,8 @@ task:
 # === 학습 설정 오버라이드 ===
 learning:
   epochs: 71
-  learning_rate: 1e-4
+  learning_rate: 5e-4
+  eta_min: 1e-4
   max_clk_training: 100
   optimizer: "adamw"
   weight_decay: 0.01

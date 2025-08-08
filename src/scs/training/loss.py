@@ -126,7 +126,7 @@ class SCSLoss(nn.Module):
     
     def _compute_temporal_weights(self, generation_clks: torch.Tensor, device: torch.device) -> torch.Tensor:
         """
-        선형 감쇠(Linear Decay) 방식의 시간 가중치를 계산합니다.
+        지수 감쇠(Exponential Decay) 방식의 시간 가중치를 계산합니다.
         초기 CLK에는 높은 가중치를, 나중 CLK에는 낮은 가중치를 적용합니다.
         
         Args:
@@ -140,15 +140,19 @@ class SCSLoss(nn.Module):
         if num_clks <= 1:
             return torch.full_like(generation_clks, self.initial_temporal_weight, dtype=torch.float, device=device)
         
-        # 선형 감쇠: 초기값에서 최종값으로 선형적으로 감소
-        weights = torch.linspace(
-            self.initial_temporal_weight, 
-            self.final_temporal_weight, 
-            steps=num_clks, 
-            device=device
-        )
+        # 지수 감쇠를 위한 감쇠 상수 계산
+        # final_weight = initial_weight * exp(-decay_rate * (num_clks - 1))
+        # 따라서 decay_rate = -ln(final_weight / initial_weight) / (num_clks - 1)
+        decay_rate = -torch.log(torch.tensor(self.final_temporal_weight / self.initial_temporal_weight)) / (num_clks - 1)
+        
+        # 시간 단계 생성 (0부터 num_clks-1까지)
+        time_steps = torch.arange(num_clks, device=device, dtype=torch.float)
+        
+        # 지수 감쇠: initial_weight * exp(-decay_rate * t)
+        weights = self.initial_temporal_weight * torch.exp(-decay_rate * time_steps)
+        
         return weights
-    
+
     def _length_penalty(
         self, 
         output_len: int, 

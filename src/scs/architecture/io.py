@@ -456,9 +456,19 @@ class OutputInterface(nn.Module):
                 v = v[:, :, -self.window_size:]
         
         # 효율적 어텐션 계산 (Q는 1개, K,V는 window_size개)
+        seq_len = k.shape[-2]
+        if seq_len > 1:
+            # Causal mask를 멀티헤드 형태로 생성
+            causal_mask = torch.triu(torch.ones(seq_len, seq_len, device=k.device), diagonal=1)
+            causal_mask = causal_mask.masked_fill(causal_mask == 1, float('-inf'))
+            # 마지막 행만 사용 (현재 토큰이 과거 토큰들만 볼 수 있도록)
+            causal_mask = causal_mask[-1:, :]  # [1, seq_len]
+        else:
+            causal_mask = None
+            
         attn_output = F.scaled_dot_product_attention(
             q, k, v, 
-            attn_mask=self._generate_causal_mask(k.shape[-2]) if k.shape[-2] > 1 else None,
+            attn_mask=causal_mask,
             dropout_p=decoder_layer.self_attn.dropout if self.training else 0.0
         )
         

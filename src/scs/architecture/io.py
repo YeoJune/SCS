@@ -197,7 +197,7 @@ class InputInterface(nn.Module):
         membrane_potential = membrane_logits.view(batch_size, self.grid_height, self.grid_width)  # [B, H, W]
         
         # 막전위 정규화
-        membrane_potential = torch.tanh(membrane_potential)  # [-1, 1] 범위로 정규화
+        membrane_potential = torch.clamp(membrane_potential, -10, 10)  # [-1, 1] 범위로 정규화
         
         return membrane_potential
 

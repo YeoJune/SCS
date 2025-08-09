@@ -129,7 +129,6 @@ class ModelBuilder:
                 pad_token_id=pad_token_id,
                 embedding_dim=io_config["output_interface"].get("embedding_dim", 256),
                 window_size=io_config["output_interface"].get("window_size", 64),
-                max_output_len=io_config["output_interface"].get("max_output_len", 128),
                 num_heads=io_config["output_interface"].get("num_heads", 4),
                 num_decoder_layers=io_config["output_interface"].get("num_decoder_layers", 2),
                 dim_feedforward=io_config["output_interface"].get("dim_feedforward", 1024),
@@ -277,7 +276,7 @@ class ModelBuilder:
             
             # output_interface 필수 필드 검증  
             if "output_interface" in io_config:
-                output_required = ["embedding_dim", "max_output_len", "num_heads", "num_decoder_layers"]
+                output_required = ["embedding_dim", "num_heads", "num_decoder_layers"]
                 for field in output_required:
                     if field not in io_config["output_interface"]:
                         errors.append(f"io_system.output_interface에 '{field}' 필드가 필요합니다.")

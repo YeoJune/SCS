@@ -360,7 +360,7 @@ class OutputInterface(nn.Module):
         past_key_values: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None
     ) -> Tuple[torch.Tensor, List[Tuple[torch.Tensor, torch.Tensor]]]:
         """
-        상태 저장 슬라이딩 윈도우 기반 다음 토큰 생성
+        효율적인 상태 저장 디코딩으로 다음 토큰 생성
         
         Args:
             grid_spikes: [B, H, W] 또는 [H, W]
@@ -382,24 +382,27 @@ class OutputInterface(nn.Module):
         # 현재 스파이크를 메모리로 변환
         memory = self._create_memory_sequence(grid_spikes)  # [B, H*W, D]
         
-        # 마지막 토큰 임베딩
-        last_token_embed = self._compute_token_embedding(last_token_id)  # [B, 1, D]
+        # 현재 토큰만 임베딩 (시퀀스 길이 1)
+        hidden_states = self._prepare_target_embeddings(last_token_id)  # [B, 1, D]
         
-        # past_key_values 업데이트
-        updated_past_key_values = self._update_decoder_cache(
-            last_token_embed, past_key_values, batch_size
-        )
+        # 각 디코더 레이어를 순회하며 효율적 어텐션 계산
+        new_past_key_values = []
         
-        # 윈도우 내 토큰들로 디코더 입력 구성
-        decoder_input = self._prepare_decoder_input_from_cache(updated_past_key_values)
+        for layer_idx, decoder_layer in enumerate(self.transformer_decoder.layers):
+            # 이전 레이어 캐시 가져오기
+            layer_past = past_key_values[layer_idx] if past_key_values and layer_idx < len(past_key_values) else None
+            
+            # Self-Attention with KV Cache
+            hidden_states, new_layer_cache = self._layer_forward_with_cache(
+                decoder_layer, hidden_states, memory, layer_past
+            )
+            
+            new_past_key_values.append(new_layer_cache)
         
-        # 디코더 실행 (캐시된 어텐션 상태 활용)
-        decoder_output = self._efficient_decoder_forward(decoder_input, memory)
+        # 최종 로짓 계산 (마지막 토큰만)
+        next_token_logits = self.final_projection(hidden_states.squeeze(1))  # [B, vocab_size]
         
-        # 마지막 위치의 로짓만 반환
-        next_token_logits = self.final_projection(decoder_output[:, -1, :])
-        
-        return next_token_logits, updated_past_key_values
+        return next_token_logits, new_past_key_values
     
     def _create_memory_sequence(self, grid_spikes: torch.Tensor) -> torch.Tensor:
         """스파이크 격자를 트랜스포머 메모리 시퀀스로 변환"""
@@ -422,85 +425,76 @@ class OutputInterface(nn.Module):
         
         return memory_sequence
     
-    def _compute_token_embedding(self, token_ids: torch.Tensor) -> torch.Tensor:
-        """토큰 임베딩 계산"""
-        token_embeds = self.token_embedding(token_ids)
-        return self.layer_norm(token_embeds)
-    
-    def _update_decoder_cache(
+    def _layer_forward_with_cache(
         self,
-        new_token_embed: torch.Tensor,  # [B, 1, D]
-        past_key_values: Optional[List[Tuple[torch.Tensor, torch.Tensor]]],
-        batch_size: int
-    ) -> List[Tuple[torch.Tensor, torch.Tensor]]:
-        """디코더 레이어별 캐시 업데이트 (슬라이딩 윈도우)"""
-        if past_key_values is None:
-            # 첫 번째 토큰: 모든 레이어에 대해 새로운 캐시 생성
-            updated_cache = []
-            for _ in range(self.num_decoder_layers):
-                keys = new_token_embed  # [B, 1, D]
-                values = new_token_embed  # [B, 1, D]
-                updated_cache.append((keys, values))
-        else:
-            # 기존 캐시 업데이트
-            updated_cache = []
-            for layer_idx in range(self.num_decoder_layers):
-                if layer_idx < len(past_key_values):
-                    keys, values = past_key_values[layer_idx]
-                    
-                    # 새 토큰 추가
-                    keys = torch.cat([keys, new_token_embed], dim=1)
-                    values = torch.cat([values, new_token_embed], dim=1)
-                    
-                    # 윈도우 크기 제한
-                    if keys.shape[1] > self.window_size:
-                        keys = keys[:, 1:]
-                        values = values[:, 1:]
-                else:
-                    # 새 레이어 캐시 생성
-                    keys = new_token_embed
-                    values = new_token_embed
-                
-                updated_cache.append((keys, values))
+        decoder_layer: TransformerDecoderLayer,
+        hidden_states: torch.Tensor,  # [B, 1, D]
+        memory: torch.Tensor,         # [B, H*W, D]
+        layer_past: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
+    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        """단일 디코더 레이어의 효율적 forward with KV cache"""
         
-        return updated_cache
-    
-    def _prepare_decoder_input_from_cache(
-        self, 
-        past_key_values: List[Tuple[torch.Tensor, torch.Tensor]]
-    ) -> torch.Tensor:
-        """캐시에서 디코더 입력 구성"""
-        # 첫 번째 레이어의 values를 디코더 입력으로 사용
-        _, values = past_key_values[0]  # [B, window_len, D]
+        # Self-Attention
+        residual = hidden_states
+        hidden_states = decoder_layer.norm1(hidden_states)
         
-        # 위치 임베딩 추가 (선택적)
-        if self.use_positional_encoding and self.position_embedding is not None:
-            batch_size, seq_len, _ = values.shape
-            positions = torch.arange(seq_len, device=self.device).unsqueeze(0).expand(batch_size, -1)
-            position_embeds = self.position_embedding(positions)
-            values = values + position_embeds
+        # 현재 토큰의 Q, K, V 계산
+        q, k, v = self._split_qkv(decoder_layer.self_attn, hidden_states)  # 각각 [B, 1, D]
         
-        return values
-    
-    def _efficient_decoder_forward(
-        self, 
-        decoder_input: torch.Tensor,  # [B, window_len, D]
-        memory: torch.Tensor          # [B, H*W, D]
-    ) -> torch.Tensor:
-        """효율적인 디코더 forward (윈도우 기반)"""
-        seq_len = decoder_input.shape[1]
+        # 과거 K, V와 결합 (슬라이딩 윈도우)
+        if layer_past is not None:
+            past_k, past_v = layer_past  # [B, past_len, D]
+            k = torch.cat([past_k, k], dim=1)  # [B, past_len+1, D]
+            v = torch.cat([past_v, v], dim=1)
+            
+            # 윈도우 크기 제한
+            if k.shape[1] > self.window_size:
+                k = k[:, -self.window_size:]
+                v = v[:, -self.window_size:]
         
-        # Causal mask 생성 (윈도우 크기에 맞춰)
-        tgt_mask = self._generate_causal_mask(seq_len)
-        
-        # 디코더 실행
-        decoder_output = self.transformer_decoder(
-            tgt=decoder_input,
-            memory=memory,
-            tgt_mask=tgt_mask
+        # 효율적 어텐션 계산 (Q는 1개, K,V는 window_size개)
+        attn_output = F.scaled_dot_product_attention(
+            q, k, v, 
+            attn_mask=self._generate_causal_mask(k.shape[1]),
+            dropout_p=decoder_layer.self_attn.dropout if self.training else 0.0
         )
         
-        return decoder_output
+        # Self-attention 결과 적용
+        attn_output = decoder_layer.self_attn.out_proj(attn_output)
+        hidden_states = residual + decoder_layer.dropout1(attn_output)
+        
+        # Cross-Attention (메모리와 - 캐시 없음)
+        residual = hidden_states
+        hidden_states = decoder_layer.norm2(hidden_states)
+        
+        cross_attn_output, _ = decoder_layer.multihead_attn(
+            hidden_states, memory, memory
+        )
+        hidden_states = residual + decoder_layer.dropout2(cross_attn_output)
+        
+        # Feed Forward
+        residual = hidden_states
+        hidden_states = decoder_layer.norm3(hidden_states)
+        ff_output = decoder_layer.linear2(
+            decoder_layer.dropout(
+                decoder_layer.activation(decoder_layer.linear1(hidden_states))
+            )
+        )
+        hidden_states = residual + decoder_layer.dropout3(ff_output)
+        
+        return hidden_states, (k, v)
+    
+    def _split_qkv(self, attention_layer: nn.MultiheadAttention, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """MultiheadAttention에서 Q, K, V 분리"""
+        B, L, D = x.shape
+        
+        # in_proj_weight를 사용하여 Q, K, V 계산
+        qkv = F.linear(x, attention_layer.in_proj_weight, attention_layer.in_proj_bias)
+        qkv = qkv.view(B, L, 3, D).permute(2, 0, 1, 3)  # [3, B, L, D]
+        
+        q, k, v = qkv[0], qkv[1], qkv[2]  # 각각 [B, L, D]
+        
+        return q, k, v
     
     def _forward_training(self, memory: torch.Tensor, target_tokens: torch.Tensor) -> torch.Tensor:
         """Teacher Forcing을 사용한 학습용 forward pass"""

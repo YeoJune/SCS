@@ -258,42 +258,38 @@ class SCSSystem(nn.Module):
             if self.timing_manager.output_started:
                 output_spikes = current_spikes[self.output_node]
                 
-                # 현재 decoder_input_ids의 마지막 토큰만 사용
-                current_last_token = decoder_input_ids[:, -1]  # [B]
+                # 현재 생성 위치
+                current_pos = self.timing_manager.generated_length
                 
-                # 상태 저장 방식으로 다음 토큰 생성
+                if training and target_schedule is not None and current_pos > 0:
+                    # 학습 모드: scheduled sampling
+                    use_teacher = torch.rand(1).item() < ss_prob
+                    if use_teacher and current_pos <= target_seq_len:
+                        # Teacher Forcing: 정답 토큰 사용
+                        last_token = target_schedule[:, current_pos - 1]
+                    else:
+                        # Student Forcing: 이전 예측 사용
+                        last_token = torch.tensor([last_token_id] * batch_size, dtype=torch.long, device=self.device) if last_token_id is not None else torch.ones(batch_size, dtype=torch.long, device=self.device)
+                else:
+                    # 첫 토큰이거나 추론 모드
+                    if current_pos == 0:
+                        last_token = torch.ones(batch_size, dtype=torch.long, device=self.device)  # BOS
+                    else:
+                        last_token = torch.tensor([last_token_id] * batch_size, dtype=torch.long, device=self.device) if last_token_id is not None else torch.ones(batch_size, dtype=torch.long, device=self.device)
+                
+                # 효율적인 상태 저장 디코딩
                 token_logits, output_past_key_values = self.output_interface.generate_token_at_clk(
-                    output_spikes, current_last_token, output_past_key_values
+                    output_spikes, last_token, output_past_key_values
                 )
                 
                 all_logits.append(token_logits)
                 all_logits_with_clk.append((token_logits, clk))
                 
-                # 다음 스텝을 위한 토큰 선택 및 decoder_input_ids 업데이트
-                current_pos = self.timing_manager.generated_length
+                # 다음 토큰 ID 저장
+                next_token_id = torch.argmax(token_logits, dim=-1)
+                last_token_id = next_token_id[0].item()
                 
-                if training and target_schedule is not None and current_pos < target_seq_len:
-                    # 학습 모드: scheduled sampling 적용
-                    use_teacher = torch.rand(1).item() < ss_prob
-                    if use_teacher:
-                        # Teacher Forcing: 정답 토큰 사용
-                        next_token = target_schedule[:, current_pos].unsqueeze(1)
-                    else:
-                        # Student Forcing: 모델 예측 토큰 사용
-                        next_token = torch.argmax(token_logits, dim=-1, keepdim=True)
-                    decoder_input_ids = torch.cat([decoder_input_ids, next_token], dim=1)
-                    
-                    # EOS 토큰 체크를 위해 마지막 토큰 저장
-                    last_token_id = next_token[0].item()
-                else:
-                    # 추론 모드: auto-regressive 생성
-                    next_token_ids = torch.argmax(token_logits, dim=-1, keepdim=True)
-                    decoder_input_ids = torch.cat([decoder_input_ids, next_token_ids], dim=1)
-                    
-                    # 마지막 토큰 ID 저장 (배치의 첫 번째 샘플)
-                    last_token_id = next_token_ids[0].item()
-                
-                # should_end_output 호출 시 마지막 토큰 ID 전달
+                # 종료 조건 체크
                 if self.timing_manager.should_end_output(
                     training, 
                     target_seq_len,

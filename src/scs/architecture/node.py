@@ -175,8 +175,7 @@ class SpikeNode(nn.Module):
             self.membrane_potential + total_input
         )
         
-        # 수치 안정성을 위한 클램핑 (벡터화)
-        return torch.clamp(new_potential, -10.0, 10.0)
+        return new_potential
     
     def _surrogate_spike_function(self, x: torch.Tensor) -> torch.Tensor:
         """

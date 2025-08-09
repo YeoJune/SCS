@@ -112,6 +112,7 @@ class ModelBuilder:
                 grid_height=input_h,
                 grid_width=input_w,
                 embedding_dim=io_config["input_interface"].get("embedding_dim", 512),
+                window_size=io_config["input_interface"].get("window_size", 64),
                 max_seq_len=io_config["input_interface"].get("max_seq_len", 128),
                 num_heads=io_config["input_interface"].get("num_heads", 8),
                 use_positional_encoding=io_config["input_interface"].get(
@@ -128,6 +129,7 @@ class ModelBuilder:
                 grid_width=output_w,
                 pad_token_id=pad_token_id,
                 embedding_dim=io_config["output_interface"].get("embedding_dim", 256),
+                window_size=io_config["output_interface"].get("window_size", 64),
                 max_output_len=io_config["output_interface"].get("max_output_len", 128),
                 num_heads=io_config["output_interface"].get("num_heads", 4),
                 num_decoder_layers=io_config["output_interface"].get("num_decoder_layers", 2),

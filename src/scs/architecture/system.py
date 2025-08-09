@@ -200,7 +200,7 @@ class SCSSystem(nn.Module):
         ss_prob: float = 1.0
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
         """
-        전체 시스템 처리 - TimingManager 기반 통합 처리
+        전체 시스템 처리 - 상태 저장 슬라이딩 윈도우 기반 I/O 처리
         """
         if max_clk is None:
             max_clk = self.timing_manager.max_processing_clk
@@ -227,8 +227,12 @@ class SCSSystem(nn.Module):
         
         self.reset_state(batch_size)
         
+        # 상태 저장 변수 초기화
+        input_past_key_values = None
+        output_past_key_values = None
+        
         all_logits = []
-        all_logits_with_clk = []  # CLK 정보와 함께 저장
+        all_logits_with_clk = []
         decoder_input_ids = torch.full((batch_size, 1), 1, dtype=torch.long, device=self.device)
         loss_timing_info = {'start_conditions': None, 'end_conditions': None}
         last_token_id = None
@@ -238,7 +242,9 @@ class SCSSystem(nn.Module):
             
             # 시스템 업데이트
             current_spikes = self._phase1_compute_spikes()
-            external_input = self._get_external_input_at_clk(input_schedule, clk, attention_mask)
+            external_input, input_past_key_values = self._get_external_input_at_clk(
+                input_schedule, clk, attention_mask, input_past_key_values
+            )
             self._phase2_update_states(external_input, current_spikes)
             
             # TimingManager 업데이트
@@ -250,20 +256,18 @@ class SCSSystem(nn.Module):
             
             # 출력 생성
             if self.timing_manager.output_started:
-                # On-the-fly 디코딩 로직
                 output_spikes = current_spikes[self.output_node]
-                memory = self.output_interface._create_memory_sequence(output_spikes)
                 
-                # 현재 decoder_input_ids를 사용하여 다음 토큰 예측
-                current_embeds = self.output_interface._prepare_target_embeddings(decoder_input_ids)
-                tgt_mask = self.output_interface._generate_causal_mask(decoder_input_ids.shape[1])
-                decoder_output = self.output_interface.transformer_decoder(
-                    tgt=current_embeds, memory=memory, tgt_mask=tgt_mask
+                # 현재 decoder_input_ids의 마지막 토큰만 사용
+                current_last_token = decoder_input_ids[:, -1]  # [B]
+                
+                # 상태 저장 방식으로 다음 토큰 생성
+                token_logits, output_past_key_values = self.output_interface.generate_token_at_clk(
+                    output_spikes, current_last_token, output_past_key_values
                 )
                 
-                token_logits = self.output_interface.final_projection(decoder_output[:, -1, :])
                 all_logits.append(token_logits)
-                all_logits_with_clk.append((token_logits, clk))  # CLK 정보와 함께 저장
+                all_logits_with_clk.append((token_logits, clk))
                 
                 # 다음 스텝을 위한 토큰 선택 및 decoder_input_ids 업데이트
                 current_pos = self.timing_manager.generated_length
@@ -289,7 +293,7 @@ class SCSSystem(nn.Module):
                     # 마지막 토큰 ID 저장 (배치의 첫 번째 샘플)
                     last_token_id = next_token_ids[0].item()
                 
-                # v1.1 수정: should_end_output 호출 시 마지막 토큰 ID 전달
+                # should_end_output 호출 시 마지막 토큰 ID 전달
                 if self.timing_manager.should_end_output(
                     training, 
                     target_seq_len,
@@ -334,7 +338,7 @@ class SCSSystem(nn.Module):
             "output_started": self.timing_manager.output_started,
             "convergence_achieved": clk < max_clk - 1 if 'clk' in locals() else False,
             "final_acc_activity": self.timing_manager.stable_sync_index.mean().item() if hasattr(self.timing_manager.stable_sync_index, 'mean') else 0.0,
-            "generation_clks": generation_clks  # 시간적 가중치를 위한 CLK 정보 추가
+            "generation_clks": generation_clks
         }
         
         return output_logits, processing_info
@@ -343,27 +347,30 @@ class SCSSystem(nn.Module):
         self,
         input_schedule: Optional[torch.Tensor],  # [B, seq_len] ONLY
         clk: int,
-        attention_mask: Optional[torch.Tensor] = None  # [B, seq_len] ONLY
-    ) -> Optional[torch.Tensor]:
+        attention_mask: Optional[torch.Tensor] = None,  # [B, seq_len] ONLY
+        input_past_key_values: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
+    ) -> Tuple[Optional[torch.Tensor], Optional[Tuple[torch.Tensor, torch.Tensor]]]:
         """
-        통일된 입력 처리: 특정 CLK에서의 외부 입력 계산
+        상태 저장 방식의 입력 처리: 특정 CLK에서의 외부 입력 계산
         
         Args:
             input_schedule: [B, seq_len] 형태의 입력 시퀀스
             clk: 현재 CLK
             attention_mask: [B, seq_len] 형태의 어텐션 마스크 (선택적)
+            input_past_key_values: InputInterface의 상태
             
         Returns:
             external_input: [B, H, W] 형태의 막전위 패턴 또는 None
+            updated_past_key_values: 업데이트된 InputInterface 상태
         """
         if input_schedule is None:
-            return None
+            return None, input_past_key_values
         
         batch_size, seq_len = input_schedule.shape
         
         # CLK가 시퀀스 길이를 넘으면 입력 없음
         if clk >= seq_len:
-            return None
+            return None, input_past_key_values
         
         # 현재 CLK의 토큰 추출
         current_tokens = input_schedule[:, clk]  # [B]
@@ -376,11 +383,15 @@ class SCSSystem(nn.Module):
         
         # 모든 토큰이 0(PAD)인지 확인
         if (current_tokens == 0).all():
-            return None
+            return None, input_past_key_values
         
-        # InputInterface를 통해 막전위 패턴 생성
-        return self.input_interface(current_tokens)  # [B] -> [B, H, W]
-    
+        # 상태 저장 방식으로 InputInterface 호출
+        external_input, updated_past_key_values = self.input_interface(
+            current_tokens, input_past_key_values
+        )
+        
+        return external_input, updated_past_key_values
+
     def _phase1_compute_spikes(self) -> Dict[str, torch.Tensor]:
         """Phase 1: 현재 막전위 기준 스파이크 계산"""
         current_spikes = {}
@@ -394,15 +405,13 @@ class SCSSystem(nn.Module):
         external_input: Optional[torch.Tensor],
         current_spikes: Dict[str, torch.Tensor]
     ):
-        """Phase 2: 입력 통합 및 상태 업데이트 - influence 클램핑 범위 확장"""
+        """Phase 2: 입력 통합 및 상태 업데이트"""
         
         modulated_previous_spikes = {}
         for node_name, prev_spikes in self.previous_spikes.items():
             influence = self.nodes[node_name].influence_strength
             
-            clamped_influence = torch.clamp(influence, min=-10.0, max=10.0)
-            
-            modulated_previous_spikes[node_name] = prev_spikes * clamped_influence
+            modulated_previous_spikes[node_name] = prev_spikes * influence
         
         axonal_inputs = self.axonal_connections(modulated_previous_spikes)
         

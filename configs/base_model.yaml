@@ -12,15 +12,15 @@ brain_regions:
   IN:
     grid_size: [16, 16]
     decay_rate: 0.9
-    distance_tau: 1.0
+    distance_tau: 3.0
   OUT:
     grid_size: [16, 16]
     decay_rate: 0.9
-    distance_tau: 1.0
+    distance_tau: 3.0
   ACC:
     grid_size: [16, 16]
     decay_rate: 0.9
-    distance_tau: 1.0
+    distance_tau: 3.0
 
 # === 스파이크 역학 ===
 spike_dynamics:
@@ -54,6 +54,7 @@ io_system:
     num_heads: 8
     use_positional_encoding: false
     t5_model_name: "t5-small"
+    window_size: 64
   output_interface:
     embedding_dim: 512
     max_output_len: 128
@@ -64,6 +65,7 @@ io_system:
     use_positional_encoding: false
     t5_model_name: "t5-small"
     spike_gain: 10.0 # 스파이크 증폭 계수
+    window_size: 64
 
 timing_manager:
   sync_ema_alpha: 0.1 # EMA 필터링 강도

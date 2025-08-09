@@ -23,19 +23,19 @@ brain_regions:
   IN:
     grid_size: [64, 64]
     decay_rate: 0.9
-    distance_tau: 1.0
+    distance_tau: 3.0
   ACC:
     grid_size: [64, 64]
     decay_rate: 0.9
-    distance_tau: 1.0
+    distance_tau: 3.0
   ADJ:
     grid_size: [64, 64]
     decay_rate: 0.9
-    distance_tau: 1.0
+    distance_tau: 3.0
   OUT:
     grid_size: [64, 64]
     decay_rate: 0.9
-    distance_tau: 1.0
+    distance_tau: 3.0
 
 # === 축삭 연결 (완전 오버라이드) ===
 axonal_connections:
@@ -99,9 +99,9 @@ task:
 
 # === 학습 설정 오버라이드 ===
 learning:
-  epochs: 101
-  learning_rate: 5e-4
-  eta_min: 5e-5
+  epochs: 91
+  learning_rate: 5e-3
+  eta_min: 1e-4
   max_clk_training: 100
   optimizer: "adamw"
   weight_decay: 1e-4

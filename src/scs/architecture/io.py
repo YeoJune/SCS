@@ -29,8 +29,7 @@ def load_t5_embeddings(model_name: str = "t5-base"):
 
 class InputInterface(nn.Module):
     """
-    입력 인터페이스: 토큰 시퀀스를 단일 노드의 external_input으로 변환
-    T5 임베딩 지원 추가
+    입력 인터페이스: 상태 저장 슬라이딩 윈도우 기반 순차적 문맥화
     """
     
     def __init__(
@@ -39,10 +38,10 @@ class InputInterface(nn.Module):
         grid_height: int,
         grid_width: int,
         embedding_dim: int = 512,
-        max_seq_len: int = 128,
+        window_size: int = 32,
         num_heads: int = 8,
         use_positional_encoding: bool = True,
-        t5_model_name: Optional[str] = None,  # T5 임베딩 사용 시 모델명
+        t5_model_name: Optional[str] = None,
         device: str = "cuda"
     ):
         super().__init__()
@@ -51,7 +50,7 @@ class InputInterface(nn.Module):
         self.grid_height = grid_height
         self.grid_width = grid_width
         self.embedding_dim = embedding_dim
-        self.max_seq_len = max_seq_len
+        self.window_size = window_size
         self.num_heads = num_heads
         self.use_positional_encoding = use_positional_encoding
         self.device = device
@@ -76,11 +75,11 @@ class InputInterface(nn.Module):
         
         # 위치 임베딩 (선택적)
         if self.use_positional_encoding:
-            self.position_embedding = nn.Embedding(max_seq_len, self.embedding_dim)
+            self.position_embedding = nn.Embedding(window_size, self.embedding_dim)
         else:
             self.position_embedding = None
         
-        # 격자 위치 임베딩 (T5에는 없으므로 항상 새로 초기화)
+        # 격자 위치 임베딩
         self.register_parameter(
             'grid_position_embedding',
             nn.Parameter(torch.randn(grid_height, grid_width, self.embedding_dim) * 0.02)
@@ -101,94 +100,124 @@ class InputInterface(nn.Module):
         
     def forward(
         self,
-        token_ids: Optional[torch.Tensor] = None,      # [B, seq_len] or [seq_len] or None
-        attention_mask: Optional[torch.Tensor] = None  # [B, seq_len] or [seq_len] or None
-    ) -> Optional[torch.Tensor]:
+        token_ids: Optional[torch.Tensor] = None,
+        past_key_values: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
+    ) -> Tuple[Optional[torch.Tensor], Optional[Tuple[torch.Tensor, torch.Tensor]]]:
         """
-        토큰 시퀀스를 단일 노드의 2차원 격자 막전위로 변환 (항상 배치 출력)
+        상태 저장 슬라이딩 윈도우 기반 토큰 처리
+        
+        Args:
+            token_ids: [B] 또는 [B, 1] 형태의 단일 토큰 또는 None
+            past_key_values: (keys, values) 튜플, 각각 [B, window_len, D]
+            
+        Returns:
+            external_input: [B, H, W] 형태의 막전위 패턴 또는 None
+            new_past_key_values: 업데이트된 (keys, values) 튜플
         """
         if token_ids is None or token_ids.numel() == 0:
-            return None
+            return None, past_key_values
             
-        # 단일 샘플을 배치 형태로 정규화
+        # 단일 토큰을 배치 형태로 정규화
         if token_ids.dim() == 1:
-            token_ids = token_ids.unsqueeze(0)  # [1, seq_len]
-            if attention_mask is not None:
-                attention_mask = attention_mask.unsqueeze(0)  # [1, seq_len]
+            token_ids = token_ids.unsqueeze(-1)  # [B, 1]
+        elif token_ids.dim() == 2 and token_ids.shape[1] != 1:
+            # 여러 토큰이 들어온 경우 마지막 토큰만 사용
+            token_ids = token_ids[:, -1:] # [B, 1]
             
-        batch_size, seq_len = token_ids.shape
+        batch_size = token_ids.shape[0]
         
-        # 토큰 시퀀스 임베딩
-        token_embeds = self._compute_token_embeddings(token_ids)
+        # 새 토큰 임베딩 계산
+        new_token_embed = self._compute_new_token_embedding(token_ids)  # [B, 1, D]
+        
+        # past_key_values 업데이트
+        updated_past_key_values = self._update_past_key_values(
+            new_token_embed, past_key_values, batch_size
+        )
         
         # 격자 임베딩 준비
         grid_embeds = self._prepare_grid_embeddings(batch_size)
         
-        # 시퀀스-격자 크로스 어텐션
+        # 윈도우 내 토큰들과 격자 간 크로스 어텐션
         attended_grid = self._apply_sequence_to_grid_attention(
-            token_embeds, grid_embeds, attention_mask
+            updated_past_key_values, grid_embeds
         )
         
         # 막전위 패턴 생성
         external_input = self._generate_membrane_potential(attended_grid, batch_size)
         
-        return external_input  # 항상 [B, H, W]
+        return external_input, updated_past_key_values
         
-    def _compute_token_embeddings(self, token_ids: torch.Tensor) -> torch.Tensor:
-        """토큰 시퀀스 임베딩 계산 (배치 지원)"""
-        batch_size, seq_len = token_ids.shape
-        
+    def _compute_new_token_embedding(self, token_ids: torch.Tensor) -> torch.Tensor:
+        """새 토큰의 임베딩 계산"""
         # 토큰 임베딩
-        token_embeds = self.token_embedding(token_ids)  # [B, seq_len, embedding_dim]
+        token_embeds = self.token_embedding(token_ids)  # [B, 1, D]
+        
+        # 정규화
+        return self.layer_norm(token_embeds)
+    
+    def _update_past_key_values(
+        self, 
+        new_token_embed: torch.Tensor,  # [B, 1, D]
+        past_key_values: Optional[Tuple[torch.Tensor, torch.Tensor]],
+        batch_size: int
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """슬라이딩 윈도우로 past_key_values 업데이트"""
+        if past_key_values is None:
+            # 첫 번째 토큰: 새로운 past_key_values 생성
+            keys = new_token_embed  # [B, 1, D]
+            values = new_token_embed  # [B, 1, D]
+        else:
+            keys, values = past_key_values
+            
+            # 새 토큰 추가
+            keys = torch.cat([keys, new_token_embed], dim=1)  # [B, len+1, D]
+            values = torch.cat([values, new_token_embed], dim=1)  # [B, len+1, D]
+            
+            # 윈도우 크기 제한 (슬라이딩)
+            if keys.shape[1] > self.window_size:
+                keys = keys[:, 1:]  # 가장 오래된 토큰 제거
+                values = values[:, 1:]
         
         # 위치 임베딩 추가 (선택적)
         if self.use_positional_encoding and self.position_embedding is not None:
+            seq_len = keys.shape[1]
             positions = torch.arange(seq_len, device=self.device).unsqueeze(0).expand(batch_size, -1)
             position_embeds = self.position_embedding(positions)
-            combined_embeds = token_embeds + position_embeds
-        else:
-            combined_embeds = token_embeds
+            keys = keys + position_embeds
+            values = values + position_embeds
         
-        # 정규화
-        combined_embeds = self.layer_norm(combined_embeds)
-        
-        return combined_embeds
+        return keys, values
     
     def _prepare_grid_embeddings(self, batch_size: int) -> torch.Tensor:
-        """격자 위치 임베딩 준비 (배치 지원)"""
+        """격자 위치 임베딩 준비"""
         # 2D 격자를 1D 시퀀스로 flatten
-        grid_embeds = self.grid_position_embedding.view(-1, self.embedding_dim)  # [H*W, embedding_dim]
+        grid_embeds = self.grid_position_embedding.view(-1, self.embedding_dim)  # [H*W, D]
         grid_embeds = self.layer_norm(grid_embeds)
         
         # 배치 차원으로 확장
-        grid_embeds = grid_embeds.unsqueeze(0).expand(batch_size, -1, -1)  # [B, H*W, embedding_dim]
+        grid_embeds = grid_embeds.unsqueeze(0).expand(batch_size, -1, -1)  # [B, H*W, D]
         
         return grid_embeds
     
     def _apply_sequence_to_grid_attention(
         self, 
-        token_embeds: torch.Tensor,  # [B, seq_len, embedding_dim]
-        grid_embeds: torch.Tensor,   # [B, H*W, embedding_dim]
-        attention_mask: Optional[torch.Tensor] = None
+        past_key_values: Tuple[torch.Tensor, torch.Tensor],
+        grid_embeds: torch.Tensor   # [B, H*W, D]
     ) -> torch.Tensor:
-        """시퀀스-격자 크로스 어텐션 (배치 지원)"""
-        # 어텐션 마스크 처리
-        key_padding_mask = None
-        if attention_mask is not None:
-            key_padding_mask = ~attention_mask  # [B, seq_len] (True=패딩)
+        """윈도우 내 토큰들과 격자 간 크로스 어텐션"""
+        keys, values = past_key_values  # [B, window_len, D], [B, window_len, D]
         
-        # 크로스 어텐션: 격자 → 시퀀스
+        # 크로스 어텐션: 격자 → 토큰 윈도우
         attended_grid, _ = self.sequence_to_grid_attention(
-            query=grid_embeds,         # 격자 위치들이 질의 [B, H*W, embedding_dim]
-            key=token_embeds,          # 토큰 시퀀스가 키 [B, seq_len, embedding_dim]
-            value=token_embeds,        # 토큰 시퀀스가 값 [B, seq_len, embedding_dim]
-            key_padding_mask=key_padding_mask
+            query=grid_embeds,  # [B, H*W, D]
+            key=keys,           # [B, window_len, D]
+            value=values        # [B, window_len, D]
         )
         
-        return attended_grid  # [B, H*W, embedding_dim]
+        return attended_grid  # [B, H*W, D]
     
     def _generate_membrane_potential(self, attended_grid: torch.Tensor, batch_size: int) -> torch.Tensor:
-        """어텐션 결과를 막전위 패턴으로 변환 (배치 지원)"""
+        """어텐션 결과를 막전위 패턴으로 변환"""
         # 막전위 로짓 계산
         membrane_logits = self.membrane_projection(attended_grid)  # [B, H*W, 1]
         membrane_logits = membrane_logits.squeeze(-1)   # [B, H*W]
@@ -196,16 +225,12 @@ class InputInterface(nn.Module):
         # 2차원 격자로 reshape
         membrane_potential = membrane_logits.view(batch_size, self.grid_height, self.grid_width)  # [B, H, W]
         
-        # 막전위 정규화
-        membrane_potential = torch.clamp(membrane_potential, -10, 10)  # [-1, 1] 범위로 정규화
-        
         return membrane_potential
 
 
 class OutputInterface(nn.Module):
     """
-    출력 인터페이스: SCS 스파이크 격자에 직접 어텐션하여 자기회귀적 토큰 시퀀스 생성
-    T5 임베딩 지원 추가
+    출력 인터페이스: 상태 저장 슬라이딩 윈도우 기반 효율적 디코딩
     """
     
     def __init__(
@@ -215,13 +240,13 @@ class OutputInterface(nn.Module):
         grid_width: int,
         pad_token_id: int,
         embedding_dim: int = 256,
-        max_output_len: int = 128,
+        window_size: int = 32,
         num_heads: int = 4,
         num_decoder_layers: int = 2,
         dim_feedforward: int = 1024,
         dropout: float = 0.1,
-        use_positional_encoding: bool = True,  # 새로 추가된 파라미터
-        t5_model_name: Optional[str] = None,   # T5 임베딩 사용 시 모델명
+        use_positional_encoding: bool = True,
+        t5_model_name: Optional[str] = None,
         spike_gain: float = 5.0,
         device: str = "cuda"
     ):
@@ -232,7 +257,7 @@ class OutputInterface(nn.Module):
         self.grid_width = grid_width
         self.pad_token_id = pad_token_id
         self.embedding_dim = embedding_dim
-        self.max_output_len = max_output_len
+        self.window_size = window_size
         self.num_heads = num_heads
         self.num_decoder_layers = num_decoder_layers
         self.use_positional_encoding = use_positional_encoding
@@ -263,19 +288,18 @@ class OutputInterface(nn.Module):
                 padding_idx=self.pad_token_id
             )
         
-        # 1. 스파이크 → 메모리 시퀀스 변환부
+        # 스파이크 → 메모리 시퀀스 변환부
         self.spike_to_feature = nn.Linear(1, self.embedding_dim)
         
-        # 격자 위치 임베딩 (T5에는 없으므로 항상 새로 초기화)
+        # 격자 위치 임베딩
         self.register_parameter(
             'grid_position_embedding',
             nn.Parameter(torch.randn(grid_height, grid_width, self.embedding_dim) * 0.02)
         )
         
-        # 2. 트랜스포머 디코더 구성요소
         # 위치 임베딩 (선택적)
         if self.use_positional_encoding:
-            self.position_embedding = nn.Embedding(max_output_len, self.embedding_dim)
+            self.position_embedding = nn.Embedding(window_size, self.embedding_dim)
         else:
             self.position_embedding = None
         
@@ -292,14 +316,12 @@ class OutputInterface(nn.Module):
             num_layers=num_decoder_layers
         )
         
-        # 3. 최종 출력 레이어
+        # 최종 출력 레이어
         if t5_model_name is not None and self.t5_data is not None:
             # T5 lm_head 사용
             self.final_projection = nn.Linear(self.embedding_dim, self.vocab_size)
-
-            if t5_model_name is not None:
-                with torch.no_grad():
-                    self.final_projection.weight.copy_(self.t5_data['lm_head_weights'])
+            with torch.no_grad():
+                self.final_projection.weight.copy_(self.t5_data['lm_head_weights'])
         else:
             # 기본 출력 레이어
             self.final_projection = nn.Linear(self.embedding_dim, vocab_size)
@@ -308,10 +330,10 @@ class OutputInterface(nn.Module):
     
     def forward(
         self,
-        grid_spikes: torch.Tensor,                        # [B, H, W] 또는 [H, W]
-        target_tokens: Optional[torch.Tensor] = None      # [B, seq_len] 또는 [seq_len]
+        grid_spikes: torch.Tensor,
+        target_tokens: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
-        """스파이크 격자를 기반으로 로짓 생성"""
+        """스파이크 격자를 기반으로 로짓 생성 (학습용)"""
         # 배치 형태로 정규화
         if grid_spikes.dim() == 2:
             grid_spikes = grid_spikes.unsqueeze(0)
@@ -333,52 +355,152 @@ class OutputInterface(nn.Module):
     
     def generate_token_at_clk(
         self, 
-        grid_spikes: torch.Tensor,      # [B, H, W] 또는 [H, W]
-        current_tokens: torch.Tensor    # [B, current_len]
-    ) -> torch.Tensor:
-        """특정 CLK에서 다음 토큰 하나 생성 (추론용)"""
+        grid_spikes: torch.Tensor,
+        last_token_id: torch.Tensor,
+        past_key_values: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None
+    ) -> Tuple[torch.Tensor, List[Tuple[torch.Tensor, torch.Tensor]]]:
+        """
+        상태 저장 슬라이딩 윈도우 기반 다음 토큰 생성
+        
+        Args:
+            grid_spikes: [B, H, W] 또는 [H, W]
+            last_token_id: [B] 형태의 마지막 토큰
+            past_key_values: 디코더 레이어별 (key, value) 캐시 리스트
+            
+        Returns:
+            next_token_logits: [B, vocab_size]
+            updated_past_key_values: 업데이트된 캐시 리스트
+        """
         if grid_spikes.dim() == 2:
             grid_spikes = grid_spikes.unsqueeze(0)
+        
+        if last_token_id.dim() == 1:
+            last_token_id = last_token_id.unsqueeze(-1)  # [B, 1]
+        
+        batch_size = grid_spikes.shape[0]
         
         # 현재 스파이크를 메모리로 변환
         memory = self._create_memory_sequence(grid_spikes)  # [B, H*W, D]
         
-        # 현재까지의 토큰들을 임베딩
-        current_embeds = self._prepare_target_embeddings(current_tokens)
-        current_len = current_tokens.shape[1]
-        tgt_mask = self._generate_causal_mask(current_len)
+        # 마지막 토큰 임베딩
+        last_token_embed = self._compute_token_embedding(last_token_id)  # [B, 1, D]
         
-        # 디코더 실행
-        decoder_output = self.transformer_decoder(
-            tgt=current_embeds,
-            memory=memory,
-            tgt_mask=tgt_mask
+        # past_key_values 업데이트
+        updated_past_key_values = self._update_decoder_cache(
+            last_token_embed, past_key_values, batch_size
         )
         
-        # 마지막 위치의 로짓만 반환 (다음 토큰 예측)
+        # 윈도우 내 토큰들로 디코더 입력 구성
+        decoder_input = self._prepare_decoder_input_from_cache(updated_past_key_values)
+        
+        # 디코더 실행 (캐시된 어텐션 상태 활용)
+        decoder_output = self._efficient_decoder_forward(decoder_input, memory)
+        
+        # 마지막 위치의 로짓만 반환
         next_token_logits = self.final_projection(decoder_output[:, -1, :])
-        return next_token_logits
+        
+        return next_token_logits, updated_past_key_values
     
     def _create_memory_sequence(self, grid_spikes: torch.Tensor) -> torch.Tensor:
         """스파이크 격자를 트랜스포머 메모리 시퀀스로 변환"""
         batch_size, grid_h, grid_w = grid_spikes.shape
         
-        # 스파이크 값에 특징 차원 추가: [B, H, W] -> [B, H, W, 1]
+        # 스파이크 값에 특징 차원 추가
         spikes_with_feature = grid_spikes.unsqueeze(-1).float()
         
-        # 스파이크 값을 임베딩 벡터로 변환: [B, H, W, 1] -> [B, H, W, D]
+        # 스파이크 값을 임베딩 벡터로 변환
         spike_features = self.spike_to_feature(spikes_with_feature * self.spike_gain)
         
-        # 위치 정보 추가: [B, H, W, D] + [H, W, D] -> [B, H, W, D]
+        # 위치 정보 추가
         contextual_features = spike_features + self.grid_position_embedding
         
         # 정규화
         normalized_features = self.layer_norm(contextual_features)
         
-        # 시퀀스 형태로 변환: [B, H, W, D] -> [B, H*W, D]
+        # 시퀀스 형태로 변환
         memory_sequence = normalized_features.view(batch_size, -1, self.embedding_dim)
         
         return memory_sequence
+    
+    def _compute_token_embedding(self, token_ids: torch.Tensor) -> torch.Tensor:
+        """토큰 임베딩 계산"""
+        token_embeds = self.token_embedding(token_ids)
+        return self.layer_norm(token_embeds)
+    
+    def _update_decoder_cache(
+        self,
+        new_token_embed: torch.Tensor,  # [B, 1, D]
+        past_key_values: Optional[List[Tuple[torch.Tensor, torch.Tensor]]],
+        batch_size: int
+    ) -> List[Tuple[torch.Tensor, torch.Tensor]]:
+        """디코더 레이어별 캐시 업데이트 (슬라이딩 윈도우)"""
+        if past_key_values is None:
+            # 첫 번째 토큰: 모든 레이어에 대해 새로운 캐시 생성
+            updated_cache = []
+            for _ in range(self.num_decoder_layers):
+                keys = new_token_embed  # [B, 1, D]
+                values = new_token_embed  # [B, 1, D]
+                updated_cache.append((keys, values))
+        else:
+            # 기존 캐시 업데이트
+            updated_cache = []
+            for layer_idx in range(self.num_decoder_layers):
+                if layer_idx < len(past_key_values):
+                    keys, values = past_key_values[layer_idx]
+                    
+                    # 새 토큰 추가
+                    keys = torch.cat([keys, new_token_embed], dim=1)
+                    values = torch.cat([values, new_token_embed], dim=1)
+                    
+                    # 윈도우 크기 제한
+                    if keys.shape[1] > self.window_size:
+                        keys = keys[:, 1:]
+                        values = values[:, 1:]
+                else:
+                    # 새 레이어 캐시 생성
+                    keys = new_token_embed
+                    values = new_token_embed
+                
+                updated_cache.append((keys, values))
+        
+        return updated_cache
+    
+    def _prepare_decoder_input_from_cache(
+        self, 
+        past_key_values: List[Tuple[torch.Tensor, torch.Tensor]]
+    ) -> torch.Tensor:
+        """캐시에서 디코더 입력 구성"""
+        # 첫 번째 레이어의 values를 디코더 입력으로 사용
+        _, values = past_key_values[0]  # [B, window_len, D]
+        
+        # 위치 임베딩 추가 (선택적)
+        if self.use_positional_encoding and self.position_embedding is not None:
+            batch_size, seq_len, _ = values.shape
+            positions = torch.arange(seq_len, device=self.device).unsqueeze(0).expand(batch_size, -1)
+            position_embeds = self.position_embedding(positions)
+            values = values + position_embeds
+        
+        return values
+    
+    def _efficient_decoder_forward(
+        self, 
+        decoder_input: torch.Tensor,  # [B, window_len, D]
+        memory: torch.Tensor          # [B, H*W, D]
+    ) -> torch.Tensor:
+        """효율적인 디코더 forward (윈도우 기반)"""
+        seq_len = decoder_input.shape[1]
+        
+        # Causal mask 생성 (윈도우 크기에 맞춰)
+        tgt_mask = self._generate_causal_mask(seq_len)
+        
+        # 디코더 실행
+        decoder_output = self.transformer_decoder(
+            tgt=decoder_input,
+            memory=memory,
+            tgt_mask=tgt_mask
+        )
+        
+        return decoder_output
     
     def _forward_training(self, memory: torch.Tensor, target_tokens: torch.Tensor) -> torch.Tensor:
         """Teacher Forcing을 사용한 학습용 forward pass"""

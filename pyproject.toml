@@ -42,6 +42,7 @@ dependencies = [
     # Utilities
     "tqdm>=4.64.0",
     "rich>=12.0.0",
+    "matplotlib",
 ]
 
 [project.optional-dependencies]

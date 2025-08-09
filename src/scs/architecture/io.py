@@ -225,6 +225,9 @@ class InputInterface(nn.Module):
         # 2차원 격자로 reshape
         membrane_potential = membrane_logits.view(batch_size, self.grid_height, self.grid_width)  # [B, H, W]
         
+        # 막전위 정규화
+        membrane_potential = torch.tanh(membrane_potential)  # [-1, 1] 범위로 정규화
+        
         return membrane_potential
 
 
@@ -443,21 +446,24 @@ class OutputInterface(nn.Module):
         
         # 과거 K, V와 결합 (슬라이딩 윈도우)
         if layer_past is not None:
-            past_k, past_v = layer_past  # [B, past_len, D]
-            k = torch.cat([past_k, k], dim=1)  # [B, past_len+1, D]
-            v = torch.cat([past_v, v], dim=1)
+            past_k, past_v = layer_past  # [B, num_heads, past_len, head_dim]
+            k = torch.cat([past_k, k], dim=-2)  # [B, num_heads, past_len+1, head_dim]
+            v = torch.cat([past_v, v], dim=-2)
             
             # 윈도우 크기 제한
-            if k.shape[1] > self.window_size:
-                k = k[:, -self.window_size:]
-                v = v[:, -self.window_size:]
+            if k.shape[-2] > self.window_size:
+                k = k[:, :, -self.window_size:]
+                v = v[:, :, -self.window_size:]
         
         # 효율적 어텐션 계산 (Q는 1개, K,V는 window_size개)
         attn_output = F.scaled_dot_product_attention(
             q, k, v, 
-            attn_mask=self._generate_causal_mask(k.shape[1]),
+            attn_mask=self._generate_causal_mask(k.shape[-2]) if k.shape[-2] > 1 else None,
             dropout_p=decoder_layer.self_attn.dropout if self.training else 0.0
         )
+        
+        # 멀티헤드 결과를 다시 합치기
+        attn_output = attn_output.transpose(1, 2).contiguous().view(B, 1, -1)  # [B, 1, D]
         
         # Self-attention 결과 적용
         attn_output = decoder_layer.self_attn.out_proj(attn_output)
@@ -485,14 +491,16 @@ class OutputInterface(nn.Module):
         return hidden_states, (k, v)
     
     def _split_qkv(self, attention_layer: nn.MultiheadAttention, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """MultiheadAttention에서 Q, K, V 분리"""
+        """MultiheadAttention에서 Q, K, V 분리 (멀티헤드 형태로)"""
         B, L, D = x.shape
+        num_heads = attention_layer.num_heads
+        head_dim = D // num_heads
         
         # in_proj_weight를 사용하여 Q, K, V 계산
         qkv = F.linear(x, attention_layer.in_proj_weight, attention_layer.in_proj_bias)
-        qkv = qkv.view(B, L, 3, D).permute(2, 0, 1, 3)  # [3, B, L, D]
+        qkv = qkv.view(B, L, 3, num_heads, head_dim).permute(2, 0, 3, 1, 4)  # [3, B, num_heads, L, head_dim]
         
-        q, k, v = qkv[0], qkv[1], qkv[2]  # 각각 [B, L, D]
+        q, k, v = qkv[0], qkv[1], qkv[2]  # 각각 [B, num_heads, L, head_dim]
         
         return q, k, v
     

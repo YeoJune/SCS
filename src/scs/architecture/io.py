@@ -463,6 +463,7 @@ class OutputInterface(nn.Module):
         )
         
         # 멀티헤드 결과를 다시 합치기
+        B = attn_output.shape[0]
         attn_output = attn_output.transpose(1, 2).contiguous().view(B, 1, -1)  # [B, 1, D]
         
         # Self-attention 결과 적용

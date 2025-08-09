@@ -113,7 +113,6 @@ class ModelBuilder:
                 grid_width=input_w,
                 embedding_dim=io_config["input_interface"].get("embedding_dim", 512),
                 window_size=io_config["input_interface"].get("window_size", 64),
-                max_seq_len=io_config["input_interface"].get("max_seq_len", 128),
                 num_heads=io_config["input_interface"].get("num_heads", 8),
                 use_positional_encoding=io_config["input_interface"].get(
                     "use_positional_encoding", 
@@ -269,7 +268,7 @@ class ModelBuilder:
             
             # input_interface 필수 필드 검증
             if "input_interface" in io_config:
-                input_required = ["embedding_dim", "max_seq_len", "num_heads"]
+                input_required = ["embedding_dim", "num_heads"]
                 for field in input_required:
                     if field not in io_config["input_interface"]:
                         errors.append(f"io_system.input_interface에 '{field}' 필드가 필요합니다.")

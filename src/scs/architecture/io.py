@@ -77,7 +77,7 @@ class InputInterface(nn.Module):
             self.token_embedding = nn.Embedding(vocab_size, embedding_dim)
         
         # [CLS] 토큰 (학습 가능한 파라미터)
-        self.cls_token = nn.Parameter(torch.randn(1, 1, self.embedding_dim) * 0.5 + 1.0)
+        self.cls_token = nn.Parameter(torch.randn(1, 1, self.embedding_dim) * 1.0)
         
         # 위치 임베딩 (선택적)
         if self.use_positional_encoding:
@@ -102,14 +102,6 @@ class InputInterface(nn.Module):
         
         # 정규화
         self.layer_norm = nn.LayerNorm(self.embedding_dim)
-
-        # with torch.no_grad():
-        #     # 마지막 Conv2d의 바이어스를 2.0으로 설정
-        #     for module in reversed(list(self.transposed_cnn.modules())):
-        #         if isinstance(module, nn.Conv2d):
-        #             if module.bias is not None:
-        #                 module.bias.data.fill_(2.0)
-        #             break
         
     def _auto_calculate_transposed_cnn(self) -> Tuple[int, List[int]]:
         """Transposed CNN 구조 자동 계산"""
@@ -208,9 +200,11 @@ class InputInterface(nn.Module):
         membrane_pattern = membrane_pattern.squeeze(1)  # [B, H, W]
 
         # Softmax 적용
-        input_power = 0.5
+        input_power = 1.0
+        temperature = 0.5
+
         batch_size, height, width = membrane_pattern.shape
-        membrane_pattern = F.softmax(membrane_pattern.view(batch_size, -1), dim=1).view(batch_size, height, width) * (height * width * input_power)
+        membrane_pattern = F.softmax(membrane_pattern.view(batch_size, -1) / temperature, dim=1).view(batch_size, height, width) * (height * width * input_power)
 
         return membrane_pattern
 

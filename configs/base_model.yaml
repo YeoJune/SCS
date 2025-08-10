@@ -55,7 +55,7 @@ io_system:
     encoder_heads: 8
     encoder_dropout: 0.1
     dim_feedforward: 2048
-    membrane_clamp_value: 6.0
+    membrane_clamp_value: 10.0
     use_positional_encoding: false
     t5_model_name: "t5-small"
 

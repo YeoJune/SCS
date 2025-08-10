@@ -102,6 +102,16 @@ class InputInterface(nn.Module):
         
         # 정규화
         self.layer_norm = nn.LayerNorm(self.embedding_dim)
+
+        with torch.no_grad():
+            self.cls_token.data.normal_(mean=0.5, std=0.3)
+            
+            # 마지막 Conv2d의 바이어스를 3.0으로 설정
+            for module in reversed(list(self.transposed_cnn.modules())):
+                if isinstance(module, nn.Conv2d):
+                    if module.bias is not None:
+                        module.bias.data.fill_(3.0)
+                    break
         
     def _auto_calculate_transposed_cnn(self) -> Tuple[int, List[int]]:
         """Transposed CNN 구조 자동 계산"""
@@ -199,9 +209,9 @@ class InputInterface(nn.Module):
         membrane_pattern = self.transposed_cnn(context_vector)
         membrane_pattern = membrane_pattern.squeeze(1)  # [B, H, W]
         
-        # 막전위 범위 제한
-        membrane_pattern = torch.sigmoid(membrane_pattern) * 6  # [B, H, W]
-
+        # 막전위 범위 제한 (Sigmoid 대신 Clamp 사용)
+        membrane_pattern = torch.clamp(membrane_pattern, -self.membrane_clamp_value, self.membrane_clamp_value)
+        
         return membrane_pattern
 
 

@@ -209,6 +209,18 @@ class InputInterface(nn.Module):
         
         # 막전위 범위 제한 (Sigmoid 대신 Clamp 사용)
         membrane_pattern = torch.clamp(membrane_pattern, -self.membrane_clamp_value, self.membrane_clamp_value)
+
+        # 임시: Top-10% 마스킹
+        batch_size, height, width = membrane_pattern.shape
+        for b in range(batch_size):
+            flat_pattern = membrane_pattern[b].view(-1)
+            top_k = max(1, int(flat_pattern.numel() * 0.1))  # 상위 10%
+            _, top_indices = torch.topk(flat_pattern, k=top_k, largest=True)
+            
+            # 마스킹
+            mask = torch.zeros_like(flat_pattern)
+            mask[top_indices] = 1.0
+            membrane_pattern[b] = (flat_pattern * mask).view(height, width)
         
         return membrane_pattern
 

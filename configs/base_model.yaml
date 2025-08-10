@@ -25,7 +25,7 @@ brain_regions:
 # === 스파이크 역학 ===
 spike_dynamics:
   threshold: 5.0
-  refractory_base: 1
+  refractory_base: 0.0
   refractory_adaptive_factor: 1.0
   surrogate_beta: 3.0
   ema_alpha: 0.1
@@ -101,7 +101,7 @@ learning:
   ss_end_prob: 0.05
   ss_decay_epochs: 30
 
-  spike_reg_weight: 100 # 스파이크 정규화 가중치
+  spike_reg_weight: 1.0 # 스파이크 정규화 가중치
   node_target_spike_rates: # 이 노드들만 정규화됨
     IN: 0.2
 

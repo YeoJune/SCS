@@ -218,7 +218,7 @@ class InputInterface(nn.Module):
 
         # Softmax 적용
         input_power = 1.0
-        temperature = 0.5
+        temperature = 0.3
 
         batch_size, height, width = membrane_pattern.shape
         membrane_pattern = F.softmax(membrane_pattern.view(batch_size, -1) / temperature, dim=1).view(batch_size, height, width) * (height * width * input_power)

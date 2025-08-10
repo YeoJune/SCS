@@ -394,6 +394,7 @@ class SCSTrainer:
                     training=False,
                     target_schedule=target_tokens,
                     attention_mask=attention_mask
+                    # ss_prob 파라미터 제거 - inference 모드에서는 기본값 사용
                 )
                 
                 batch_loss = self.loss_fn(output_logits, target_tokens, processing_info)
@@ -539,8 +540,8 @@ class SCSTrainer:
                 max_clk=self.config.max_clk_training,
                 training=False,  # 추론 모드
                 target_schedule=single_target,
-                attention_mask=single_mask,
-                ss_prob=1.0  # Teacher forcing
+                attention_mask=single_mask
+                # ss_prob 파라미터 제거 - inference 모드에서는 기본값 사용
             )
             
             # =====================================
@@ -561,7 +562,7 @@ class SCSTrainer:
             try:
                 from scs.training.metric import SCSMetrics
                 accuracy = SCSMetrics.accuracy(
-                    output_logits.unsqueeze(0) if output_logits.dim() == 2 else output_logits,
+                    output_logits,  # 차원 조작 제거
                     single_target,
                     pad_token_id=self.config.pad_token_id
                 )
@@ -577,7 +578,7 @@ class SCSTrainer:
                 try:
                     # 기존과 동일한 loss 계산 (train_batch와 동일한 방식)
                     if hasattr(self, 'loss_fn') and self.loss_fn is not None:
-                        # train_batch와 동일: unsqueeze 제거, .item() 추가
+                        # train_batch와 동일: 차원 조작 없이 직접 계산
                         loss = self.loss_fn(output_logits, single_target, processing_info).item()
                     else:
                         # 폴백: CrossEntropyLoss

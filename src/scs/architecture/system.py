@@ -200,8 +200,7 @@ class SCSSystem(nn.Module):
         max_clk: Optional[int] = None,
         training: bool = False,
         target_schedule: Optional[torch.Tensor] = None,  # [B, seq_len] ONLY
-        attention_mask: Optional[torch.Tensor] = None,   # [B, seq_len] ONLY
-        ss_prob: float = 1.0
+        attention_mask: Optional[torch.Tensor] = None   # [B, seq_len] ONLY
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
         """
         전체 시스템 처리 - 상태 저장 슬라이딩 윈도우 기반 I/O 처리

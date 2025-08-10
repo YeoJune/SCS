@@ -1,5 +1,5 @@
-# configs/phase2_babi_task1.yaml
-# bAbI 추론 태스크 전용 설정
+# configs/phase1_babi_echo.yaml
+# bAbI Echo 태스크 전용 설정
 
 # === 기본 설정 상속 ===
 defaults:
@@ -28,58 +28,21 @@ brain_regions:
     grid_size: [64, 64]
     decay_rate: 0.9
     distance_tau: 1.0
-  ADJ:
-    grid_size: [64, 64]
-    decay_rate: 0.9
-    distance_tau: 1.0
   OUT:
     grid_size: [64, 64]
     decay_rate: 0.9
     distance_tau: 1.0
 
-# === 축삭 연결 (완전 오버라이드) ===
+# === 축삭 연결 ===
 axonal_connections:
   connections:
-    # 기본 정보 처리 경로
-    - source: "IN"
-      target: "ADJ"
-      kernel_size: 3
-      stride: 1
-      padding: 1
-      dilation: 1
-      weight_scale: 0.9
-
-    - source: "ADJ"
-      target: "IN"
-      kernel_size: 5
-      stride: 1
-      padding: 2
-      dilation: 1
-      weight_scale: 0.7
-
-    - source: "ADJ"
-      target: "OUT"
-      kernel_size: 3
-      stride: 1
-      padding: 1
-      dilation: 1
-      weight_scale: 0.9
-
-    - source: "OUT"
-      target: "ADJ"
-      kernel_size: 5
-      stride: 1
-      padding: 2
-      dilation: 1
-      weight_scale: 0.6
-
     - source: "IN"
       target: "OUT"
-      kernel_size: 3
+      kernel_size: 1
       stride: 1
-      padding: 1
+      padding: 0
       dilation: 1
-      weight_scale: 0.3
+      weight_scale: 1.0
 
 # === 작업 설정 오버라이드 ===
 task:
@@ -87,14 +50,24 @@ task:
   type: "reasoning"
   dataset_name: "Muennighoff/babi"
   task_id: 1 # bAbI Task 1: Single Supporting Fact
+  learning_style: "bert"
+
+  # BERT 마스킹 설정
+  bert_config:
+    mask_probability: 0.05 # 5% 토큰 마스킹
+    random_token_prob: 0.1 # 10% 랜덤 토큰으로 대체
+    unchanged_prob: 0.1 # 10% 원본 유지
+    min_masks: 1 # 최소 마스크 개수
+    max_masks_ratio: 0.5 # 최대 50% 마스킹
 
 # === 학습 설정 오버라이드 ===
 learning:
   epochs: 31
-  learning_rate: 1e-4
+  learning_rate: 5e-4
+  eta_min: 2e-4
   max_clk_training: 100
   optimizer: "adamw"
-  weight_decay: 0.01
+  weight_decay: 1e-4
   eval_every: 5
   save_every: 10
   early_stopping_patience: 100
@@ -107,11 +80,11 @@ timing_manager:
   max_processing_clk: 500 # 최대 처리 시간
   min_output_length: 5 # 최소 출력 길이
   fixed_len: -1 # -1: 적응 모드, >0: 고정 길이
-  fixed_delay: 5 # -1: 적응 모드, ≥0: 고정 지연
+  fixed_delay: 2 # -1: 적응 모드, ≥0: 고정 지연
 
 # === 데이터 로딩 오버라이드 ===
 data_loading:
-  batch_size: 32
+  batch_size: 8
   tokenizer:
     name: "t5-small"
     max_length: 128

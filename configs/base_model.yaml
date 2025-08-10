@@ -12,15 +12,15 @@ brain_regions:
   IN:
     grid_size: [16, 16]
     decay_rate: 0.9
-    distance_tau: 2.0
+    distance_tau: 1.0
   OUT:
     grid_size: [16, 16]
     decay_rate: 0.9
-    distance_tau: 2.0
+    distance_tau: 1.0
   ACC:
     grid_size: [16, 16]
     decay_rate: 0.9
-    distance_tau: 2.0
+    distance_tau: 1.0
 
 # === 스파이크 역학 ===
 spike_dynamics:

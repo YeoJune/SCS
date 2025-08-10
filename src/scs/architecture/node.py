@@ -45,7 +45,7 @@ class SpikeNode(nn.Module):
         self.device = device
 
         # 약 80% 흥분성, 20% 억제성
-        influence_init = torch.randn(grid_height, grid_width, device=device) * 1.0
+        influence_init = torch.randn(grid_height, grid_width, device=device) * 0.5
 
         # 생물학적 현실성을 위한 바이어스
         excitatory_mask = torch.rand(grid_height, grid_width, device=device) < 0.8

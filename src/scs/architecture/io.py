@@ -206,22 +206,12 @@ class InputInterface(nn.Module):
         # [Where/How] Transposed CNN: 공간 매핑
         membrane_pattern = self.transposed_cnn(context_vector)
         membrane_pattern = membrane_pattern.squeeze(1)  # [B, H, W]
-        
-        # 막전위 범위 제한 (Sigmoid 대신 Clamp 사용)
-        membrane_pattern = torch.clamp(membrane_pattern, -self.membrane_clamp_value, self.membrane_clamp_value)
 
-        # 임시: Top-20% 마스킹
+        # Softmax 적용
+        input_power = 0.5
         batch_size, height, width = membrane_pattern.shape
-        for b in range(batch_size):
-            flat_pattern = membrane_pattern[b].view(-1)
-            top_k = max(1, int(flat_pattern.numel() * 0.2))  # 상위 20%
-            _, top_indices = torch.topk(flat_pattern, k=top_k, largest=True)
-            
-            # 마스킹
-            mask = torch.zeros_like(flat_pattern)
-            mask[top_indices] = 1.0
-            membrane_pattern[b] = (flat_pattern * mask).view(height, width)
-        
+        membrane_pattern = F.softmax(membrane_pattern.view(batch_size, -1), dim=1).view(batch_size, height, width) * (height * width * input_power)
+
         return membrane_pattern
 
 

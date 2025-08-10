@@ -13,24 +13,46 @@ class SCSLoss(nn.Module):
     def __init__(
         self, 
         pad_token_id: int,
+        max_clk: int = 512,
         spike_reg_weight: float = 0.0,
-        length_penalty_weight: float = 0.0,  # 새로 추가
+        length_penalty_weight: float = 0.0,
         target_spike_rate: float = 0.1,
         use_temporal_weighting: bool = False,
         initial_temporal_weight: float = 2.0,
         final_temporal_weight: float = 1.0
     ):
         super().__init__()
+        self.max_clk = max_clk
         self.spike_reg_weight = spike_reg_weight
-        self.length_penalty_weight = length_penalty_weight  # 새로 추가
+        self.length_penalty_weight = length_penalty_weight
         self.target_spike_rate = target_spike_rate
-        
-        # === v2.0 추가: 시간적 가중치 설정 ===
         self.use_temporal_weighting = use_temporal_weighting
-        self.initial_temporal_weight = initial_temporal_weight
-        self.final_temporal_weight = final_temporal_weight
         
         self.base_loss = nn.CrossEntropyLoss(ignore_index=pad_token_id, reduction='none')
+        
+        # 미리 계산된 temporal weights (CPU에 저장)
+        if use_temporal_weighting:
+            self.temporal_weights = self._precompute_temporal_weights(
+                initial_temporal_weight, final_temporal_weight
+            )
+    
+    def _precompute_temporal_weights(self, initial_weight: float, final_weight: float) -> torch.Tensor:
+        """절대적 위치 기반 temporal weights 미리 계산"""
+        if self.max_clk <= 1:
+            return torch.full((self.max_clk,), initial_weight)
+        
+        positions = torch.arange(self.max_clk, dtype=torch.float)
+        decay_rate = -torch.log(torch.tensor(final_weight / initial_weight)) / (self.max_clk - 1)
+        weights = initial_weight * torch.exp(-decay_rate * positions)
+        
+        return weights
+    
+    def _get_normalized_temporal_weights(self, length: int, device: torch.device) -> torch.Tensor:
+        """길이에 맞는 정규화된 temporal weights 반환"""
+        weights = self.temporal_weights[:length].to(device)
+        # 합으로 정규화: 총 가중치 = 길이
+        normalized_weights = weights * length / weights.sum()
+        return normalized_weights
     
     def forward(
         self, 
@@ -41,168 +63,136 @@ class SCSLoss(nn.Module):
         batch_size, output_seq_len, vocab_size = outputs.shape
         batch_size_t, target_seq_len = targets.shape
         
-        # 배치 크기 일치 확인
         assert batch_size == batch_size_t, f"Batch size mismatch: {batch_size} vs {batch_size_t}"
         
         # 길이 정보 저장 (패널티 계산용)
         original_output_len = output_seq_len
         original_target_len = target_seq_len
         
-        # 길이 불일치 처리 (손실 계산용)
-        if output_seq_len != target_seq_len:
-            max_len = max(output_seq_len, target_seq_len)
-            
-            # outputs 패딩 (부족한 경우)
-            if output_seq_len < max_len:
-                pad_length = max_len - output_seq_len
-                # 0으로 채워진 로짓 (uniform 분포 효과)
-                pad_logits = torch.zeros(
-                    batch_size, pad_length, vocab_size, 
-                    device=outputs.device, dtype=outputs.dtype
-                )
-                outputs = torch.cat([outputs, pad_logits], dim=1)
-            
-            # targets 패딩 (부족한 경우) - ignore_index로 손실 계산에서 제외
-            if target_seq_len < max_len:
-                pad_length = max_len - target_seq_len
-                pad_targets = torch.full(
-                    (batch_size, pad_length), 
-                    self.base_loss.ignore_index,
-                    dtype=targets.dtype, 
-                    device=targets.device
-                )
-                targets = torch.cat([targets, pad_targets], dim=1)
+        # 길이 불일치 처리
+        outputs, targets = self._handle_length_mismatch(outputs, targets, vocab_size)
         
-        # 1. 기본 분류 손실
-        if self.use_temporal_weighting and 'generation_clks' in processing_info:
-            # 시간적 가중치 적용된 손실 계산
-            generation_clks = processing_info['generation_clks']
-            actual_output_len = len(generation_clks)  # 실제 생성된 길이
-            
-            # 실제 생성된 길이만큼만 손실 계산
-            if actual_output_len > 0:
-                # outputs와 targets를 실제 생성 길이에 맞춤
-                trimmed_outputs = outputs[:, :actual_output_len, :]  # [B, actual_len, vocab]
-                trimmed_targets = targets[:, :actual_output_len]     # [B, actual_len]
-                
-                base_loss_unweighted = self.base_loss(trimmed_outputs.reshape(-1, vocab_size), trimmed_targets.reshape(-1))
-                base_loss_unweighted = base_loss_unweighted.view(batch_size, actual_output_len)
-                
-                # 패딩 마스크 생성 (실제 생성 길이 기준)
-                mask = (trimmed_targets != self.base_loss.ignore_index).float()
-                
-                # 시간적 가중치 계산 및 적용
-                temporal_weights = self._compute_temporal_weights(generation_clks, outputs.device)
-                
-                # 가중치를 브로드캐스팅하여 적용 [actual_len] -> [batch_size, actual_len]
-                weights = temporal_weights.unsqueeze(0).expand_as(base_loss_unweighted)
-                
-                # 가중치와 마스크를 모두 적용하여 최종 손실 계산
-                weighted_loss = base_loss_unweighted * weights
-                base_loss = (weighted_loss * mask).sum() / mask.sum().clamp(min=1.0)
-            else:
-                # 생성된 토큰이 없으면 0 손실
-                base_loss = torch.tensor(0.0, device=outputs.device)
-        else:
-            # 기존 방식: 평균 손실 (reduction='none' 호환성 유지)
-            base_loss_unweighted = self.base_loss(outputs.reshape(-1, vocab_size), targets.reshape(-1))
-            base_loss_unweighted = base_loss_unweighted.view(batch_size, -1)
-            
-            # 패딩 마스크 적용
-            mask = (targets != self.base_loss.ignore_index).float()
-            base_loss = (base_loss_unweighted * mask).sum() / mask.sum().clamp(min=1.0)
+        # 기본 분류 손실 계산
+        total_loss = self._compute_base_loss(outputs, targets, processing_info, vocab_size)
         
-        # 2. 스파이크 정규화
-        spike_reg = self._spike_regularization(processing_info, outputs.device)
+        # 추가 손실들 (weight가 0이 아닌 경우만 계산)
+        if self.spike_reg_weight != 0.0:
+            spike_reg = self._spike_regularization(processing_info, outputs.device)
+            total_loss += self.spike_reg_weight * spike_reg
         
-        # 3. 길이 패널티 (새로 추가)
-        length_penalty = self._length_penalty(
-            original_output_len, original_target_len, outputs.device
-        )
-        
-        total_loss = (
-            base_loss + 
-            self.spike_reg_weight * spike_reg + 
-            self.length_penalty_weight * length_penalty
-        )
+        if self.length_penalty_weight != 0.0:
+            length_penalty = self._length_penalty(original_output_len, original_target_len, outputs.device)
+            total_loss += self.length_penalty_weight * length_penalty
         
         return total_loss
     
-    def _compute_temporal_weights(self, generation_clks: torch.Tensor, device: torch.device) -> torch.Tensor:
-        """
-        지수 감쇠(Exponential Decay) 방식의 시간 가중치를 계산합니다.
-        초기 CLK에는 높은 가중치를, 나중 CLK에는 낮은 가중치를 적용합니다.
+    def _handle_length_mismatch(self, outputs: torch.Tensor, targets: torch.Tensor, vocab_size: int):
+        """길이 불일치 처리"""
+        batch_size, output_seq_len = outputs.shape[0], outputs.shape[1]
+        target_seq_len = targets.shape[1]
         
-        Args:
-            generation_clks: 생성 과정에서의 CLK 정보
-            device: 텐서 장치
+        if output_seq_len == target_seq_len:
+            return outputs, targets
             
-        Returns:
-            각 토큰별 시간적 가중치 텐서
-        """
-        num_clks = generation_clks.numel()
-        if num_clks <= 1:
-            return torch.full_like(generation_clks, self.initial_temporal_weight, dtype=torch.float, device=device)
+        max_len = max(output_seq_len, target_seq_len)
         
-        # 지수 감쇠를 위한 감쇠 상수 계산
-        # final_weight = initial_weight * exp(-decay_rate * (num_clks - 1))
-        # 따라서 decay_rate = -ln(final_weight / initial_weight) / (num_clks - 1)
-        decay_rate = -torch.log(torch.tensor(self.final_temporal_weight / self.initial_temporal_weight)) / (num_clks - 1)
+        # outputs 패딩
+        if output_seq_len < max_len:
+            pad_length = max_len - output_seq_len
+            pad_logits = torch.zeros(
+                batch_size, pad_length, vocab_size, 
+                device=outputs.device, dtype=outputs.dtype
+            )
+            outputs = torch.cat([outputs, pad_logits], dim=1)
         
-        # 시간 단계 생성 (0부터 num_clks-1까지)
-        time_steps = torch.arange(num_clks, device=device, dtype=torch.float)
+        # targets 패딩
+        if target_seq_len < max_len:
+            pad_length = max_len - target_seq_len
+            pad_targets = torch.full(
+                (batch_size, pad_length), 
+                self.base_loss.ignore_index,
+                dtype=targets.dtype, 
+                device=targets.device
+            )
+            targets = torch.cat([targets, pad_targets], dim=1)
         
-        # 지수 감쇠: initial_weight * exp(-decay_rate * t)
-        weights = self.initial_temporal_weight * torch.exp(-decay_rate * time_steps)
+        return outputs, targets
+    
+    def _compute_base_loss(self, outputs: torch.Tensor, targets: torch.Tensor, 
+                          processing_info: Dict[str, Any], vocab_size: int) -> torch.Tensor:
+        """기본 분류 손실 계산 (temporal weighting 적용)"""
+        batch_size = outputs.shape[0]
         
-        return weights
-
-    def _length_penalty(
-        self, 
-        output_len: int, 
-        target_len: int, 
-        device: torch.device
-    ) -> torch.Tensor:
+        if self.use_temporal_weighting and 'generation_clks' in processing_info:
+            generation_clks = processing_info['generation_clks']
+            actual_length = len(generation_clks)
+            
+            if actual_length == 0:
+                return torch.tensor(0.0, device=outputs.device)
+            
+            # 실제 길이만큼 자르기
+            trimmed_outputs = outputs[:, :actual_length, :]
+            trimmed_targets = targets[:, :actual_length]
+            
+            # 손실 계산 (reduction='none')
+            base_loss_unweighted = self.base_loss(
+                trimmed_outputs.reshape(-1, vocab_size), 
+                trimmed_targets.reshape(-1)
+            ).view(batch_size, actual_length)
+            
+            # 마스크 생성
+            mask = (trimmed_targets != self.base_loss.ignore_index).float()
+            
+            # 정규화된 temporal weights 적용
+            temporal_weights = self._get_normalized_temporal_weights(actual_length, outputs.device)
+            weights = temporal_weights.unsqueeze(0).expand_as(base_loss_unweighted)
+            
+            # 가중치 적용된 손실
+            weighted_loss = base_loss_unweighted * weights
+            return (weighted_loss * mask).sum() / mask.sum().clamp(min=1.0)
+        
+        else:
+            # 기존 방식
+            base_loss_unweighted = self.base_loss(
+                outputs.reshape(-1, vocab_size), 
+                targets.reshape(-1)
+            ).view(batch_size, -1)
+            
+            mask = (targets != self.base_loss.ignore_index).float()
+            return (base_loss_unweighted * mask).sum() / mask.sum().clamp(min=1.0)
+    
+    def _length_penalty(self, output_len: int, target_len: int, device: torch.device) -> torch.Tensor:
         """길이 패널티 계산"""
         if target_len == 0:
             return torch.tensor(0.0, device=device)
         
-        # 길이 비율 계산
         length_ratio = output_len / target_len
         
-        # 너무 짧은 출력에 대한 강한 패널티
-        if length_ratio < 0.3:  # 30% 미만
+        if length_ratio < 0.3:
             penalty = (0.3 - length_ratio) * 3.0
-        elif length_ratio < 0.7:  # 30-70%
+        elif length_ratio < 0.7:
             penalty = (0.7 - length_ratio) * 1.0
-        elif length_ratio > 1.5:  # 150% 초과
+        elif length_ratio > 1.5:
             penalty = (length_ratio - 1.5) * 0.5
         else:
-            penalty = 0.0  # 적절한 길이
+            penalty = 0.0
         
         return torch.tensor(penalty, dtype=torch.float32, device=device)
     
     def _spike_regularization(self, processing_info: Dict[str, Any], device: torch.device) -> torch.Tensor:
-        """개별 노드별 스파이크 레이트 정규화 (CLK별 편차 기반)"""
-        if 'node_spike_rates' in processing_info:
-            node_spike_deviations = processing_info['node_spike_rates']  # 실제로는 편차값들
-            
-            if not node_spike_deviations:  # 빈 딕셔너리인 경우
-                return torch.tensor(0.0, dtype=torch.float32, device=device)
-            
-            # 각 노드의 평균 편차를 단순 평균
-            total_deviation = sum(node_spike_deviations.values())
-            avg_deviation = total_deviation / len(node_spike_deviations)
-            
-            return torch.tensor(avg_deviation, dtype=torch.float32, device=device)
-        else:
-            # 노드별 스파이크율 정보가 없으면 0으로 설정
+        """개별 노드별 스파이크 레이트 정규화"""
+        if 'node_spike_rates' not in processing_info or not processing_info['node_spike_rates']:
             return torch.tensor(0.0, dtype=torch.float32, device=device)
+        
+        node_spike_deviations = processing_info['node_spike_rates']
+        total_deviation = sum(node_spike_deviations.values())
+        avg_deviation = total_deviation / len(node_spike_deviations)
+        
+        return torch.tensor(avg_deviation, dtype=torch.float32, device=device)
+
 
 class TimingLoss(SCSLoss):
-    """
-    TimingManager의 동기화 지표를 직접 학습하는 손실 함수.
-    """
+    """TimingManager의 동기화 지표를 직접 학습하는 손실 함수"""
     def __init__(
         self, 
         pad_token_id: int, 
@@ -211,71 +201,65 @@ class TimingLoss(SCSLoss):
         sync_target_end: float = 0.0,
         **kwargs
     ):
-        super().__init__(pad_token_id, **kwargs)  # 모든 SCSLoss 파라미터를 부모에게 전달
+        super().__init__(pad_token_id, **kwargs)
         self.timing_weight = timing_weight
         self.sync_target_start = sync_target_start
         self.sync_target_end = sync_target_end
         self.mse_loss = nn.MSELoss()
 
-    def forward(
-        self, 
-        outputs: torch.Tensor, 
-        targets: torch.Tensor, 
-        processing_info: Dict[str, Any]
-    ) -> torch.Tensor:
-        # 기본 손실 계산 (부모 클래스 재사용)
-        base_total_loss = super().forward(outputs, targets, processing_info)
+    def forward(self, outputs: torch.Tensor, targets: torch.Tensor, 
+               processing_info: Dict[str, Any]) -> torch.Tensor:
+        total_loss = super().forward(outputs, targets, processing_info)
         
-        # 타이밍 손실 계산
-        timing_loss = self._calculate_timing_loss(processing_info, outputs.device)
-        
-        return base_total_loss + self.timing_weight * timing_loss
+        if self.timing_weight != 0.0:
+            timing_loss = self._calculate_timing_loss(processing_info, outputs.device)
+            total_loss += self.timing_weight * timing_loss
+            
+        return total_loss
     
     def _calculate_timing_loss(self, processing_info: Dict[str, Any], device: torch.device) -> torch.Tensor:
         if 'timing_info' not in processing_info:
             return torch.tensor(0.0, device=device)
             
         timing_info = processing_info['timing_info']
-        start_loss = torch.tensor(0.0, device=device)
-        end_loss = torch.tensor(0.0, device=device)
+        total_loss = torch.tensor(0.0, device=device)
         
-        # 시작 손실 계산
+        # 시작 조건 손실
         if timing_info.get('start_conditions'):
             start_info = timing_info['start_conditions']
             sync_at_start = start_info['stable_sync_index'].to(device)
             target = torch.full_like(sync_at_start, self.sync_target_start)
-            start_loss = self.mse_loss(sync_at_start, target)
+            total_loss += self.mse_loss(sync_at_start, target)
 
-        # 종료 손실 계산
+        # 종료 조건 손실
         if timing_info.get('end_conditions'):
             end_info = timing_info['end_conditions']
             sync_at_end = end_info['stable_sync_index'].to(device)
             target = torch.full_like(sync_at_end, self.sync_target_end)
-            end_loss = self.mse_loss(sync_at_end, target)
+            total_loss += self.mse_loss(sync_at_end, target)
             
-        return start_loss + end_loss
+        return total_loss
+
 
 class SpikingLoss(SCSLoss):
     """스파이킹 뉴럴 네트워크 특화 손실"""
-    
     def __init__(self, pad_token_id: int, **kwargs):
         super().__init__(pad_token_id, spike_reg_weight=0.01, **kwargs)
 
 
 class NeuromodulationLoss(SCSLoss):
     """신경 조절 메커니즘 손실"""
-    
     def __init__(self, pad_token_id: int, **kwargs):
-        super().__init__(pad_token_id, temporal_weight=0.05, **kwargs)
+        super().__init__(pad_token_id, use_temporal_weighting=True, **kwargs)
 
 
 class MultiObjectiveLoss(SCSLoss):
     """다목적 최적화 손실"""
-    
     def __init__(self, pad_token_id: int, **kwargs):
         super().__init__(
             pad_token_id, 
             spike_reg_weight=0.01, 
-            temporal_weight=0.05, 
+            use_temporal_weighting=True,
+            length_penalty_weight=0.02,
             **kwargs
         )

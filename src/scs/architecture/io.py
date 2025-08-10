@@ -225,7 +225,7 @@ class InputInterface(nn.Module):
         # 2차원 격자로 reshape
         membrane_potential = membrane_logits.view(batch_size, self.grid_height, self.grid_width)  # [B, H, W]
 
-        membrane_potential = torch.sigmoid(membrane_potential) * 4.0
+        membrane_potential = torch.sigmoid(membrane_potential) * 6.0
         
         return membrane_potential
 

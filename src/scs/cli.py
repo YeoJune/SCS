@@ -14,6 +14,7 @@ from typing import Dict, Any, List, Tuple
 import torch
 
 import matplotlib.pyplot as plt
+import matplotlib.animation as animation
 import numpy as np
 
 # --- 프로젝트 모듈 Import ---
@@ -310,7 +311,6 @@ def extract_and_normalize_training_config(config: Dict[str, Any]) -> Tuple[Dict[
     
     return filtered_config, raw_config, unfreezing_config
 
-
 # 새로 추가할 함수 (train_mode 함수 뒤에 추가)
 def _save_spike_visualizations(model, experiment_dir, test_loader, logger):
     """임시: 스파이크 패턴과 가중치 히트맵 시각화"""
@@ -386,7 +386,47 @@ def _save_spike_visualizations(model, experiment_dir, test_loader, logger):
         
         logger.info(f"✅ 스파이크 패턴 이미지 {len(all_spike_patterns)}개 저장: {spike_dir}")
         
-        # 2. Influence 가중치 히트맵 생성
+        # 2. 스파이크 패턴 GIF 애니메이션 생성
+        try:
+            fig, axes = plt.subplots(1, num_nodes, figsize=(4*num_nodes, 4))
+            if num_nodes == 1:
+                axes = [axes]
+            
+            # 초기 플롯 설정
+            ims = []
+            for i, node_name in enumerate(node_names):
+                im = axes[i].imshow(all_spike_patterns[0][node_name], 
+                                   cmap='hot', vmin=0, vmax=1)
+                axes[i].set_title(f'{node_name}\nCLK 0')
+                axes[i].set_xlabel('Width')
+                axes[i].set_ylabel('Height')
+                plt.colorbar(im, ax=axes[i])
+                ims.append(im)
+            
+            def animate(frame):
+                spike_pattern = all_spike_patterns[frame]
+                for i, (node_name, im) in enumerate(zip(node_names, ims)):
+                    im.set_array(spike_pattern[node_name])
+                    axes[i].set_title(f'{node_name}\nCLK {frame}')
+                return ims
+            
+            # 애니메이션 생성
+            anim = animation.FuncAnimation(
+                fig, animate, frames=len(all_spike_patterns),
+                interval=200, blit=True, repeat=True
+            )
+            
+            # GIF 저장
+            gif_path = vis_dir / "spike_animation.gif"
+            anim.save(gif_path, writer='pillow', fps=5)
+            plt.close()
+            
+            logger.info(f"🎬 스파이크 패턴 GIF 생성: {gif_path}")
+            
+        except Exception as gif_error:
+            logger.warning(f"⚠️ GIF 생성 중 오류 (개별 이미지는 정상 저장됨): {gif_error}")
+        
+        # 3. Influence 가중치 히트맵 생성
         weight_dir = vis_dir / "weight_heatmaps"
         weight_dir.mkdir(exist_ok=True)
         
@@ -454,8 +494,6 @@ def _save_spike_visualizations(model, experiment_dir, test_loader, logger):
         
     except Exception as e:
         logger.warning(f"⚠️ 시각화 생성 중 오류 (무시하고 계속): {e}")
-        import traceback
-        logger.debug(traceback.format_exc())
 
 # --- 모드별 실행 함수 ---
 def train_mode(args: argparse.Namespace, config: Dict[str, Any]):

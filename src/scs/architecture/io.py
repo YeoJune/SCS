@@ -219,8 +219,8 @@ class OutputInterface(nn.Module):
         grid_width: int,
         pad_token_id: int,
         embedding_dim: int = 256,
+        window_size: int = 31,
         summary_vectors: int = 16,
-        decoder_window_size: int = 31,
         decoder_layers: int = 2,
         decoder_heads: int = 4,
         dim_feedforward: int = 1024,
@@ -239,7 +239,7 @@ class OutputInterface(nn.Module):
         self.pad_token_id = pad_token_id
         self.embedding_dim = embedding_dim
         self.summary_vectors = summary_vectors
-        self.decoder_window_size = decoder_window_size
+        self.window_size = window_size
         self.spike_gain = spike_gain
         self.use_positional_encoding = use_positional_encoding
         self.use_summary_position_encoding = use_summary_position_encoding
@@ -278,7 +278,7 @@ class OutputInterface(nn.Module):
         # 디코더 토큰들의 위치 임베딩 (선택적)
         if self.use_positional_encoding:
             # 윈도우 크기에 맞춘 위치 임베딩
-            self.position_embedding = nn.Embedding(decoder_window_size, self.embedding_dim)
+            self.position_embedding = nn.Embedding(window_size, self.embedding_dim)
         
         # [Which] Transformer Decoder
         decoder_layer = TransformerDecoderLayer(
@@ -368,8 +368,8 @@ class OutputInterface(nn.Module):
         batch_size = decoder_input_ids.shape[0]
         
         # 윈도우 크기로 제한 (최근 토큰들만 사용)
-        if decoder_input_ids.shape[1] > self.decoder_window_size:
-            decoder_window = decoder_input_ids[:, -self.decoder_window_size:]
+        if decoder_input_ids.shape[1] > self.window_size:
+            decoder_window = decoder_input_ids[:, -self.window_size:]
         else:
             decoder_window = decoder_input_ids
         

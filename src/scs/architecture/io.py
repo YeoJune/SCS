@@ -41,7 +41,7 @@ class InputInterface(nn.Module):
         grid_height: int,
         grid_width: int,
         embedding_dim: int = 512,
-        window_size: int = 32,
+        window_size: int = 31,
         encoder_layers: int = 2,
         encoder_heads: int = 8,
         encoder_dropout: float = 0.1,
@@ -220,6 +220,7 @@ class OutputInterface(nn.Module):
         pad_token_id: int,
         embedding_dim: int = 256,
         summary_vectors: int = 16,
+        decoder_window_size: int = 31,
         decoder_layers: int = 2,
         decoder_heads: int = 4,
         dim_feedforward: int = 1024,
@@ -238,6 +239,7 @@ class OutputInterface(nn.Module):
         self.pad_token_id = pad_token_id
         self.embedding_dim = embedding_dim
         self.summary_vectors = summary_vectors
+        self.decoder_window_size = decoder_window_size
         self.spike_gain = spike_gain
         self.use_positional_encoding = use_positional_encoding
         self.use_summary_position_encoding = use_summary_position_encoding
@@ -275,8 +277,8 @@ class OutputInterface(nn.Module):
         
         # 디코더 토큰들의 위치 임베딩 (선택적)
         if self.use_positional_encoding:
-            max_position = 1024
-            self.position_embedding = nn.Embedding(max_position, self.embedding_dim)
+            # 윈도우 크기에 맞춘 위치 임베딩
+            self.position_embedding = nn.Embedding(decoder_window_size, self.embedding_dim)
         
         # [Which] Transformer Decoder
         decoder_layer = TransformerDecoderLayer(
@@ -348,14 +350,14 @@ class OutputInterface(nn.Module):
         decoder_input_ids: torch.Tensor
     ) -> torch.Tensor:
         """
-        스파이크 격자와 디코더 입력으로부터 로짓 생성
+        스파이크 격자와 디코더 입력으로부터 로짓 생성 (윈도우 기반)
         
         Args:
             grid_spikes: [B, H, W] 스파이크 그리드
             decoder_input_ids: [B, seq_len] 디코더 입력 토큰들
             
         Returns:
-            output_logits: [B, seq_len, vocab_size] 출력 로짓
+            output_logits: [B, window_len, vocab_size] 출력 로짓 (윈도우 크기만큼)
         """
         if grid_spikes.dim() == 2:
             grid_spikes = grid_spikes.unsqueeze(0)
@@ -363,18 +365,26 @@ class OutputInterface(nn.Module):
         if decoder_input_ids.dim() == 1:
             decoder_input_ids = decoder_input_ids.unsqueeze(0)
         
-        batch_size, seq_len = decoder_input_ids.shape
+        batch_size = decoder_input_ids.shape[0]
+        
+        # 윈도우 크기로 제한 (최근 토큰들만 사용)
+        if decoder_input_ids.shape[1] > self.decoder_window_size:
+            decoder_window = decoder_input_ids[:, -self.decoder_window_size:]
+        else:
+            decoder_window = decoder_input_ids
+        
+        window_len = decoder_window.shape[1]
         
         # [What] CNN으로 공간 압축
         memory = self._create_memory_sequence(grid_spikes)
         
-        # [Which] 디코더 입력 임베딩
-        target_embeds = self._prepare_target_embeddings(decoder_input_ids)
+        # [Which] 디코더 입력 임베딩 (윈도우만)
+        target_embeds = self._prepare_target_embeddings(decoder_window)
         
-        # Causal mask 생성
-        tgt_mask = self._generate_causal_mask(seq_len)
+        # Causal mask 생성 (윈도우 크기)
+        tgt_mask = self._generate_causal_mask(window_len)
         
-        # Transformer 디코더 실행
+        # Transformer 디코더 실행 (윈도우만 처리)
         decoder_output = self.transformer_decoder(
             tgt=target_embeds,
             memory=memory,
@@ -415,16 +425,16 @@ class OutputInterface(nn.Module):
         
         return memory_sequence
     
-    def _prepare_target_embeddings(self, decoder_input_ids: torch.Tensor) -> torch.Tensor:
-        """디코더 입력 토큰들을 임베딩으로 변환"""
-        batch_size, seq_len = decoder_input_ids.shape
+    def _prepare_target_embeddings(self, decoder_window: torch.Tensor) -> torch.Tensor:
+        """디코더 윈도우 토큰들을 임베딩으로 변환"""
+        batch_size, window_len = decoder_window.shape
         
         # 토큰 임베딩
-        token_embeds = self.token_embedding(decoder_input_ids)
+        token_embeds = self.token_embedding(decoder_window)
         
-        # 위치 임베딩 추가 (선택적)
+        # 위치 임베딩 추가 (선택적) - 윈도우 내 상대적 위치
         if self.use_positional_encoding:
-            positions = torch.arange(seq_len, device=self.device).unsqueeze(0).expand(batch_size, -1)
+            positions = torch.arange(window_len, device=self.device).unsqueeze(0).expand(batch_size, -1)
             position_embeds = self.position_embedding(positions)
             combined_embeds = token_embeds + position_embeds
         else:

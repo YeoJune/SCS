@@ -120,6 +120,7 @@ class ModelBuilder:
                 grid_width=output_w,
                 pad_token_id=pad_token_id,
                 embedding_dim=io_config["output_interface"].get("embedding_dim", 256),
+                window_size=io_config["output_interface"].get("window_size", 31),
                 summary_vectors=io_config["output_interface"].get("summary_vectors", 16),
                 decoder_layers=io_config["output_interface"].get("decoder_layers", 2),
                 decoder_heads=io_config["output_interface"].get("decoder_heads", 4),
@@ -300,7 +301,7 @@ class ModelBuilder:
                 
                 # v2.0 새로운 필드들 검증 (권장사항)
                 recommended_output_fields = [
-                    "summary_vectors", "decoder_layers", "decoder_heads", 
+                    "window_size", "summary_vectors", "decoder_layers", "decoder_heads", 
                     "dim_feedforward", "spike_gain"
                 ]
                 missing_recommended = []

@@ -14,17 +14,14 @@ class SCSLoss(nn.Module):
         self, 
         pad_token_id: int,
         spike_reg_weight: float = 0.0,
-        temporal_weight: float = 0.0,
         length_penalty_weight: float = 0.0,  # 새로 추가
         target_spike_rate: float = 0.1,
-        # === v2.0 추가: 시간적 가중치 파라미터 ===
         use_temporal_weighting: bool = False,
         initial_temporal_weight: float = 2.0,
         final_temporal_weight: float = 1.0
     ):
         super().__init__()
         self.spike_reg_weight = spike_reg_weight
-        self.temporal_weight = temporal_weight
         self.length_penalty_weight = length_penalty_weight  # 새로 추가
         self.target_spike_rate = target_spike_rate
         
@@ -107,10 +104,7 @@ class SCSLoss(nn.Module):
         # 2. 스파이크 정규화
         spike_reg = self._spike_regularization(processing_info, outputs.device)
         
-        # 3. 시간적 일관성
-        temporal_loss = self._temporal_consistency(processing_info, outputs.device)
-        
-        # 4. 길이 패널티 (새로 추가)
+        # 3. 길이 패널티 (새로 추가)
         length_penalty = self._length_penalty(
             original_output_len, original_target_len, outputs.device
         )
@@ -118,7 +112,6 @@ class SCSLoss(nn.Module):
         total_loss = (
             base_loss + 
             self.spike_reg_weight * spike_reg + 
-            self.temporal_weight * temporal_loss +
             self.length_penalty_weight * length_penalty
         )
         
@@ -186,23 +179,6 @@ class SCSLoss(nn.Module):
             return torch.tensor(deviation, dtype=torch.float32, device=device)
         else:
             # 배치 평균 스파이크율이 없으면 0으로 설정
-            return torch.tensor(0.0, dtype=torch.float32, device=device)
-    
-    def _temporal_consistency(self, processing_info: Dict[str, Any], device: torch.device) -> torch.Tensor:
-        """배치 처리 시간 일관성"""
-        if 'batch_avg_processing_clk' in processing_info:
-            processing_clk = processing_info['batch_avg_processing_clk']
-            
-            # 너무 빠르거나 느리면 페널티
-            if processing_clk < 50:
-                penalty = (50 - processing_clk) / 50
-            elif processing_clk > 500:
-                penalty = (processing_clk - 500) / 500
-            else:
-                penalty = 0.0
-                
-            return torch.tensor(penalty, dtype=torch.float32, device=device)
-        else:
             return torch.tensor(0.0, dtype=torch.float32, device=device)
 
 class TimingLoss(SCSLoss):

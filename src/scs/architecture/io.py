@@ -225,9 +225,6 @@ class InputInterface(nn.Module):
         # 2차원 격자로 reshape
         membrane_potential = membrane_logits.view(batch_size, self.grid_height, self.grid_width)  # [B, H, W]
         
-        # 막전위 정규화
-        membrane_potential = torch.tanh(membrane_potential)  # [-1, 1] 범위로 정규화
-        
         return membrane_potential
 
 

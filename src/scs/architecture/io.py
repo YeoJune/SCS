@@ -197,7 +197,7 @@ class InputInterface(nn.Module):
         
         # [Where/How] Transposed CNN: 공간 매핑
         membrane_pattern = self.transposed_cnn(context_vector)
-        membrane_pattern = membrane_pattern.squeeze(1)  # [B, H, W]
+        membrane_pattern = membrane_pattern.squeeze(1) * 5  # [B, H, W]
         
         # 막전위 범위 제한 (Sigmoid 대신 Clamp 사용)
         membrane_pattern = torch.clamp(membrane_pattern, -self.membrane_clamp_value, self.membrane_clamp_value)

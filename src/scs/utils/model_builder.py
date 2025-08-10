@@ -14,20 +14,7 @@ class ModelBuilder:
     @staticmethod
     def build_scs_from_config(config: Dict[str, Any], device: str = "cpu"):
         """
-        설정 파일로부터 SCS 시스템을 동적으로 생성합니다
-        
-        새로운 선언적 조립 방식:
-        1. system_roles에서 입출력 노드 역할 정의
-        2. brain_regions에서 각 노드의 사양 정의 (grid_size 배열 사용)
-        3. axonal_connections에서 Conv2d 기반 연결 정의
-        4. ModelBuilder가 이 정보를 해석하여 전체 시스템 조립
-        
-        Args:
-            config: 설정 딕셔너리
-            device: 연산 장치
-            
-        Returns:
-            조립된 SCSSystem 인스턴스
+        v2.0: 새로운 I/O 인터페이스 파라미터 지원
         """
         try:
             # 필요한 모듈들을 동적으로 import
@@ -38,10 +25,10 @@ class ModelBuilder:
             from ..architecture.timing import TimingManager
             import torch.nn as nn
             
-            # --- 단계 1: 뇌 영역(노드) 객체 생성 ---
+            # --- 기존 노드 생성 로직 (변경 없음) ---
             nodes = {}
             local_connections = {}
-            node_grid_sizes = {}  # 노드별 그리드 크기 저장을 위한 헬퍼 딕셔너리
+            node_grid_sizes = {}
             
             if "brain_regions" not in config:
                 raise ValueError("Config 파일에 'brain_regions' 섹션이 필요합니다.")
@@ -53,7 +40,6 @@ class ModelBuilder:
                 grid_height, grid_width = region_config["grid_size"]
                 node_grid_sizes[region_name] = (grid_height, grid_width)
                 
-                # SpikeNode 생성
                 nodes[region_name] = SpikeNode(
                     grid_height=grid_height,
                     grid_width=grid_width,
@@ -66,7 +52,6 @@ class ModelBuilder:
                     device=device
                 )
                 
-                # LocalConnectivity 생성
                 local_connections[region_name] = LocalConnectivity(
                     grid_height=grid_height,
                     grid_width=grid_width,
@@ -75,18 +60,18 @@ class ModelBuilder:
                     device=device
                 )
             
-            # --- 단계 2: 축삭 연결 객체 생성 ---
+            # --- 기존 축삭 연결 로직 (변경 없음) ---
             if "axonal_connections" not in config:
                 raise ValueError("Config 파일에 'axonal_connections' 섹션이 필요합니다.")
 
             axonal_config = config["axonal_connections"]
             axonal_connections = AxonalConnections(
-                connections=axonal_config.get("connections", []),  # 연결이 없는 경우도 처리
-                node_grid_sizes=node_grid_sizes,  # 🔧 추가: 그리드 크기 정보 전달
+                connections=axonal_config.get("connections", []),
+                node_grid_sizes=node_grid_sizes,
                 device=device
             )
             
-            # --- 단계 3: 입출력 인터페이스 객체 생성 ---
+            # --- v2.0: 새로운 I/O 인터페이스 생성 ---
             if "system_roles" not in config:
                 raise ValueError("Config 파일에 'system_roles' 섹션(input_node, output_node)이 필요합니다.")
             
@@ -107,13 +92,19 @@ class ModelBuilder:
             eos_token_id = tokenizer_config.get("eos_token_id", 1)
             
             io_config = config["io_system"]
+            
+            # v2.0: InputInterface 새로운 파라미터들
             input_interface = InputInterface(
                 vocab_size=io_config["input_interface"]["vocab_size"],
                 grid_height=input_h,
                 grid_width=input_w,
                 embedding_dim=io_config["input_interface"].get("embedding_dim", 512),
-                window_size=io_config["input_interface"].get("window_size", 64),
-                num_heads=io_config["input_interface"].get("num_heads", 8),
+                window_size=io_config["input_interface"].get("window_size", 32),
+                encoder_layers=io_config["input_interface"].get("encoder_layers", 2),
+                encoder_heads=io_config["input_interface"].get("encoder_heads", 8),
+                encoder_dropout=io_config["input_interface"].get("encoder_dropout", 0.1),
+                dim_feedforward=io_config["input_interface"].get("dim_feedforward", 2048),
+                membrane_clamp_value=io_config["input_interface"].get("membrane_clamp_value", 6.0),
                 use_positional_encoding=io_config["input_interface"].get(
                     "use_positional_encoding", 
                     io_config["input_interface"].get("positional_encoding", True)
@@ -122,27 +113,29 @@ class ModelBuilder:
                 device=device
             )
 
+            # v2.0: OutputInterface 새로운 파라미터들
             output_interface = OutputInterface(
                 vocab_size=io_config["output_interface"]["vocab_size"],
                 grid_height=output_h,
                 grid_width=output_w,
                 pad_token_id=pad_token_id,
                 embedding_dim=io_config["output_interface"].get("embedding_dim", 256),
-                window_size=io_config["output_interface"].get("window_size", 64),
-                num_heads=io_config["output_interface"].get("num_heads", 4),
-                num_decoder_layers=io_config["output_interface"].get("num_decoder_layers", 2),
+                summary_vectors=io_config["output_interface"].get("summary_vectors", 16),
+                decoder_layers=io_config["output_interface"].get("decoder_layers", 2),
+                decoder_heads=io_config["output_interface"].get("decoder_heads", 4),
                 dim_feedforward=io_config["output_interface"].get("dim_feedforward", 1024),
                 dropout=io_config["output_interface"].get("dropout", 0.1),
+                spike_gain=io_config["output_interface"].get("spike_gain", 5.0),
                 use_positional_encoding=io_config["output_interface"].get(
                     "use_positional_encoding", 
                     io_config["output_interface"].get("positional_encoding", True)
                 ),
+                use_summary_position_encoding=io_config["output_interface"].get("use_summary_position_encoding", False),
                 t5_model_name=io_config["output_interface"].get("t5_model_name", "t5-base"),
-                spike_gain=io_config["output_interface"].get("spike_gain", 5.0),
                 device=device
             )
-                        
-            # --- 단계 4: TimingManager 객체 생성 ---
+                            
+            # --- 기존 TimingManager 로직 (변경 없음) ---
             timing_config = config.get("timing_manager", config.get("adaptive_output_timing", config.get("timing", {})))
             timing_manager = TimingManager(
                 sync_ema_alpha=timing_config.get("sync_ema_alpha", 0.1),
@@ -155,12 +148,10 @@ class ModelBuilder:
                 fixed_delay=timing_config.get("fixed_delay", -1)
             )
             
-            # --- 단계 5: 노드별 target spike rate 설정 ---
-            # learning 섹션에서 노드별 target_spike_rate 추출 (설정된 노드만)
+            # --- 기존 나머지 로직 (변경 없음) ---
             learning_config = config.get("learning", config.get("training", {}))
             node_target_spike_rates = learning_config.get("node_target_spike_rates", {})
             
-            # --- 단계 6: 최종 SCS 시스템 조립 ---
             scs_system = SCSSystem(
                 nodes=nodes,
                 local_connections=local_connections,

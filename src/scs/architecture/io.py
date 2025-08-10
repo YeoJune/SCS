@@ -1,12 +1,13 @@
 # src/scs/architecture/io.py
 """
-입출력 인터페이스 구현
+입출력 인터페이스 구현 v2.0 (Phase 1 최종)
+SNN 코어를 장기 동적 메모리로, I/O를 경량 Transformer로 하는 설계 철학 구현
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn import TransformerDecoder, TransformerDecoderLayer
+from torch.nn import TransformerEncoder, TransformerEncoderLayer, TransformerDecoder, TransformerDecoderLayer
 from transformers import T5ForConditionalGeneration
 from typing import Optional, Tuple, Dict, Any, List
 import math
@@ -29,7 +30,9 @@ def load_t5_embeddings(model_name: str = "t5-base"):
 
 class InputInterface(nn.Module):
     """
-    입력 인터페이스: 상태 저장 슬라이딩 윈도우 기반 순차적 문맥화
+    입력 인터페이스 v2.0: [CLS] 토큰 Self-Attention + Transposed CNN
+    
+    [What] 의미 요약 (Self-Attention) → [Where/How] 공간 매핑 (Transposed CNN)
     """
     
     def __init__(
@@ -39,7 +42,11 @@ class InputInterface(nn.Module):
         grid_width: int,
         embedding_dim: int = 512,
         window_size: int = 32,
-        num_heads: int = 8,
+        encoder_layers: int = 2,
+        encoder_heads: int = 8,
+        encoder_dropout: float = 0.1,
+        dim_feedforward: int = 2048,
+        membrane_clamp_value: float = 6.0,
         use_positional_encoding: bool = True,
         t5_model_name: Optional[str] = None,
         device: str = "cuda"
@@ -51,188 +58,158 @@ class InputInterface(nn.Module):
         self.grid_width = grid_width
         self.embedding_dim = embedding_dim
         self.window_size = window_size
-        self.num_heads = num_heads
+        self.membrane_clamp_value = membrane_clamp_value
         self.use_positional_encoding = use_positional_encoding
         self.device = device
         
         # T5 임베딩 로드 및 초기화
         if t5_model_name is not None:
             t5_data = load_t5_embeddings(t5_model_name)
-            
-            # T5 설정으로 파라미터 업데이트
             self.vocab_size = t5_data['vocab_size']
             self.embedding_dim = t5_data['d_model']
             
-            # T5 토큰 임베딩 사용
             self.token_embedding = nn.Embedding.from_pretrained(
                 t5_data['token_embedding_weights'], 
                 freeze=False
             )
             print(f"Loaded T5 token embedding: {self.token_embedding.weight.shape}")
         else:
-            # 기본 토큰 임베딩
             self.token_embedding = nn.Embedding(vocab_size, embedding_dim)
+        
+        # [CLS] 토큰 (학습 가능한 파라미터)
+        self.cls_token = nn.Parameter(torch.randn(1, 1, self.embedding_dim) * 0.02)
         
         # 위치 임베딩 (선택적)
         if self.use_positional_encoding:
-            self.position_embedding = nn.Embedding(window_size, self.embedding_dim)
-        else:
-            self.position_embedding = None
+            self.position_embedding = nn.Embedding(window_size + 1, self.embedding_dim)  # +1 for [CLS]
         
-        # 격자 위치 임베딩
-        self.register_parameter(
-            'grid_position_embedding',
-            nn.Parameter(torch.randn(grid_height, grid_width, self.embedding_dim) * 0.02)
-        )
-        
-        # 시퀀스-격자 크로스 어텐션
-        self.sequence_to_grid_attention = nn.MultiheadAttention(
-            embed_dim=self.embedding_dim,
-            num_heads=num_heads,
+        # [What] Transformer Encoder (문맥 요약)
+        encoder_layer = TransformerEncoderLayer(
+            d_model=self.embedding_dim,
+            nhead=encoder_heads,
+            dim_feedforward=dim_feedforward,
+            dropout=encoder_dropout,
             batch_first=True
         )
+        self.transformer_encoder = TransformerEncoder(
+            encoder_layer,
+            num_layers=encoder_layers
+        )
         
-        # 막전위 투영 레이어
-        self.membrane_projection = nn.Linear(self.embedding_dim, 1)
+        # [Where/How] Transposed CNN (공간 매핑) - 체커보드 아티팩트 방지
+        self.init_size, self.cnn_channels = self._auto_calculate_transposed_cnn()
+        self.transposed_cnn = self._build_transposed_cnn()
         
         # 정규화
         self.layer_norm = nn.LayerNorm(self.embedding_dim)
         
-    def forward(
-        self,
-        token_ids: Optional[torch.Tensor] = None,
-        past_key_values: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
-    ) -> Tuple[Optional[torch.Tensor], Optional[Tuple[torch.Tensor, torch.Tensor]]]:
+    def _auto_calculate_transposed_cnn(self) -> Tuple[int, List[int]]:
+        """Transposed CNN 구조 자동 계산"""
+        # 시작 크기 결정
+        init_size = 4
+        init_channels = max(32, self.embedding_dim // (init_size * init_size))
+        
+        # 업샘플링 레이어 수 계산
+        target_size = max(self.grid_height, self.grid_width)
+        num_layers = math.ceil(math.log2(target_size / init_size))
+        
+        # 채널 수 점진적 감소
+        channels = []
+        current_channels = init_channels
+        for i in range(max(1, num_layers)):
+            channels.append(current_channels)
+            current_channels = max(32, current_channels // 2)
+        
+        return init_size, channels
+    
+    def _build_transposed_cnn(self) -> nn.Module:
+        """Transposed CNN 네트워크 구성 (체커보드 아티팩트 방지)"""
+        layers = []
+        
+        # Linear projection to initial 2D
+        total_init_dim = self.cnn_channels[0] * self.init_size * self.init_size
+        layers.extend([
+            nn.Linear(self.embedding_dim, total_init_dim),
+            nn.ReLU(),
+            nn.Unflatten(1, (self.cnn_channels[0], self.init_size, self.init_size))
+        ])
+        
+        # Upsample + Conv (체커보드 아티팩트 방지)
+        current_h, current_w = self.init_size, self.init_size
+        for i, out_channels in enumerate(self.cnn_channels):
+            in_channels = self.cnn_channels[i-1] if i > 0 else self.cnn_channels[0]
+            
+            if i == len(self.cnn_channels) - 1:
+                # 마지막 레이어: 정확한 크기 맞춤
+                scale_factor_h = self.grid_height / current_h
+                scale_factor_w = self.grid_width / current_w
+                
+                layers.extend([
+                    nn.Upsample(size=(self.grid_height, self.grid_width), mode='bilinear', align_corners=False),
+                    nn.Conv2d(in_channels, 1, kernel_size=3, padding=1)  # 최종 출력은 단일 채널
+                ])
+            else:
+                # 중간 레이어: 2배 업샘플링
+                layers.extend([
+                    nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+                    nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+                    nn.ReLU()
+                ])
+                current_h *= 2
+                current_w *= 2
+        
+        return nn.Sequential(*layers)
+    
+    def forward(self, token_window: torch.Tensor) -> torch.Tensor:
         """
-        상태 저장 슬라이딩 윈도우 기반 토큰 처리
+        윈도우 기반 일괄 처리
         
         Args:
-            token_ids: [B] 또는 [B, 1] 형태의 단일 토큰 또는 None
-            past_key_values: (keys, values) 튜플, 각각 [B, window_len, D]
+            token_window: [B, window_size] 토큰 윈도우
             
         Returns:
-            external_input: [B, H, W] 형태의 막전위 패턴 또는 None
-            new_past_key_values: 업데이트된 (keys, values) 튜플
+            membrane_pattern: [B, H, W] 막전위 패턴
         """
-        if token_ids is None or token_ids.numel() == 0:
-            return None, past_key_values
+        if token_window is None or token_window.numel() == 0:
+            return None
             
-        # 단일 토큰을 배치 형태로 정규화
-        if token_ids.dim() == 1:
-            token_ids = token_ids.unsqueeze(-1)  # [B, 1]
-        elif token_ids.dim() == 2 and token_ids.shape[1] != 1:
-            # 여러 토큰이 들어온 경우 마지막 토큰만 사용
-            token_ids = token_ids[:, -1:] # [B, 1]
-            
-        batch_size = token_ids.shape[0]
+        batch_size, seq_len = token_window.shape
         
-        # 새 토큰 임베딩 계산
-        new_token_embed = self._compute_new_token_embedding(token_ids)  # [B, 1, D]
-        
-        # past_key_values 업데이트
-        updated_past_key_values = self._update_past_key_values(
-            new_token_embed, past_key_values, batch_size
-        )
-        
-        # 격자 임베딩 준비
-        grid_embeds = self._prepare_grid_embeddings(batch_size)
-        
-        # 윈도우 내 토큰들과 격자 간 크로스 어텐션
-        attended_grid = self._apply_sequence_to_grid_attention(
-            updated_past_key_values, grid_embeds
-        )
-        
-        # 막전위 패턴 생성
-        external_input = self._generate_membrane_potential(attended_grid, batch_size)
-        
-        return external_input, updated_past_key_values
-        
-    def _compute_new_token_embedding(self, token_ids: torch.Tensor) -> torch.Tensor:
-        """새 토큰의 임베딩 계산"""
         # 토큰 임베딩
-        token_embeds = self.token_embedding(token_ids)  # [B, 1, D]
+        token_embeds = self.token_embedding(token_window)
         
-        # 정규화
-        return self.layer_norm(token_embeds)
-    
-    def _update_past_key_values(
-        self, 
-        new_token_embed: torch.Tensor,  # [B, 1, D]
-        past_key_values: Optional[Tuple[torch.Tensor, torch.Tensor]],
-        batch_size: int
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """슬라이딩 윈도우로 past_key_values 업데이트"""
-        if past_key_values is None:
-            # 첫 번째 토큰: 새로운 past_key_values 생성
-            keys = new_token_embed  # [B, 1, D]
-            values = new_token_embed  # [B, 1, D]
-        else:
-            keys, values = past_key_values
-            
-            # 새 토큰 추가
-            keys = torch.cat([keys, new_token_embed], dim=1)  # [B, len+1, D]
-            values = torch.cat([values, new_token_embed], dim=1)  # [B, len+1, D]
-            
-            # 윈도우 크기 제한 (슬라이딩)
-            if keys.shape[1] > self.window_size:
-                keys = keys[:, 1:]  # 가장 오래된 토큰 제거
-                values = values[:, 1:]
+        # [CLS] 토큰 추가
+        cls_tokens = self.cls_token.expand(batch_size, 1, -1)
+        windowed_input = torch.cat([cls_tokens, token_embeds], dim=1)
         
         # 위치 임베딩 추가 (선택적)
-        if self.use_positional_encoding and self.position_embedding is not None:
-            seq_len = keys.shape[1]
-            positions = torch.arange(seq_len, device=self.device).unsqueeze(0).expand(batch_size, -1)
+        if self.use_positional_encoding:
+            positions = torch.arange(seq_len + 1, device=self.device).unsqueeze(0).expand(batch_size, -1)
             position_embeds = self.position_embedding(positions)
-            keys = keys + position_embeds
-            values = values + position_embeds
+            windowed_input = windowed_input + position_embeds
         
-        return keys, values
-    
-    def _prepare_grid_embeddings(self, batch_size: int) -> torch.Tensor:
-        """격자 위치 임베딩 준비"""
-        # 2D 격자를 1D 시퀀스로 flatten
-        grid_embeds = self.grid_position_embedding.view(-1, self.embedding_dim)  # [H*W, D]
-        grid_embeds = self.layer_norm(grid_embeds)
+        # 정규화
+        windowed_input = self.layer_norm(windowed_input)
         
-        # 배치 차원으로 확장
-        grid_embeds = grid_embeds.unsqueeze(0).expand(batch_size, -1, -1)  # [B, H*W, D]
+        # [What] Transformer Encoder: 문맥 요약
+        encoder_output = self.transformer_encoder(windowed_input)
+        context_vector = encoder_output[:, 0, :]  # [CLS] 토큰만 추출
         
-        return grid_embeds
-    
-    def _apply_sequence_to_grid_attention(
-        self, 
-        past_key_values: Tuple[torch.Tensor, torch.Tensor],
-        grid_embeds: torch.Tensor   # [B, H*W, D]
-    ) -> torch.Tensor:
-        """윈도우 내 토큰들과 격자 간 크로스 어텐션"""
-        keys, values = past_key_values  # [B, window_len, D], [B, window_len, D]
+        # [Where/How] Transposed CNN: 공간 매핑
+        membrane_pattern = self.transposed_cnn(context_vector)
+        membrane_pattern = membrane_pattern.squeeze(1)  # [B, H, W]
         
-        # 크로스 어텐션: 격자 → 토큰 윈도우
-        attended_grid, _ = self.sequence_to_grid_attention(
-            query=grid_embeds,  # [B, H*W, D]
-            key=keys,           # [B, window_len, D]
-            value=values        # [B, window_len, D]
-        )
+        # 막전위 범위 제한 (Sigmoid 대신 Clamp 사용)
+        membrane_pattern = torch.clamp(membrane_pattern, -self.membrane_clamp_value, self.membrane_clamp_value)
         
-        return attended_grid  # [B, H*W, D]
-    
-    def _generate_membrane_potential(self, attended_grid: torch.Tensor, batch_size: int) -> torch.Tensor:
-        """어텐션 결과를 막전위 패턴으로 변환"""
-        # 막전위 로짓 계산
-        membrane_logits = self.membrane_projection(attended_grid)  # [B, H*W, 1]
-        membrane_logits = membrane_logits.squeeze(-1)   # [B, H*W]
-        
-        # 2차원 격자로 reshape
-        membrane_potential = membrane_logits.view(batch_size, self.grid_height, self.grid_width)  # [B, H, W]
-
-        membrane_potential = torch.sigmoid(membrane_potential) * 6.0
-        
-        return membrane_potential
+        return membrane_pattern
 
 
 class OutputInterface(nn.Module):
     """
-    출력 인터페이스: 상태 저장 슬라이딩 윈도우 기반 효율적 디코딩
+    출력 인터페이스 v2.0: CNN 공간 압축 + Transformer 디코더
+    
+    [What] 공간 정보 압축 (CNN) → [Which] 다음 토큰 결정 (Transformer Decoder)
     """
     
     def __init__(
@@ -242,14 +219,15 @@ class OutputInterface(nn.Module):
         grid_width: int,
         pad_token_id: int,
         embedding_dim: int = 256,
-        window_size: int = 32,
-        num_heads: int = 4,
-        num_decoder_layers: int = 2,
+        summary_vectors: int = 16,
+        decoder_layers: int = 2,
+        decoder_heads: int = 4,
         dim_feedforward: int = 1024,
         dropout: float = 0.1,
-        use_positional_encoding: bool = True,
-        t5_model_name: Optional[str] = None,
         spike_gain: float = 5.0,
+        use_positional_encoding: bool = True,
+        use_summary_position_encoding: bool = False,
+        t5_model_name: Optional[str] = None,
         device: str = "cuda"
     ):
         super().__init__()
@@ -259,272 +237,144 @@ class OutputInterface(nn.Module):
         self.grid_width = grid_width
         self.pad_token_id = pad_token_id
         self.embedding_dim = embedding_dim
-        self.window_size = window_size
-        self.num_heads = num_heads
-        self.num_decoder_layers = num_decoder_layers
-        self.use_positional_encoding = use_positional_encoding
+        self.summary_vectors = summary_vectors
         self.spike_gain = spike_gain
+        self.use_positional_encoding = use_positional_encoding
+        self.use_summary_position_encoding = use_summary_position_encoding
         self.device = device
         
         # T5 임베딩 로드 및 초기화
-        self.t5_data = None
         if t5_model_name is not None:
-            self.t5_data = load_t5_embeddings(t5_model_name)
+            t5_data = load_t5_embeddings(t5_model_name)
+            self.vocab_size = t5_data['vocab_size']
+            self.embedding_dim = t5_data['d_model']
             
-            # T5 설정으로 파라미터 업데이트
-            self.vocab_size = self.t5_data['vocab_size']
-            self.embedding_dim = self.t5_data['d_model']
-            
-            # T5 토큰 임베딩 사용
             self.token_embedding = nn.Embedding.from_pretrained(
-                self.t5_data['token_embedding_weights'], 
+                t5_data['token_embedding_weights'], 
                 freeze=False,
                 padding_idx=self.pad_token_id
             )
             print(f"Loaded T5 token embedding: {self.token_embedding.weight.shape}")
         else:
-            # 기본 토큰 임베딩
             self.token_embedding = nn.Embedding(
                 vocab_size, 
                 embedding_dim, 
                 padding_idx=self.pad_token_id
             )
         
-        # 스파이크 → 메모리 시퀀스 변환부
-        self.spike_to_feature = nn.Linear(1, self.embedding_dim)
+        # [What] CNN Encoder (공간 압축) - Linear projection 분리
+        self.target_size, self.cnn_channels = self._auto_calculate_cnn_encoder()
+        self.cnn_encoder = self._build_cnn_encoder()
         
-        # 격자 위치 임베딩
-        self.register_parameter(
-            'grid_position_embedding',
-            nn.Parameter(torch.randn(grid_height, grid_width, self.embedding_dim) * 0.02)
-        )
+        # CNN 출력을 memory로 변환하는 별도 projection layer
+        self.memory_projection = nn.Linear(self.cnn_channels[-1], self.embedding_dim)
         
-        # 위치 임베딩 (선택적)
+        # 요약 벡터들의 위치 임베딩 (선택적)
+        if self.use_summary_position_encoding:
+            self.summary_position_embedding = nn.Embedding(self.summary_vectors, self.embedding_dim)
+        
+        # 디코더 토큰들의 위치 임베딩 (선택적)
         if self.use_positional_encoding:
-            self.position_embedding = nn.Embedding(window_size, self.embedding_dim)
-        else:
-            self.position_embedding = None
+            max_position = 1024
+            self.position_embedding = nn.Embedding(max_position, self.embedding_dim)
         
+        # [Which] Transformer Decoder
         decoder_layer = TransformerDecoderLayer(
             d_model=self.embedding_dim,
-            nhead=num_heads,
+            nhead=decoder_heads,
             dim_feedforward=dim_feedforward,
             dropout=dropout,
             batch_first=True
         )
-        
         self.transformer_decoder = TransformerDecoder(
             decoder_layer,
-            num_layers=num_decoder_layers
+            num_layers=decoder_layers
         )
         
         # 최종 출력 레이어
-        if t5_model_name is not None and self.t5_data is not None:
-            # T5 lm_head 사용
+        if t5_model_name is not None:
             self.final_projection = nn.Linear(self.embedding_dim, self.vocab_size)
             with torch.no_grad():
-                self.final_projection.weight.copy_(self.t5_data['lm_head_weights'])
+                self.final_projection.weight.copy_(t5_data['lm_head_weights'])
         else:
-            # 기본 출력 레이어
             self.final_projection = nn.Linear(self.embedding_dim, vocab_size)
         
         self.layer_norm = nn.LayerNorm(self.embedding_dim)
     
+    def _auto_calculate_cnn_encoder(self) -> Tuple[int, List[int]]:
+        """CNN Encoder 구조 자동 계산"""
+        # 목표 요약 벡터 개수에서 그리드 크기 결정
+        target_size = int(math.sqrt(self.summary_vectors))
+        if target_size * target_size != self.summary_vectors:
+            target_size = int(math.sqrt(self.summary_vectors)) + 1
+            self.summary_vectors = target_size * target_size
+        
+        # 다운샘플링 레이어 수 계산
+        current_size = max(self.grid_height, self.grid_width)
+        num_layers = max(1, math.ceil(math.log2(current_size / target_size)))
+        
+        # 채널 수 점진적 증가
+        channels = [1]  # 입력은 단일 채널
+        current_channels = 32
+        for i in range(num_layers):
+            channels.append(current_channels)
+            current_channels = min(256, current_channels * 2)
+        
+        return target_size, channels
+    
+    def _build_cnn_encoder(self) -> nn.Module:
+        """CNN Encoder 네트워크 구성 (Linear projection 제외)"""
+        layers = []
+        
+        # Convolution layers only (Linear projection 없음)
+        for i in range(len(self.cnn_channels) - 1):
+            in_channels = self.cnn_channels[i]
+            out_channels = self.cnn_channels[i + 1]
+            
+            layers.extend([
+                nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=2, padding=1),
+                nn.ReLU(),
+                nn.BatchNorm2d(out_channels)
+            ])
+        
+        # Adaptive pooling to exact target size
+        layers.append(nn.AdaptiveAvgPool2d((self.target_size, self.target_size)))
+        
+        return nn.Sequential(*layers)
+    
     def forward(
         self,
         grid_spikes: torch.Tensor,
-        target_tokens: Optional[torch.Tensor] = None
+        decoder_input_ids: torch.Tensor
     ) -> torch.Tensor:
-        """스파이크 격자를 기반으로 로짓 생성 (학습용)"""
-        # 배치 형태로 정규화
-        if grid_spikes.dim() == 2:
-            grid_spikes = grid_spikes.unsqueeze(0)
-        
-        if target_tokens is not None and target_tokens.dim() == 1:
-            target_tokens = target_tokens.unsqueeze(0)
-        
-        batch_size = grid_spikes.shape[0]
-        
-        # 스파이크를 메모리 시퀀스로 변환
-        memory = self._create_memory_sequence(grid_spikes)
-        
-        if self.training and target_tokens is not None:
-            return self._forward_training(memory, target_tokens)
-        else:
-            # 추론 모드: BOS 토큰으로 시작
-            bos_tokens = torch.zeros(batch_size, 1, dtype=torch.long, device=grid_spikes.device)
-            return self._forward_training(memory, bos_tokens)
-    
-    def generate_token_at_clk(
-        self, 
-        grid_spikes: torch.Tensor,
-        last_token_id: torch.Tensor,
-        past_key_values: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None
-    ) -> Tuple[torch.Tensor, List[Tuple[torch.Tensor, torch.Tensor]]]:
         """
-        효율적인 상태 저장 디코딩으로 다음 토큰 생성
+        스파이크 격자와 디코더 입력으로부터 로짓 생성
         
         Args:
-            grid_spikes: [B, H, W] 또는 [H, W]
-            last_token_id: [B] 형태의 마지막 토큰
-            past_key_values: 디코더 레이어별 (key, value) 캐시 리스트
+            grid_spikes: [B, H, W] 스파이크 그리드
+            decoder_input_ids: [B, seq_len] 디코더 입력 토큰들
             
         Returns:
-            next_token_logits: [B, vocab_size]
-            updated_past_key_values: 업데이트된 캐시 리스트
+            output_logits: [B, seq_len, vocab_size] 출력 로짓
         """
         if grid_spikes.dim() == 2:
             grid_spikes = grid_spikes.unsqueeze(0)
         
-        if last_token_id.dim() == 1:
-            last_token_id = last_token_id.unsqueeze(-1)  # [B, 1]
+        if decoder_input_ids.dim() == 1:
+            decoder_input_ids = decoder_input_ids.unsqueeze(0)
         
-        batch_size = grid_spikes.shape[0]
+        batch_size, seq_len = decoder_input_ids.shape
         
-        # 현재 스파이크를 메모리로 변환
-        memory = self._create_memory_sequence(grid_spikes)  # [B, H*W, D]
+        # [What] CNN으로 공간 압축
+        memory = self._create_memory_sequence(grid_spikes)
         
-        # 현재 토큰만 임베딩 (시퀀스 길이 1)
-        hidden_states = self._prepare_target_embeddings(last_token_id)  # [B, 1, D]
+        # [Which] 디코더 입력 임베딩
+        target_embeds = self._prepare_target_embeddings(decoder_input_ids)
         
-        # 각 디코더 레이어를 순회하며 효율적 어텐션 계산
-        new_past_key_values = []
-        
-        for layer_idx, decoder_layer in enumerate(self.transformer_decoder.layers):
-            # 이전 레이어 캐시 가져오기
-            layer_past = past_key_values[layer_idx] if past_key_values and layer_idx < len(past_key_values) else None
-            
-            # Self-Attention with KV Cache
-            hidden_states, new_layer_cache = self._layer_forward_with_cache(
-                decoder_layer, hidden_states, memory, layer_past
-            )
-            
-            new_past_key_values.append(new_layer_cache)
-        
-        # 최종 로짓 계산 (마지막 토큰만)
-        next_token_logits = self.final_projection(hidden_states.squeeze(1))  # [B, vocab_size]
-        
-        return next_token_logits, new_past_key_values
-    
-    def _create_memory_sequence(self, grid_spikes: torch.Tensor) -> torch.Tensor:
-        """스파이크 격자를 트랜스포머 메모리 시퀀스로 변환"""
-        batch_size, grid_h, grid_w = grid_spikes.shape
-        
-        # 스파이크 값에 특징 차원 추가
-        spikes_with_feature = grid_spikes.unsqueeze(-1).float()
-        
-        # 스파이크 값을 임베딩 벡터로 변환
-        spike_features = self.spike_to_feature(spikes_with_feature * self.spike_gain)
-        
-        # 위치 정보 추가
-        contextual_features = spike_features + self.grid_position_embedding
-        
-        # 정규화
-        normalized_features = self.layer_norm(contextual_features)
-        
-        # 시퀀스 형태로 변환
-        memory_sequence = normalized_features.view(batch_size, -1, self.embedding_dim)
-        
-        return memory_sequence
-    
-    def _layer_forward_with_cache(
-        self,
-        decoder_layer: TransformerDecoderLayer,
-        hidden_states: torch.Tensor,  # [B, 1, D]
-        memory: torch.Tensor,         # [B, H*W, D]
-        layer_past: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
-    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        """단일 디코더 레이어의 효율적 forward with KV cache"""
-        
-        # Self-Attention
-        residual = hidden_states
-        hidden_states = decoder_layer.norm1(hidden_states)
-        
-        # 현재 토큰의 Q, K, V 계산
-        q, k, v = self._split_qkv(decoder_layer.self_attn, hidden_states)  # 각각 [B, 1, D]
-        
-        # 과거 K, V와 결합 (슬라이딩 윈도우)
-        if layer_past is not None:
-            past_k, past_v = layer_past  # [B, num_heads, past_len, head_dim]
-            k = torch.cat([past_k, k], dim=-2)  # [B, num_heads, past_len+1, head_dim]
-            v = torch.cat([past_v, v], dim=-2)
-            
-            # 윈도우 크기 제한
-            if k.shape[-2] > self.window_size:
-                k = k[:, :, -self.window_size:]
-                v = v[:, :, -self.window_size:]
-        
-        # 효율적 어텐션 계산 (Q는 1개, K,V는 window_size개)
-        seq_len = k.shape[-2]
-        if seq_len > 1:
-            # Causal mask를 멀티헤드 형태로 생성
-            causal_mask = torch.triu(torch.ones(seq_len, seq_len, device=k.device), diagonal=1)
-            causal_mask = causal_mask.masked_fill(causal_mask == 1, float('-inf'))
-            # 마지막 행만 사용 (현재 토큰이 과거 토큰들만 볼 수 있도록)
-            causal_mask = causal_mask[-1:, :]  # [1, seq_len]
-        else:
-            causal_mask = None
-            
-        attn_output = F.scaled_dot_product_attention(
-            q, k, v, 
-            attn_mask=causal_mask,
-            dropout_p=decoder_layer.self_attn.dropout if self.training else 0.0
-        )
-        
-        # 멀티헤드 결과를 다시 합치기
-        B = attn_output.shape[0]
-        attn_output = attn_output.transpose(1, 2).contiguous().view(B, 1, -1)  # [B, 1, D]
-        
-        # Self-attention 결과 적용
-        attn_output = decoder_layer.self_attn.out_proj(attn_output)
-        hidden_states = residual + decoder_layer.dropout1(attn_output)
-        
-        # Cross-Attention (메모리와 - 캐시 없음)
-        residual = hidden_states
-        hidden_states = decoder_layer.norm2(hidden_states)
-        
-        cross_attn_output, _ = decoder_layer.multihead_attn(
-            hidden_states, memory, memory
-        )
-        hidden_states = residual + decoder_layer.dropout2(cross_attn_output)
-        
-        # Feed Forward
-        residual = hidden_states
-        hidden_states = decoder_layer.norm3(hidden_states)
-        ff_output = decoder_layer.linear2(
-            decoder_layer.dropout(
-                decoder_layer.activation(decoder_layer.linear1(hidden_states))
-            )
-        )
-        hidden_states = residual + decoder_layer.dropout3(ff_output)
-        
-        return hidden_states, (k, v)
-    
-    def _split_qkv(self, attention_layer: nn.MultiheadAttention, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """MultiheadAttention에서 Q, K, V 분리 (멀티헤드 형태로)"""
-        B, L, D = x.shape
-        num_heads = attention_layer.num_heads
-        head_dim = D // num_heads
-        
-        # in_proj_weight를 사용하여 Q, K, V 계산
-        qkv = F.linear(x, attention_layer.in_proj_weight, attention_layer.in_proj_bias)
-        qkv = qkv.view(B, L, 3, num_heads, head_dim).permute(2, 0, 3, 1, 4)  # [3, B, num_heads, L, head_dim]
-        
-        q, k, v = qkv[0], qkv[1], qkv[2]  # 각각 [B, num_heads, L, head_dim]
-        
-        return q, k, v
-    
-    def _forward_training(self, memory: torch.Tensor, target_tokens: torch.Tensor) -> torch.Tensor:
-        """Teacher Forcing을 사용한 학습용 forward pass"""
-        seq_len = target_tokens.shape[1]
-        
-        # 타겟 토큰 임베딩
-        target_embeds = self._prepare_target_embeddings(target_tokens)
-        
-        # 자기회귀 마스크 생성
+        # Causal mask 생성
         tgt_mask = self._generate_causal_mask(seq_len)
         
-        # 디코더 실행
+        # Transformer 디코더 실행
         decoder_output = self.transformer_decoder(
             tgt=target_embeds,
             memory=memory,
@@ -533,17 +383,47 @@ class OutputInterface(nn.Module):
         
         # 최종 로짓 계산
         output_logits = self.final_projection(decoder_output)
+        
         return output_logits
     
-    def _prepare_target_embeddings(self, target_tokens: torch.Tensor) -> torch.Tensor:
-        """타겟 토큰들을 임베딩으로 변환"""
-        batch_size, seq_len = target_tokens.shape
+    def _create_memory_sequence(self, grid_spikes: torch.Tensor) -> torch.Tensor:
+        """스파이크 격자를 요약 벡터 시퀀스로 변환 (수정됨)"""
+        batch_size = grid_spikes.shape[0]
+        
+        # 1. 스파이크 값에 gain 적용 및 채널 차원 추가
+        spikes_input = (grid_spikes * self.spike_gain).unsqueeze(1)  # [B, 1, H, W]
+        
+        # 2. CNN으로 특징 추출: [B, 1, H, W] → [B, C, target_size, target_size]
+        feature_map = self.cnn_encoder(spikes_input)
+        
+        # 3. 시퀀스로 변환: [B, C, target_size, target_size] → [B, summary_vectors, C]
+        B, C, H_t, W_t = feature_map.shape
+        feature_sequence = feature_map.view(B, C, -1)  # [B, C, summary_vectors]
+        feature_sequence = feature_sequence.permute(0, 2, 1)  # [B, summary_vectors, C]
+        
+        # 4. 임베딩 차원으로 투영: [B, summary_vectors, C] → [B, summary_vectors, D]
+        memory_sequence = self.memory_projection(feature_sequence)
+        
+        # 5. 요약 벡터 위치 임베딩 추가 (선택적)
+        if self.use_summary_position_encoding:
+            positions = torch.arange(self.summary_vectors, device=self.device).unsqueeze(0).expand(batch_size, -1)
+            summary_position_embeds = self.summary_position_embedding(positions)
+            memory_sequence = memory_sequence + summary_position_embeds
+        
+        # 6. 정규화
+        memory_sequence = self.layer_norm(memory_sequence)
+        
+        return memory_sequence
+    
+    def _prepare_target_embeddings(self, decoder_input_ids: torch.Tensor) -> torch.Tensor:
+        """디코더 입력 토큰들을 임베딩으로 변환"""
+        batch_size, seq_len = decoder_input_ids.shape
         
         # 토큰 임베딩
-        token_embeds = self.token_embedding(target_tokens)
+        token_embeds = self.token_embedding(decoder_input_ids)
         
-        # 위치 임베딩 (선택적)
-        if self.use_positional_encoding and self.position_embedding is not None:
+        # 위치 임베딩 추가 (선택적)
+        if self.use_positional_encoding:
             positions = torch.arange(seq_len, device=self.device).unsqueeze(0).expand(batch_size, -1)
             position_embeds = self.position_embedding(positions)
             combined_embeds = token_embeds + position_embeds

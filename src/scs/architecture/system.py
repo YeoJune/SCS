@@ -180,6 +180,10 @@ class SCSSystem(nn.Module):
         self.previous_spikes = {}
         self._initialize_previous_spikes()
 
+        # 스파이크율 누적 변수
+        self.accumulated_spike_rates = {}
+        self.clk_count = 0
+
         self.eos_token_id = eos_token_id
         self.pad_token_id = output_interface.pad_token_id
     
@@ -230,6 +234,9 @@ class SCSSystem(nn.Module):
         # 상태 저장 변수 초기화
         input_past_key_values = None
         output_past_key_values = None
+        
+        # 스파이크율 누적을 위한 변수 추가
+        accumulated_spike_rates = []
         
         all_logits = []
         all_logits_with_clk = []
@@ -309,6 +316,10 @@ class SCSSystem(nn.Module):
             
             # 후처리
             self._phase3_post_spike_processing(current_spikes)
+            
+            # 스파이크율 누적 (매 CLK마다)
+            self._accumulate_spike_rates(current_spikes)
+            
             self.previous_spikes = {k: v.clone() for k, v in current_spikes.items()}
 
         # 최종 출력 및 processing_info 구성
@@ -324,8 +335,8 @@ class SCSSystem(nn.Module):
         else:
             generation_clks = torch.empty(0, device=self.device)
         
-        # 배치 평균 스파이크율 계산
-        batch_avg_spike_rate = self._calculate_batch_avg_spike_rate()
+        # 개별 노드별 스파이크율 딕셔너리 반환
+        node_spike_rates = self._get_node_spike_rates()
         
         processing_info = {
             "processing_clk": self.current_clk + 1,
@@ -338,7 +349,7 @@ class SCSSystem(nn.Module):
             "convergence_achieved": clk < max_clk - 1 if 'clk' in locals() else False,
             "final_acc_activity": self.timing_manager.stable_sync_index.mean().item() if hasattr(self.timing_manager.stable_sync_index, 'mean') else 0.0,
             "generation_clks": generation_clks,
-            "batch_avg_spike_rate": batch_avg_spike_rate
+            "node_spike_rates": node_spike_rates
         }
         
         return output_logits, processing_info
@@ -450,23 +461,36 @@ class SCSSystem(nn.Module):
         self.current_clk = 0
         self.timing_manager.reset()
         
+        # 스파이크율 누적 변수 초기화
+        self.accumulated_spike_rates = {}
+        self.clk_count = 0
+        
         for node in self.nodes.values():
             node.reset_state(batch_size)
         
         self._initialize_previous_spikes(batch_size)
     
-    def _calculate_batch_avg_spike_rate(self) -> float:
-        """현재 스파이크 상태를 기반으로 배치 평균 스파이크율 계산"""
-        if not self.previous_spikes:
-            return 0.0
-        
-        total_spike_rate = 0.0
-        total_nodes = 0
-        
-        for node_name, spikes in self.previous_spikes.items():
-            # 스파이크율 = 활성화된 뉴런 비율 (0-1 사이 값)
+    def _accumulate_spike_rates(self, current_spikes: Dict[str, torch.Tensor]):
+        """매 CLK마다 개별 노드의 스파이크율을 누적"""
+        for node_name, spikes in current_spikes.items():
+            # 노드별 스파이크율 계산 (배치 평균)
             spike_rate = spikes.mean().item()
-            total_spike_rate += spike_rate
-            total_nodes += 1
+            
+            if node_name not in self.accumulated_spike_rates:
+                self.accumulated_spike_rates[node_name] = 0.0
+            
+            self.accumulated_spike_rates[node_name] += spike_rate
         
-        return total_spike_rate / total_nodes if total_nodes > 0 else 0.0
+        self.clk_count += 1
+    
+    def _get_node_spike_rates(self) -> Dict[str, float]:
+        """개별 노드별 평균 스파이크율을 딕셔너리로 반환"""
+        if self.clk_count == 0 or not self.accumulated_spike_rates:
+            return {}
+        
+        # 각 노드의 평균 스파이크율 계산
+        node_avg_rates = {}
+        for node_name, total_rate in self.accumulated_spike_rates.items():
+            node_avg_rates[node_name] = total_rate / self.clk_count
+        
+        return node_avg_rates

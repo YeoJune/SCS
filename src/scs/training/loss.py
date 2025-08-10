@@ -172,13 +172,24 @@ class SCSLoss(nn.Module):
         return torch.tensor(penalty, dtype=torch.float32, device=device)
     
     def _spike_regularization(self, processing_info: Dict[str, Any], device: torch.device) -> torch.Tensor:
-        """배치 스파이크 레이트 정규화"""
-        if 'batch_avg_spike_rate' in processing_info:
-            current_rate = processing_info['batch_avg_spike_rate']
-            deviation = (current_rate - self.target_spike_rate) ** 2
-            return torch.tensor(deviation, dtype=torch.float32, device=device)
+        """개별 노드별 스파이크 레이트 정규화"""
+        if 'node_spike_rates' in processing_info:
+            node_spike_rates = processing_info['node_spike_rates']
+            
+            if not node_spike_rates:  # 빈 딕셔너리인 경우
+                return torch.tensor(0.0, dtype=torch.float32, device=device)
+            
+            # 각 노드별로 target_spike_rate와의 편차를 계산
+            total_deviation = 0.0
+            for node_name, current_rate in node_spike_rates.items():
+                deviation = (current_rate - self.target_spike_rate) ** 2
+                total_deviation += deviation
+            
+            # 평균 편차 반환
+            avg_deviation = total_deviation / len(node_spike_rates)
+            return torch.tensor(avg_deviation, dtype=torch.float32, device=device)
         else:
-            # 배치 평균 스파이크율이 없으면 0으로 설정
+            # 노드별 스파이크율 정보가 없으면 0으로 설정
             return torch.tensor(0.0, dtype=torch.float32, device=device)
 
 class TimingLoss(SCSLoss):

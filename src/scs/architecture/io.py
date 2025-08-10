@@ -106,11 +106,11 @@ class InputInterface(nn.Module):
         with torch.no_grad():
             self.cls_token.data.normal_(mean=0.5, std=0.3)
             
-            # 마지막 Conv2d의 바이어스를 3.0으로 설정
+            # 마지막 Conv2d의 바이어스를 2.0으로 설정
             for module in reversed(list(self.transposed_cnn.modules())):
                 if isinstance(module, nn.Conv2d):
                     if module.bias is not None:
-                        module.bias.data.fill_(3.0)
+                        module.bias.data.fill_(2.0)
                     break
         
     def _auto_calculate_transposed_cnn(self) -> Tuple[int, List[int]]:

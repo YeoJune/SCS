@@ -71,9 +71,6 @@ io_system:
     use_summary_position_encoding: false 
     t5_model_name: "t5-base"
 
-
-# v2.0 새로운 파라미터들 추가
-
 io_system:
   input_interface:
     vocab_size: 32128  # T5 vocab size (자동 설정됨)

@@ -177,7 +177,7 @@ class ModelBuilder:
     @staticmethod
     def validate_config_structure(config: Dict[str, Any]) -> List[str]:
         """
-        설정 파일의 구조 유효성 검사
+        설정 파일의 구조 유효성 검사 (v2.0)
         
         Args:
             config: 설정 딕셔너리
@@ -251,36 +251,89 @@ class ModelBuilder:
                     if target and target not in available_nodes:
                         errors.append(f"연결 {i}의 target '{target}'가 brain_regions에 정의되지 않았습니다.")
         
-         # 타이밍 섹션 검증 추가
+        # 타이밍 섹션 검증
         has_timing = "timing" in config
         has_adaptive_timing = "adaptive_output_timing" in config
         has_timing_manager = "timing_manager" in config
         if not (has_timing or has_adaptive_timing or has_timing_manager):
             errors.append("'timing', 'adaptive_output_timing', 또는 'timing_manager' 섹션이 필요합니다.")
         
-        # IO System 상세 검증 추가
+        # === v2.0: IO System 검증 업데이트 ===
         if "io_system" in config:
             io_config = config["io_system"]
             
-            # input_interface 필수 필드 검증
+            # input_interface v2.0 필수 필드 검증
             if "input_interface" in io_config:
-                input_required = ["embedding_dim", "num_heads"]
+                # v2.0에서 필수적인 필드들
+                input_required = ["embedding_dim"]
+                # v1.0의 "num_heads" → v2.0의 "encoder_heads"로 변경됨 (선택적)
+                
                 for field in input_required:
                     if field not in io_config["input_interface"]:
                         errors.append(f"io_system.input_interface에 '{field}' 필드가 필요합니다.")
+                
+                # v2.0 새로운 필드들 검증 (권장사항)
+                recommended_input_fields = [
+                    "window_size", "encoder_layers", "encoder_heads", 
+                    "dim_feedforward", "membrane_clamp_value"
+                ]
+                missing_recommended = []
+                for field in recommended_input_fields:
+                    if field not in io_config["input_interface"]:
+                        missing_recommended.append(field)
+                
+                if missing_recommended:
+                    errors.append(f"io_system.input_interface에 권장 필드들이 누락되었습니다: {missing_recommended} (기본값이 사용됩니다)")
+                    
             else:
                 errors.append("io_system에 'input_interface' 섹션이 필요합니다.")
             
-            # output_interface 필수 필드 검증  
+            # output_interface v2.0 필수 필드 검증  
             if "output_interface" in io_config:
-                output_required = ["embedding_dim", "num_heads", "num_decoder_layers"]
+                # v2.0에서 필수적인 필드들
+                output_required = ["embedding_dim"]
+                # v1.0의 "num_heads", "num_decoder_layers" → v2.0의 "decoder_heads", "decoder_layers"로 변경됨
+                
                 for field in output_required:
                     if field not in io_config["output_interface"]:
                         errors.append(f"io_system.output_interface에 '{field}' 필드가 필요합니다.")
+                
+                # v2.0 새로운 필드들 검증 (권장사항)
+                recommended_output_fields = [
+                    "summary_vectors", "decoder_layers", "decoder_heads", 
+                    "dim_feedforward", "spike_gain"
+                ]
+                missing_recommended = []
+                for field in recommended_output_fields:
+                    if field not in io_config["output_interface"]:
+                        missing_recommended.append(field)
+                
+                if missing_recommended:
+                    errors.append(f"io_system.output_interface에 권장 필드들이 누락되었습니다: {missing_recommended} (기본값이 사용됩니다)")
+                    
             else:
                 errors.append("io_system에 'output_interface' 섹션이 필요합니다.")
+            
+            # v2.0 호환성 검사: 구식 필드명 사용 시 경고
+            if "input_interface" in io_config:
+                old_input_fields = {
+                    "num_heads": "encoder_heads",
+                    "use_positional_encoding": "use_positional_encoding (동일)",
+                }
+                for old_field, new_field in old_input_fields.items():
+                    if old_field in io_config["input_interface"] and old_field != "use_positional_encoding":
+                        errors.append(f"io_system.input_interface에서 구식 필드 '{old_field}' 대신 '{new_field}'를 사용하세요")
+            
+            if "output_interface" in io_config:
+                old_output_fields = {
+                    "num_heads": "decoder_heads",
+                    "num_decoder_layers": "decoder_layers",
+                }
+                for old_field, new_field in old_output_fields.items():
+                    if old_field in io_config["output_interface"]:
+                        errors.append(f"io_system.output_interface에서 구식 필드 '{old_field}' 대신 '{new_field}'를 사용하세요")
         
-        # 학습 설정 검증 추가
+        # 학습 설정 검증 (기존과 동일)
         learning_config = config.get("learning", config.get("training", {}))
         if learning_config:
             # 필수 학습 파라미터 확인

@@ -96,11 +96,13 @@ class AxonalConnections(nn.Module):
                             # 약 80% 흥분성, 20% 억제성이 되도록 바이어스 추가
                             raw_weight = torch.randn(1).item() * weight_scale
                             
-                            # 약간의 양수 바이어스 (생물학적 현실성)
-                            if torch.rand(1).item() < 0.8:  # 80% 확률로 흥분성 경향
-                                adjacency[target_idx, source_idx] = abs(raw_weight)
-                            else:  # 20% 확률로 억제성 경향  
-                                adjacency[target_idx, source_idx] = -abs(raw_weight)
+                            adjacency[target_idx, source_idx] = abs(raw_weight)
+                            
+                            # # 약간의 양수 바이어스 (생물학적 현실성)
+                            # if torch.rand(1).item() < 0.8:  # 80% 확률로 흥분성 경향
+                            #     adjacency[target_idx, source_idx] = abs(raw_weight)
+                            # else:  # 20% 확률로 억제성 경향  
+                            #     adjacency[target_idx, source_idx] = -abs(raw_weight)
         
         return adjacency
     

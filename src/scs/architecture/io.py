@@ -103,20 +103,6 @@ class InputInterface(nn.Module):
         # 정규화
         self.layer_norm = nn.LayerNorm(self.embedding_dim)
         
-        self._boost_conv_variance()
-    
-    def _boost_conv_variance(self):
-        """Conv layer들의 가중치를 더 큰 분산으로 초기화"""
-        for module in self.transposed_cnn.modules():
-            if isinstance(module, nn.Conv2d):
-                # 기본 Kaiming보다 √3배 큰 초기화
-                fan_in = module.in_channels * module.kernel_size[0] * module.kernel_size[1]
-                std = math.sqrt(6.0 / fan_in)  # 기본: sqrt(2/fan_in)
-                nn.init.normal_(module.weight, mean=0, std=std)
-                
-                if module.bias is not None:
-                    nn.init.zeros_(module.bias)
-        
     def _auto_calculate_transposed_cnn(self) -> Tuple[int, List[int]]:
         """Transposed CNN 구조 자동 계산"""
         # 시작 크기 결정
@@ -171,6 +157,23 @@ class InputInterface(nn.Module):
                 ])
                 current_h *= 2
                 current_w *= 2
+
+        final_conv_layer = layers[-1] # 마지막 Conv2d 레이어
+        
+        # 가중치를 2D 형태로 reshape하여 직교 초기화 적용
+        if isinstance(final_conv_layer, nn.Conv2d):
+            # Conv2d 가중치 텐서의 차원: (out_ch, in_ch, kH, kW)
+            # 직교 초기화는 2D 행렬에 적용되므로 reshape 필요
+            weight_shape = final_conv_layer.weight.shape
+            # (out_ch, in_ch * kH * kW) 형태로 펼침
+            reshaped_weight = final_conv_layer.weight.view(weight_shape[0], -1)
+            
+            # 직교 초기화 수행
+            torch.nn.init.orthogonal_(reshaped_weight)
+            
+            # 편향은 0으로 초기화
+            if final_conv_layer.bias is not None:
+                torch.nn.init.constant_(final_conv_layer.bias, 0.0)
         
         return nn.Sequential(*layers)
     

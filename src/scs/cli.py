@@ -399,7 +399,7 @@ def _save_spike_visualizations(model, experiment_dir, test_loader, logger):
             node = model.nodes[node_name]
             influence = node.influence_strength.detach().cpu().numpy()
             
-            im = axes[i].imshow(influence, cmap='RdBu_r', vmin=-1, vmax=1)
+            im = axes[i].imshow(influence, cmap='RdBu_r', vmin=-5, vmax=5)
             axes[i].set_title(f'{node_name}\nInfluence Strength')
             axes[i].set_xlabel('Width')
             axes[i].set_ylabel('Height')

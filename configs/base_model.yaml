@@ -57,8 +57,8 @@ io_system:
     dim_feedforward: 2048
     membrane_clamp_value: 6.0
     use_positional_encoding: false
-    t5_model_name: "t5-base"
-    
+    t5_model_name: "t5-small"
+
   output_interface:
     embedding_dim: 512
     summary_vectors: 16
@@ -68,35 +68,8 @@ io_system:
     dropout: 0.1
     spike_gain: 5.0
     use_positional_encoding: false
-    use_summary_position_encoding: false 
-    t5_model_name: "t5-base"
-
-io_system:
-  input_interface:
-    vocab_size: 32128  # T5 vocab size (자동 설정됨)
-    embedding_dim: 512
-    window_size: 32              # 새로 추가: 슬라이딩 윈도우 크기
-    encoder_layers: 2            # 새로 추가: Transformer 인코더 레이어 수
-    encoder_heads: 8             # 새로 추가: 어텐션 헤드 수
-    encoder_dropout: 0.1         # 새로 추가: 드롭아웃 비율
-    dim_feedforward: 2048        # 새로 추가: FFN 차원
-    membrane_clamp_value: 6.0    # 새로 추가: 막전위 클램핑 값
-    use_positional_encoding: true
-    t5_model_name: "t5-base"
-    
-  output_interface:
-    vocab_size: 32128  # T5 vocab size (자동 설정됨)
-    embedding_dim: 512
-    summary_vectors: 16          # 새로 추가: CNN 압축 후 요약 벡터 개수
-    decoder_layers: 2
-    decoder_heads: 4             # 기존: num_heads → decoder_heads
-    dim_feedforward: 1024
-    dropout: 0.1
-    spike_gain: 5.0
-    use_positional_encoding: true
-    use_summary_position_encoding: false  # 새로 추가: 요약 벡터 위치 임베딩
-    t5_model_name: "t5-base"
-    pad_token_id: 0
+    use_summary_position_encoding: false
+    t5_model_name: "t5-small"
 
 timing_manager:
   sync_ema_alpha: 0.1 # EMA 필터링 강도

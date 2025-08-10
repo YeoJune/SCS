@@ -324,6 +324,9 @@ class SCSSystem(nn.Module):
         else:
             generation_clks = torch.empty(0, device=self.device)
         
+        # 배치 평균 스파이크율 계산
+        batch_avg_spike_rate = self._calculate_batch_avg_spike_rate()
+        
         processing_info = {
             "processing_clk": self.current_clk + 1,
             "batch_size": batch_size,
@@ -334,7 +337,8 @@ class SCSSystem(nn.Module):
             "output_started": self.timing_manager.output_started,
             "convergence_achieved": clk < max_clk - 1 if 'clk' in locals() else False,
             "final_acc_activity": self.timing_manager.stable_sync_index.mean().item() if hasattr(self.timing_manager.stable_sync_index, 'mean') else 0.0,
-            "generation_clks": generation_clks
+            "generation_clks": generation_clks,
+            "batch_avg_spike_rate": batch_avg_spike_rate
         }
         
         return output_logits, processing_info
@@ -450,3 +454,19 @@ class SCSSystem(nn.Module):
             node.reset_state(batch_size)
         
         self._initialize_previous_spikes(batch_size)
+    
+    def _calculate_batch_avg_spike_rate(self) -> float:
+        """현재 스파이크 상태를 기반으로 배치 평균 스파이크율 계산"""
+        if not self.previous_spikes:
+            return 0.0
+        
+        total_spike_rate = 0.0
+        total_nodes = 0
+        
+        for node_name, spikes in self.previous_spikes.items():
+            # 스파이크율 = 활성화된 뉴런 비율 (0-1 사이 값)
+            spike_rate = spikes.mean().item()
+            total_spike_rate += spike_rate
+            total_nodes += 1
+        
+        return total_spike_rate / total_nodes if total_nodes > 0 else 0.0

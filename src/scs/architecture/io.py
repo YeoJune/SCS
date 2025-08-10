@@ -77,7 +77,7 @@ class InputInterface(nn.Module):
             self.token_embedding = nn.Embedding(vocab_size, embedding_dim)
         
         # [CLS] 토큰 (학습 가능한 파라미터)
-        self.cls_token = nn.Parameter(torch.randn(1, 1, self.embedding_dim) * 1.0)
+        self.cls_token = nn.Parameter(torch.randn(1, 1, self.embedding_dim) * 0.2)
         
         # 위치 임베딩 (선택적)
         if self.use_positional_encoding:
@@ -102,6 +102,20 @@ class InputInterface(nn.Module):
         
         # 정규화
         self.layer_norm = nn.LayerNorm(self.embedding_dim)
+        
+        self._boost_conv_variance()
+    
+    def _boost_conv_variance(self):
+        """Conv layer들의 가중치를 더 큰 분산으로 초기화"""
+        for module in self.transposed_cnn.modules():
+            if isinstance(module, nn.Conv2d):
+                # 기본 Kaiming보다 √3배 큰 초기화
+                fan_in = module.in_channels * module.kernel_size[0] * module.kernel_size[1]
+                std = math.sqrt(6.0 / fan_in)  # 기본: sqrt(2/fan_in)
+                nn.init.normal_(module.weight, mean=0, std=std)
+                
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
         
     def _auto_calculate_transposed_cnn(self) -> Tuple[int, List[int]]:
         """Transposed CNN 구조 자동 계산"""

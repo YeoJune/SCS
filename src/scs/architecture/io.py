@@ -77,7 +77,7 @@ class InputInterface(nn.Module):
             self.token_embedding = nn.Embedding(vocab_size, embedding_dim)
         
         # [CLS] 토큰 (학습 가능한 파라미터)
-        self.cls_token = nn.Parameter(torch.randn(1, 1, self.embedding_dim) * 0.02)
+        self.cls_token = nn.Parameter(torch.randn(1, 1, self.embedding_dim) * 0.5 + 1.0)
         
         # 위치 임베딩 (선택적)
         if self.use_positional_encoding:
@@ -104,8 +104,6 @@ class InputInterface(nn.Module):
         self.layer_norm = nn.LayerNorm(self.embedding_dim)
 
         with torch.no_grad():
-            self.cls_token.data.normal_(mean=0.5, std=0.3)
-            
             # 마지막 Conv2d의 바이어스를 2.0으로 설정
             for module in reversed(list(self.transposed_cnn.modules())):
                 if isinstance(module, nn.Conv2d):

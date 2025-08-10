@@ -67,7 +67,7 @@ io_system:
     decoder_heads: 8
     dim_feedforward: 2048
     dropout: 0.1
-    spike_gain: 1.0
+    spike_gain: 5.0
     use_positional_encoding: false
     use_summary_position_encoding: false
     t5_model_name: "t5-small"
@@ -101,7 +101,7 @@ learning:
   ss_end_prob: 0.05
   ss_decay_epochs: 30
 
-  spike_reg_weight: 0.5 # 스파이크 정규화 가중치
+  spike_reg_weight: 100 # 스파이크 정규화 가중치
   node_target_spike_rates: # 이 노드들만 정규화됨
     IN: 0.2
 

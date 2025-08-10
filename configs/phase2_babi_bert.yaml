@@ -55,7 +55,7 @@ axonal_connections:
       stride: 1
       padding: 2
       dilation: 1
-      weight_scale: 0.6
+      weight_scale: 0.2
 
     - source: "ADJ"
       target: "OUT"
@@ -71,7 +71,7 @@ axonal_connections:
       stride: 1
       padding: 2
       dilation: 1
-      weight_scale: 0.6
+      weight_scale: 0.2
 
     - source: "IN"
       target: "OUT"

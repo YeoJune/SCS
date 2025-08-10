@@ -148,8 +148,6 @@ learning:
       - "input_interface.token_embedding"
       - "output_interface.token_embedding"
       - "output_interface.final_projection"
-      - "output_interface.transformer_decoder.layers.0.self_attn"
-      - "output_interface.transformer_decoder.layers.0.linear"
     unfreeze_schedule: # 에포크별 해제 스케줄
       100: # 에포크 100에 T5 임베딩 해제
         - "input_interface.token_embedding"

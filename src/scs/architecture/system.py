@@ -159,6 +159,7 @@ class SCSSystem(nn.Module):
         output_node: str = "PFC",
         acc_node: str = "ACC",
         eos_token_id: int = 1,
+        node_target_spike_rates: Dict[str, float] = None,
         device: str = "cuda"
     ):
         super().__init__()
@@ -169,6 +170,9 @@ class SCSSystem(nn.Module):
         self.acc_node = acc_node
         
         self.current_clk = 0
+        
+        # 노드별 target spike rate 설정
+        self.node_target_spike_rates = node_target_spike_rates or {}
         
         self.nodes = nn.ModuleDict(nodes)
         self.local_connections = nn.ModuleDict(local_connections)
@@ -462,7 +466,7 @@ class SCSSystem(nn.Module):
         self.timing_manager.reset()
         
         # 스파이크율 누적 변수 초기화
-        self.accumulated_spike_rates = {}
+        self.accumulated_spike_deviations = {}  # CLK별 편차 누적
         self.clk_count = 0
         
         for node in self.nodes.values():
@@ -471,26 +475,36 @@ class SCSSystem(nn.Module):
         self._initialize_previous_spikes(batch_size)
     
     def _accumulate_spike_rates(self, current_spikes: Dict[str, torch.Tensor]):
-        """매 CLK마다 개별 노드의 스파이크율을 누적"""
+        """매 CLK마다 개별 노드의 스파이크율 편차를 누적 (설정된 노드만)"""
         for node_name, spikes in current_spikes.items():
+            # 해당 노드의 target_spike_rate가 설정되어 있는지 확인
+            if node_name not in getattr(self, 'node_target_spike_rates', {}):
+                continue  # 설정되지 않은 노드는 정규화하지 않음
+            
             # 노드별 스파이크율 계산 (배치 평균)
-            spike_rate = spikes.mean().item()
+            current_spike_rate = spikes.mean().item()
             
-            if node_name not in self.accumulated_spike_rates:
-                self.accumulated_spike_rates[node_name] = 0.0
+            # 해당 노드의 target_spike_rate 가져오기
+            target_rate = self.node_target_spike_rates[node_name]
             
-            self.accumulated_spike_rates[node_name] += spike_rate
+            # CLK별 편차 계산
+            clk_deviation = (current_spike_rate - target_rate) ** 2
+            
+            if node_name not in self.accumulated_spike_deviations:
+                self.accumulated_spike_deviations[node_name] = 0.0
+            
+            self.accumulated_spike_deviations[node_name] += clk_deviation
         
         self.clk_count += 1
     
     def _get_node_spike_rates(self) -> Dict[str, float]:
-        """개별 노드별 평균 스파이크율을 딕셔너리로 반환"""
-        if self.clk_count == 0 or not self.accumulated_spike_rates:
+        """개별 노드별 평균 스파이크율 편차를 딕셔너리로 반환"""
+        if self.clk_count == 0 or not self.accumulated_spike_deviations:
             return {}
         
-        # 각 노드의 평균 스파이크율 계산
-        node_avg_rates = {}
-        for node_name, total_rate in self.accumulated_spike_rates.items():
-            node_avg_rates[node_name] = total_rate / self.clk_count
+        # 각 노드의 평균 편차 계산
+        node_avg_deviations = {}
+        for node_name, total_deviation in self.accumulated_spike_deviations.items():
+            node_avg_deviations[node_name] = total_deviation / self.clk_count
         
-        return node_avg_rates
+        return node_avg_deviations

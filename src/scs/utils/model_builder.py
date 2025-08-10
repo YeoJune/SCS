@@ -155,7 +155,12 @@ class ModelBuilder:
                 fixed_delay=timing_config.get("fixed_delay", -1)
             )
             
-            # --- 단계 5: 최종 SCS 시스템 조립 ---
+            # --- 단계 5: 노드별 target spike rate 설정 ---
+            # learning 섹션에서 노드별 target_spike_rate 추출 (설정된 노드만)
+            learning_config = config.get("learning", config.get("training", {}))
+            node_target_spike_rates = learning_config.get("node_target_spike_rates", {})
+            
+            # --- 단계 6: 최종 SCS 시스템 조립 ---
             scs_system = SCSSystem(
                 nodes=nodes,
                 local_connections=local_connections,
@@ -167,6 +172,7 @@ class ModelBuilder:
                 output_node=output_node_name,
                 acc_node=config['system_roles'].get('acc_node', 'ACC'),
                 eos_token_id=eos_token_id,
+                node_target_spike_rates=node_target_spike_rates,
                 device=device
             )
             

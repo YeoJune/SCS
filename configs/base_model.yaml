@@ -95,7 +95,9 @@ learning:
   ss_decay_epochs: 30
 
   spike_reg_weight: 0.5 # 스파이크 정규화 가중치
-  target_spike_rate: 0.2 # 목표 스파이크율
+  node_target_spike_rates: # 이 노드들만 정규화됨
+    IN: 0.2
+
   timing_weight: 0.0 # 타이밍 손실 가중치
   sync_target_start: 1.0 # 시작 시점 동기화 목표
   sync_target_end: 0.0 # 종료 시점 동기화 목표

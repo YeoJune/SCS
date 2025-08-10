@@ -76,22 +76,33 @@ class SCSLoss(nn.Module):
         # 1. 기본 분류 손실
         if self.use_temporal_weighting and 'generation_clks' in processing_info:
             # 시간적 가중치 적용된 손실 계산
-            base_loss_unweighted = self.base_loss(outputs.reshape(-1, vocab_size), targets.reshape(-1))
-            base_loss_unweighted = base_loss_unweighted.view(batch_size, -1)
-            
-            # 패딩 마스크 생성
-            mask = (targets != self.base_loss.ignore_index).float()
-            
-            # 시간적 가중치 계산 및 적용
             generation_clks = processing_info['generation_clks']
-            temporal_weights = self._compute_temporal_weights(generation_clks, outputs.device)
+            actual_output_len = len(generation_clks)  # 실제 생성된 길이
             
-            # 가중치를 브로드캐스팅하여 적용 [1, seq_len] -> [batch_size, seq_len]
-            weights = temporal_weights.unsqueeze(0).expand_as(base_loss_unweighted)
-            
-            # 가중치와 마스크를 모두 적용하여 최종 손실 계산
-            weighted_loss = base_loss_unweighted * weights
-            base_loss = (weighted_loss * mask).sum() / mask.sum().clamp(min=1.0)
+            # 실제 생성된 길이만큼만 손실 계산
+            if actual_output_len > 0:
+                # outputs와 targets를 실제 생성 길이에 맞춤
+                trimmed_outputs = outputs[:, :actual_output_len, :]  # [B, actual_len, vocab]
+                trimmed_targets = targets[:, :actual_output_len]     # [B, actual_len]
+                
+                base_loss_unweighted = self.base_loss(trimmed_outputs.reshape(-1, vocab_size), trimmed_targets.reshape(-1))
+                base_loss_unweighted = base_loss_unweighted.view(batch_size, actual_output_len)
+                
+                # 패딩 마스크 생성 (실제 생성 길이 기준)
+                mask = (trimmed_targets != self.base_loss.ignore_index).float()
+                
+                # 시간적 가중치 계산 및 적용
+                temporal_weights = self._compute_temporal_weights(generation_clks, outputs.device)
+                
+                # 가중치를 브로드캐스팅하여 적용 [actual_len] -> [batch_size, actual_len]
+                weights = temporal_weights.unsqueeze(0).expand_as(base_loss_unweighted)
+                
+                # 가중치와 마스크를 모두 적용하여 최종 손실 계산
+                weighted_loss = base_loss_unweighted * weights
+                base_loss = (weighted_loss * mask).sum() / mask.sum().clamp(min=1.0)
+            else:
+                # 생성된 토큰이 없으면 0 손실
+                base_loss = torch.tensor(0.0, device=outputs.device)
         else:
             # 기존 방식: 평균 손실 (reduction='none' 호환성 유지)
             base_loss_unweighted = self.base_loss(outputs.reshape(-1, vocab_size), targets.reshape(-1))
@@ -172,21 +183,17 @@ class SCSLoss(nn.Module):
         return torch.tensor(penalty, dtype=torch.float32, device=device)
     
     def _spike_regularization(self, processing_info: Dict[str, Any], device: torch.device) -> torch.Tensor:
-        """개별 노드별 스파이크 레이트 정규화"""
+        """개별 노드별 스파이크 레이트 정규화 (CLK별 편차 기반)"""
         if 'node_spike_rates' in processing_info:
-            node_spike_rates = processing_info['node_spike_rates']
+            node_spike_deviations = processing_info['node_spike_rates']  # 실제로는 편차값들
             
-            if not node_spike_rates:  # 빈 딕셔너리인 경우
+            if not node_spike_deviations:  # 빈 딕셔너리인 경우
                 return torch.tensor(0.0, dtype=torch.float32, device=device)
             
-            # 각 노드별로 target_spike_rate와의 편차를 계산
-            total_deviation = 0.0
-            for node_name, current_rate in node_spike_rates.items():
-                deviation = (current_rate - self.target_spike_rate) ** 2
-                total_deviation += deviation
+            # 각 노드의 평균 편차를 단순 평균
+            total_deviation = sum(node_spike_deviations.values())
+            avg_deviation = total_deviation / len(node_spike_deviations)
             
-            # 평균 편차 반환
-            avg_deviation = total_deviation / len(node_spike_rates)
             return torch.tensor(avg_deviation, dtype=torch.float32, device=device)
         else:
             # 노드별 스파이크율 정보가 없으면 0으로 설정

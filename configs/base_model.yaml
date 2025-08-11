@@ -114,14 +114,8 @@ learning:
   final_temporal_weight: 1.0 # 나중 CLK에 기본 중요도
 
   # 점진적 커리큘럼 학습
-  use_curriculum_learning: true
+  use_curriculum_learning: false
   curriculum_schedule:
-    0: 10
-    3: 20
-    6: 40
-    9: 80
-    12: 160
-    15: 250
 
   gradual_unfreezing:
     enabled: true
@@ -129,11 +123,10 @@ learning:
       - "input_interface.token_embedding"
       - "output_interface.token_embedding"
       - "output_interface.final_projection"
+      - "input_interface.pattern_mapper"
+      - "output_interface.spatial_compressor"
     unfreeze_schedule: # 에포크별 해제 스케줄
       100: # 에포크 100에 T5 임베딩 해제
-        - "input_interface.token_embedding"
-        - "output_interface.token_embedding"
-        - "output_interface.final_projection"
 
 data:
   train_samples: -1 # -1은 전체 데이터, 양수는 해당 개수만

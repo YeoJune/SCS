@@ -345,6 +345,14 @@ class OutputInterface(nn.Module):
         
         return output_logits, memory_sequence
     
+    def _initialize_compressor(self):
+        """
+        공간 압축 레이어를 직교 초기화하여 정보 손실 없는 압축 유도.
+        """
+        torch.nn.init.orthogonal_(self.spatial_compressor.weight)
+        if self.spatial_compressor.bias is not None:
+            torch.nn.init.constant_(self.spatial_compressor.bias, 0.0)
+    
     def _create_current_hidden_vector(self, grid_spikes: torch.Tensor) -> torch.Tensor:
         """스파이크 격자를 단일 히든 벡터로 압축"""
         batch_size = grid_spikes.shape[0]

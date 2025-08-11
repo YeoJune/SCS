@@ -126,7 +126,12 @@ learning:
       - "input_interface.pattern_mapper"
       - "output_interface.spatial_compressor"
     unfreeze_schedule: # 에포크별 해제 스케줄
-      100: # 에포크 100에 T5 임베딩 해제
+      1000: # 에포크 1000에 T5 임베딩 해제
+        - "input_interface.token_embedding"
+        - "output_interface.token_embedding"
+        - "output_interface.final_projection"
+        - "input_interface.pattern_mapper"
+        - "output_interface.spatial_compressor"
 
 data:
   train_samples: -1 # -1은 전체 데이터, 양수는 해당 개수만

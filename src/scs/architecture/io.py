@@ -217,7 +217,7 @@ class InputInterface(nn.Module):
         membrane_pattern = membrane_pattern.squeeze(1)  # [B, H, W]
 
         # Softmax 적용
-        input_power = 1.0
+        input_power = 0.8
         temperature = 0.3
 
         batch_size, height, width = membrane_pattern.shape

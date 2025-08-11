@@ -171,9 +171,7 @@ class SpikeNode(nn.Module):
         벡터화: 2차원 격자 전체에 element-wise 연산
         """
         # 막전위 업데이트 (벡터화: 문서 명세)
-        new_potential = self.decay_rate * (
-            self.membrane_potential + total_input
-        )
+        new_potential = self.decay_rate * self.membrane_potential + total_input        
         
         return new_potential
     

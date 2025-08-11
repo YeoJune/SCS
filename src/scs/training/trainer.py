@@ -34,6 +34,8 @@ class TrainingConfig:
     ss_end_prob: float = 0.05
     ss_decay_epochs: int = 10
     eta_min: float = 0.0
+    use_curriculum_learning: bool = False
+    curriculum_schedule: Optional[Dict[int, int]] = None
 
 class SCSTrainer:
     """SCS 배치 처리 최적화 학습 시스템"""
@@ -112,6 +114,28 @@ class SCSTrainer:
         if hasattr(self, 'logger'):
             self.logger.info(f"Scheduled Sampling 확률(epsilon) 업데이트: {self.current_ss_prob:.4f}")
 
+    def _update_curriculum_max_clk(self, epoch: int):
+        """커리큘럼 학습: 현재 에포크에 맞는 max_clk 설정"""
+        schedule = self.config.curriculum_schedule
+        sorted_schedule = sorted(schedule.items())
+        
+        # 현재 에포크에 적용할 max_clk 찾기
+        current_max_clk = self.config.max_clk_training  # 기본값
+        for start_epoch, max_clk in sorted_schedule:
+            if epoch >= start_epoch:
+                current_max_clk = max_clk
+        
+        # max_clk가 변경된 경우에만 업데이트
+        if current_max_clk != self.config.max_clk_training:
+            old_max_clk = self.config.max_clk_training
+            self.config.max_clk_training = current_max_clk
+            
+            # loss_fn의 max_clk도 업데이트
+            if hasattr(self.loss_fn, 'update_max_clk'):
+                self.loss_fn.update_max_clk(current_max_clk)
+            
+            self.logger.info(f"📚 커리큘럼 학습: 에포크 {epoch}, max_clk {old_max_clk} → {current_max_clk}")
+
     def train(
         self,
         train_loader: DataLoader,
@@ -136,6 +160,10 @@ class SCSTrainer:
         
         for epoch in range(self.config.epochs):
             self.current_epoch = epoch
+            
+            # 커리큘럼 학습: max_clk 동적 조정
+            if self.config.use_curriculum_learning and self.config.curriculum_schedule:
+                self._update_curriculum_max_clk(epoch)
             
             # 점진적 해제 적용
             if self.unfreezing_scheduler:

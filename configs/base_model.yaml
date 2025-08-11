@@ -113,6 +113,16 @@ learning:
   initial_temporal_weight: 10.0 # 초기 CLK에 높은 중요도
   final_temporal_weight: 1.0 # 나중 CLK에 기본 중요도
 
+  # 점진적 커리큘럼 학습
+  use_curriculum_learning: true
+  curriculum_schedule:
+    0: 10
+    3: 20
+    6: 40
+    9: 80
+    12: 160
+    15: 250
+
   gradual_unfreezing:
     enabled: true
     initial_frozen_patterns: # 시작할 때 동결할 파라미터들

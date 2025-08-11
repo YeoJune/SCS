@@ -27,6 +27,8 @@ class SCSLoss(nn.Module):
         self.length_penalty_weight = length_penalty_weight
         self.target_spike_rate = target_spike_rate
         self.use_temporal_weighting = use_temporal_weighting
+        self.initial_temporal_weight = initial_temporal_weight
+        self.final_temporal_weight = final_temporal_weight
         
         self.base_loss = nn.CrossEntropyLoss(ignore_index=pad_token_id, reduction='none')
         
@@ -35,6 +37,15 @@ class SCSLoss(nn.Module):
             self.temporal_weights = self._precompute_temporal_weights(
                 initial_temporal_weight, final_temporal_weight
             )
+    
+    def update_max_clk(self, new_max_clk: int):
+        """커리큘럼 학습 중 max_clk 변경 시 호출"""
+        if new_max_clk != self.max_clk:
+            self.max_clk = new_max_clk
+            if self.use_temporal_weighting:
+                self.temporal_weights = self._precompute_temporal_weights(
+                    self.initial_temporal_weight, self.final_temporal_weight
+                )
     
     def _precompute_temporal_weights(self, initial_weight: float, final_weight: float) -> torch.Tensor:
         """절대적 위치 기반 temporal weights 미리 계산"""

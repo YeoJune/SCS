@@ -288,14 +288,14 @@ def extract_and_normalize_training_config(config: Dict[str, Any]) -> Tuple[Dict[
         "epochs", "learning_rate", "weight_decay", "gradient_clip_norm",
         "eval_every", "save_every", "early_stopping_patience", "max_clk_training",
         "use_scheduled_sampling", "ss_start_prob", "ss_end_prob", "ss_decay_epochs",
-        "eta_min"
+        "eta_min", "use_curriculum_learning", "curriculum_schedule"
     }
     filtered_config = {k: v for k, v in raw_config.items() if k in valid_params}
     
     # 타입 변환
     float_params = ["learning_rate", "weight_decay", "gradient_clip_norm", "ss_start_prob", "ss_end_prob", "eta_min"]
     int_params = ["epochs", "eval_every", "save_every", "early_stopping_patience", "max_clk_training", "ss_decay_epochs"]
-    bool_params = ["use_scheduled_sampling"]
+    bool_params = ["use_scheduled_sampling", "use_curriculum_learning"]
     
     for param in float_params:
         if param in filtered_config:

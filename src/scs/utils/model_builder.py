@@ -122,7 +122,6 @@ class ModelBuilder:
                 pad_token_id=pad_token_id,
                 embedding_dim=io_config["output_interface"].get("embedding_dim", 256),
                 window_size=io_config["output_interface"].get("window_size", 31),
-                summary_vectors=io_config["output_interface"].get("summary_vectors", 16),
                 decoder_layers=io_config["output_interface"].get("decoder_layers", 2),
                 decoder_heads=io_config["output_interface"].get("decoder_heads", 4),
                 dim_feedforward=io_config["output_interface"].get("dim_feedforward", 1024),
@@ -132,7 +131,7 @@ class ModelBuilder:
                     "use_positional_encoding", 
                     io_config["output_interface"].get("positional_encoding", True)
                 ),
-                use_summary_position_encoding=io_config["output_interface"].get("use_summary_position_encoding", False),
+                use_clk_position_encoding=io_config["output_interface"].get("use_clk_position_encoding", False),
                 t5_model_name=io_config["output_interface"].get("t5_model_name", "t5-base"),
                 device=device
             )
@@ -302,7 +301,7 @@ class ModelBuilder:
                 
                 # v2.0 새로운 필드들 검증 (권장사항)
                 recommended_output_fields = [
-                    "window_size", "summary_vectors", "decoder_layers", "decoder_heads", 
+                    "window_size", "decoder_layers", "decoder_heads", 
                     "dim_feedforward", "spike_gain"
                 ]
                 missing_recommended = []

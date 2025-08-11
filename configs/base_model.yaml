@@ -63,14 +63,13 @@ io_system:
   output_interface:
     embedding_dim: 512
     window_size: 15
-    summary_vectors: 16
     decoder_layers: 1
     decoder_heads: 8
     dim_feedforward: 2048
     dropout: 0.1
     spike_gain: 5.0
     use_positional_encoding: false
-    use_summary_position_encoding: false
+    use_clk_position_encoding: false
     t5_model_name: "t5-small"
 
 timing_manager:

@@ -223,8 +223,9 @@ class bAbIDataset(BaseDataset):
             if not passage_text or not question_text or not answer_text:
                 return None
             
-            # 입력 형식: "Context: [지문] Question: [질문]"
-            input_text = f"Context: {passage_text} Question: {question_text}"
+            # # 입력 형식: "Context: [지문] Question: [질문]"
+            # input_text = f"Context: {passage_text} Question: {question_text}"
+            input_text = f"{passage_text} Question: {question_text}"
             
             return {
                 'input_text': input_text,

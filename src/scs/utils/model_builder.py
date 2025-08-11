@@ -126,7 +126,6 @@ class ModelBuilder:
                 decoder_heads=io_config["output_interface"].get("decoder_heads", 4),
                 dim_feedforward=io_config["output_interface"].get("dim_feedforward", 1024),
                 dropout=io_config["output_interface"].get("dropout", 0.1),
-                spike_gain=io_config["output_interface"].get("spike_gain", 5.0),
                 use_positional_encoding=io_config["output_interface"].get(
                     "use_positional_encoding", 
                     io_config["output_interface"].get("positional_encoding", True)
@@ -293,7 +292,6 @@ class ModelBuilder:
             if "output_interface" in io_config:
                 # v2.0에서 필수적인 필드들
                 output_required = ["embedding_dim"]
-                # v1.0의 "num_heads", "num_decoder_layers" → v2.0의 "decoder_heads", "decoder_layers"로 변경됨
                 
                 for field in output_required:
                     if field not in io_config["output_interface"]:
@@ -302,7 +300,7 @@ class ModelBuilder:
                 # v2.0 새로운 필드들 검증 (권장사항)
                 recommended_output_fields = [
                     "window_size", "decoder_layers", "decoder_heads", 
-                    "dim_feedforward", "spike_gain"
+                    "dim_feedforward"
                 ]
                 missing_recommended = []
                 for field in recommended_output_fields:

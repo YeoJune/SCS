@@ -207,7 +207,6 @@ class OutputInterface(nn.Module):
         decoder_heads: int = 4,
         dim_feedforward: int = 1024,
         dropout: float = 0.1,
-        spike_gain: float = 5.0,
         use_positional_encoding: bool = True,
         use_clk_position_encoding: bool = True,
         t5_model_name: Optional[str] = None,
@@ -357,8 +356,8 @@ class OutputInterface(nn.Module):
         """스파이크 격자를 단일 히든 벡터로 압축"""
         batch_size = grid_spikes.shape[0]
         
-        # 1. 스파이크 값에 gain 적용 및 평탄화
-        spikes_input = (grid_spikes * self.spike_gain).view(batch_size, -1)  # [B, H*W]
+        # 1. 스파이크 값 평탄화
+        spikes_input = (grid_spikes).view(batch_size, -1)  # [B, H*W]
         
         # 2. Linear 압축: [B, H*W] → [B, D]
         hidden_vector = self.spatial_compressor(spikes_input)

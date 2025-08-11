@@ -67,7 +67,6 @@ io_system:
     decoder_heads: 8
     dim_feedforward: 2048
     dropout: 0.1
-    spike_gain: 5.0
     use_positional_encoding: false
     use_clk_position_encoding: false
     t5_model_name: "t5-small"
@@ -121,10 +120,15 @@ learning:
     enabled: true
     initial_frozen_patterns: # 시작할 때 동결할 파라미터들
       - "input_interface.token_embedding"
+      - "input_interface.transformer_encoder"
+      - "input_interface.pattern_mapper"
+      - "input_interface.layer_norm"
+
       - "output_interface.token_embedding"
       - "output_interface.final_projection"
-      - "input_interface.pattern_mapper"
+      - "output_interface.layer_norm"
       - "output_interface.spatial_compressor"
+      - "output_interface.transformer_decoder.layers.0.self_attn"
     unfreeze_schedule: # 에포크별 해제 스케줄
       1000: # 에포크 1000에 T5 임베딩 해제
         - "input_interface.token_embedding"

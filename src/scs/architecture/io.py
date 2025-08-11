@@ -30,9 +30,9 @@ def load_t5_embeddings(model_name: str = "t5-base"):
 
 class InputInterface(nn.Module):
     """
-    입력 인터페이스 v2.0: [CLS] 토큰 Self-Attention + Transposed CNN
+    입력 인터페이스 v2.1: [CLS] 토큰 Self-Attention + Linear 매핑
     
-    [What] 의미 요약 (Self-Attention) → [Where/How] 공간 매핑 (Transposed CNN)
+    [What] 의미 요약 (Self-Attention) → [Where/How] 공간 매핑 (Linear + Orthogonal Init)
     """
     
     def __init__(
@@ -46,7 +46,8 @@ class InputInterface(nn.Module):
         encoder_heads: int = 8,
         encoder_dropout: float = 0.1,
         dim_feedforward: int = 2048,
-        membrane_clamp_value: float = 6.0,
+        input_power: float = 0.5,
+        softmax_temperature: float = 1.0,
         use_positional_encoding: bool = True,
         t5_model_name: Optional[str] = None,
         device: str = "cuda"
@@ -58,7 +59,8 @@ class InputInterface(nn.Module):
         self.grid_width = grid_width
         self.embedding_dim = embedding_dim
         self.window_size = window_size
-        self.membrane_clamp_value = membrane_clamp_value
+        self.input_power = input_power
+        self.softmax_temperature = softmax_temperature
         self.use_positional_encoding = use_positional_encoding
         self.device = device
         
@@ -77,7 +79,7 @@ class InputInterface(nn.Module):
             self.token_embedding = nn.Embedding(vocab_size, embedding_dim)
         
         # [CLS] 토큰 (학습 가능한 파라미터)
-        self.cls_token = nn.Parameter(torch.randn(1, 1, self.embedding_dim) * 0.2)
+        self.cls_token = nn.Parameter(torch.randn(1, 1, self.embedding_dim) * 0.02)
         
         # 위치 임베딩 (선택적)
         if self.use_positional_encoding:
@@ -96,90 +98,31 @@ class InputInterface(nn.Module):
             num_layers=encoder_layers
         )
         
-        # [Where/How] Transposed CNN (공간 매핑) - 체커보드 아티팩트 방지
-        self.init_size, self.cnn_channels = self._auto_calculate_transposed_cnn()
-        self.transposed_cnn = self._build_transposed_cnn()
+        # [Where/How] Linear 매핑 레이어 (직교 초기화)
+        self.pattern_mapper = nn.Linear(
+            self.embedding_dim,
+            self.grid_height * self.grid_width
+        )
+        self._initialize_mapper()
         
         # 정규화
         self.layer_norm = nn.LayerNorm(self.embedding_dim)
         
-    def _auto_calculate_transposed_cnn(self) -> Tuple[int, List[int]]:
-        """Transposed CNN 구조 자동 계산"""
-        # 시작 크기 결정
-        init_size = 4
-        init_channels = max(32, self.embedding_dim // (init_size * init_size))
+    def _initialize_mapper(self):
+        """
+        패턴 매핑 레이어를 직교 초기화하여 흩어진 패턴을 유도.
+        """
+        # Linear 레이어의 가중치: [out_features, in_features]
+        # [H*W, D]
+        torch.nn.init.orthogonal_(self.pattern_mapper.weight)
         
-        # 업샘플링 레이어 수 계산
-        target_size = max(self.grid_height, self.grid_width)
-        num_layers = math.ceil(math.log2(target_size / init_size))
+        # 편향은 0으로 초기화
+        if self.pattern_mapper.bias is not None:
+            torch.nn.init.constant_(self.pattern_mapper.bias, 0.0)
         
-        # 채널 수 점진적 감소
-        channels = []
-        current_channels = init_channels
-        for i in range(max(1, num_layers)):
-            channels.append(current_channels)
-            current_channels = max(32, current_channels // 2)
-        
-        return init_size, channels
-    
-    def _build_transposed_cnn(self) -> nn.Module:
-        """Transposed CNN 네트워크 구성 (체커보드 아티팩트 방지)"""
-        layers = []
-        
-        # Linear projection to initial 2D
-        total_init_dim = self.cnn_channels[0] * self.init_size * self.init_size
-        layers.extend([
-            nn.Linear(self.embedding_dim, total_init_dim),
-            nn.ReLU(),
-            nn.Unflatten(1, (self.cnn_channels[0], self.init_size, self.init_size))
-        ])
-        
-        # Upsample + Conv (체커보드 아티팩트 방지)
-        current_h, current_w = self.init_size, self.init_size
-        for i, out_channels in enumerate(self.cnn_channels):
-            in_channels = self.cnn_channels[i-1] if i > 0 else self.cnn_channels[0]
-            
-            if i == len(self.cnn_channels) - 1:
-                # 마지막 레이어: 정확한 크기 맞춤
-                scale_factor_h = self.grid_height / current_h
-                scale_factor_w = self.grid_width / current_w
-                
-                layers.extend([
-                    nn.Upsample(size=(self.grid_height, self.grid_width), mode='bilinear', align_corners=False),
-                    nn.Conv2d(in_channels, 1, kernel_size=3, padding=1)  # 최종 출력은 단일 채널
-                ])
-            else:
-                # 중간 레이어: 2배 업샘플링
-                layers.extend([
-                    nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
-                    nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-                    nn.ReLU()
-                ])
-                current_h *= 2
-                current_w *= 2
-
-        final_conv_layer = layers[-1] # 마지막 Conv2d 레이어
-        
-        # 가중치를 2D 형태로 reshape하여 직교 초기화 적용
-        if isinstance(final_conv_layer, nn.Conv2d):
-            # Conv2d 가중치 텐서의 차원: (out_ch, in_ch, kH, kW)
-            # 직교 초기화는 2D 행렬에 적용되므로 reshape 필요
-            weight_shape = final_conv_layer.weight.shape
-            # (out_ch, in_ch * kH * kW) 형태로 펼침
-            reshaped_weight = final_conv_layer.weight.view(weight_shape[0], -1)
-            
-            # 직교 초기화 수행
-            torch.nn.init.orthogonal_(reshaped_weight)
-            
-            # 편향은 0으로 초기화
-            if final_conv_layer.bias is not None:
-                torch.nn.init.constant_(final_conv_layer.bias, 0.0)
-        
-        return nn.Sequential(*layers)
-    
     def forward(self, token_window: torch.Tensor) -> torch.Tensor:
         """
-        윈도우 기반 일괄 처리
+        윈도우 기반 일괄 처리 (Linear + Softmax 방식)
         
         Args:
             token_window: [B, window_size] 토큰 윈도우
@@ -212,17 +155,23 @@ class InputInterface(nn.Module):
         encoder_output = self.transformer_encoder(windowed_input)
         context_vector = encoder_output[:, 0, :]  # [CLS] 토큰만 추출
         
-        # [Where/How] Transposed CNN: 공간 매핑
-        membrane_pattern = self.transposed_cnn(context_vector)
-        membrane_pattern = membrane_pattern.squeeze(1)  # [B, H, W]
-
-        # Softmax 적용
-        input_power = 0.8
-        temperature = 0.3
-
-        batch_size, height, width = membrane_pattern.shape
-        membrane_pattern = F.softmax(membrane_pattern.view(batch_size, -1) / temperature, dim=1).view(batch_size, height, width) * (height * width * input_power)
-
+        # [Where/How] Linear 매핑 및 Softmax + Scaling 적용
+        # 1. Linear 매핑: 문맥 벡터를 그리드 로짓으로 변환
+        membrane_logits = self.pattern_mapper(context_vector)  # [B, H*W]
+        
+        # 2. Softmax를 적용하여 패턴의 '모양' 결정
+        #    Temperature를 적용하여 분포의 sharpness 조절
+        pattern_probs = F.softmax(membrane_logits / self.softmax_temperature, dim=-1)
+        
+        # 3. Scaling을 적용하여 패턴의 '총 에너지' 제어
+        total_energy = self.grid_height * self.grid_width * self.input_power
+        scaled_pattern = pattern_probs * total_energy
+        
+        # 4. Reshape하여 2D 그리드 패턴으로 복원
+        membrane_pattern = scaled_pattern.view(
+            batch_size, self.grid_height, self.grid_width
+        )
+        
         return membrane_pattern
 
 

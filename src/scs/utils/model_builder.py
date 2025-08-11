@@ -93,7 +93,7 @@ class ModelBuilder:
             
             io_config = config["io_system"]
             
-            # v2.0: InputInterface 새로운 파라미터들
+            # v2.1: InputInterface 새로운 파라미터들
             input_interface = InputInterface(
                 vocab_size=io_config["input_interface"]["vocab_size"],
                 grid_height=input_h,
@@ -104,7 +104,8 @@ class ModelBuilder:
                 encoder_heads=io_config["input_interface"].get("encoder_heads", 8),
                 encoder_dropout=io_config["input_interface"].get("encoder_dropout", 0.1),
                 dim_feedforward=io_config["input_interface"].get("dim_feedforward", 2048),
-                membrane_clamp_value=io_config["input_interface"].get("membrane_clamp_value", 6.0),
+                input_power=io_config["input_interface"].get("input_power", 0.5),
+                softmax_temperature=io_config["input_interface"].get("softmax_temperature", 1.0),
                 use_positional_encoding=io_config["input_interface"].get(
                     "use_positional_encoding", 
                     io_config["input_interface"].get("positional_encoding", True)
@@ -273,10 +274,10 @@ class ModelBuilder:
                     if field not in io_config["input_interface"]:
                         errors.append(f"io_system.input_interface에 '{field}' 필드가 필요합니다.")
                 
-                # v2.0 새로운 필드들 검증 (권장사항)
+                # v2.1 새로운 필드들 검증 (권장사항)
                 recommended_input_fields = [
                     "window_size", "encoder_layers", "encoder_heads", 
-                    "dim_feedforward", "membrane_clamp_value"
+                    "dim_feedforward", "input_power", "softmax_temperature"
                 ]
                 missing_recommended = []
                 for field in recommended_input_fields:

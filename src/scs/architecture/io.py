@@ -220,7 +220,6 @@ class OutputInterface(nn.Module):
         self.pad_token_id = pad_token_id
         self.embedding_dim = embedding_dim
         self.window_size = window_size
-        self.spike_gain = spike_gain
         self.use_positional_encoding = use_positional_encoding
         self.use_clk_position_encoding = use_clk_position_encoding
         self.device = device

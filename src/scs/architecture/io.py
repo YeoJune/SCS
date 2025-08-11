@@ -1,7 +1,8 @@
 # src/scs/architecture/io.py
 """
-입출력 인터페이스 구현 v2.0 (Phase 1 최종)
-SNN 코어를 장기 동적 메모리로, I/O를 경량 Transformer로 하는 설계 철학 구현
+입출력 인터페이스 구현 v3.0 (윈도우 기반 대칭 구조)
+입력: 토큰 윈도우 → 단일 문맥 벡터 → 공간 분산
+출력: 공간 집중 → 단일 히든 벡터 → CLK 윈도우 누적
 """
 
 import torch
@@ -30,7 +31,7 @@ def load_t5_embeddings(model_name: str = "t5-base"):
 
 class InputInterface(nn.Module):
     """
-    입력 인터페이스 v2.1: [CLS] 토큰 Self-Attention + Linear 매핑
+    입력 인터페이스 v3.0: [CLS] 토큰 Self-Attention + Linear 매핑
     
     [What] 의미 요약 (Self-Attention) → [Where/How] 공간 매핑 (Linear + Orthogonal Init)
     """
@@ -177,9 +178,9 @@ class InputInterface(nn.Module):
 
 class OutputInterface(nn.Module):
     """
-    출력 인터페이스 v2.0: CNN 공간 압축 + Transformer 디코더
+    출력 인터페이스 v3.0: Linear 공간 압축 + CLK 윈도우 누적 + Transformer 디코더
     
-    [What] 공간 정보 압축 (CNN) → [Which] 다음 토큰 결정 (Transformer Decoder)
+    [What] 공간 정보 압축 (Linear) → [Which] CLK 히든 시퀀스로 다음 토큰 결정 (Transformer Decoder)
     """
     
     def __init__(
@@ -190,14 +191,13 @@ class OutputInterface(nn.Module):
         pad_token_id: int,
         embedding_dim: int = 256,
         window_size: int = 31,
-        summary_vectors: int = 16,
         decoder_layers: int = 2,
         decoder_heads: int = 4,
         dim_feedforward: int = 1024,
         dropout: float = 0.1,
         spike_gain: float = 5.0,
         use_positional_encoding: bool = True,
-        use_summary_position_encoding: bool = False,
+        use_clk_position_encoding: bool = True,
         t5_model_name: Optional[str] = None,
         device: str = "cuda"
     ):
@@ -208,11 +208,10 @@ class OutputInterface(nn.Module):
         self.grid_width = grid_width
         self.pad_token_id = pad_token_id
         self.embedding_dim = embedding_dim
-        self.summary_vectors = summary_vectors
         self.window_size = window_size
         self.spike_gain = spike_gain
         self.use_positional_encoding = use_positional_encoding
-        self.use_summary_position_encoding = use_summary_position_encoding
+        self.use_clk_position_encoding = use_clk_position_encoding
         self.device = device
         
         # T5 임베딩 로드 및 초기화
@@ -234,16 +233,15 @@ class OutputInterface(nn.Module):
                 padding_idx=self.pad_token_id
             )
         
-        # [What] CNN Encoder (공간 압축) - Linear projection 분리
-        self.target_size, self.cnn_channels = self._auto_calculate_cnn_encoder()
-        self.cnn_encoder = self._build_cnn_encoder()
+        # [What] Linear 공간 압축 (CNN 대체)
+        self.spatial_compressor = nn.Linear(
+            self.grid_height * self.grid_width, 
+            self.embedding_dim
+        )
         
-        # CNN 출력을 memory로 변환하는 별도 projection layer
-        self.memory_projection = nn.Linear(self.cnn_channels[-1], self.embedding_dim)
-        
-        # 요약 벡터들의 위치 임베딩 (선택적)
-        if self.use_summary_position_encoding:
-            self.summary_position_embedding = nn.Embedding(self.summary_vectors, self.embedding_dim)
+        # CLK 위치 임베딩 (선택적)
+        if self.use_clk_position_encoding:
+            self.clk_position_embedding = nn.Embedding(window_size, self.embedding_dim)
         
         # 디코더 토큰들의 위치 임베딩 (선택적)
         if self.use_positional_encoding:
@@ -273,61 +271,23 @@ class OutputInterface(nn.Module):
         
         self.layer_norm = nn.LayerNorm(self.embedding_dim)
     
-    def _auto_calculate_cnn_encoder(self) -> Tuple[int, List[int]]:
-        """CNN Encoder 구조 자동 계산"""
-        # 목표 요약 벡터 개수에서 그리드 크기 결정
-        target_size = int(math.sqrt(self.summary_vectors))
-        if target_size * target_size != self.summary_vectors:
-            target_size = int(math.sqrt(self.summary_vectors)) + 1
-            self.summary_vectors = target_size * target_size
-        
-        # 다운샘플링 레이어 수 계산
-        current_size = max(self.grid_height, self.grid_width)
-        num_layers = max(1, math.ceil(math.log2(current_size / target_size)))
-        
-        # 채널 수 점진적 증가
-        channels = [1]  # 입력은 단일 채널
-        current_channels = 32
-        for i in range(num_layers):
-            channels.append(current_channels)
-            current_channels = min(256, current_channels * 2)
-        
-        return target_size, channels
-    
-    def _build_cnn_encoder(self) -> nn.Module:
-        """CNN Encoder 네트워크 구성 (Linear projection 제외)"""
-        layers = []
-        
-        # Convolution layers only (Linear projection 없음)
-        for i in range(len(self.cnn_channels) - 1):
-            in_channels = self.cnn_channels[i]
-            out_channels = self.cnn_channels[i + 1]
-            
-            layers.extend([
-                nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=2, padding=1),
-                nn.ReLU(),
-                nn.BatchNorm2d(out_channels)
-            ])
-        
-        # Adaptive pooling to exact target size
-        layers.append(nn.AdaptiveAvgPool2d((self.target_size, self.target_size)))
-        
-        return nn.Sequential(*layers)
-    
     def forward(
         self,
         grid_spikes: torch.Tensor,
-        decoder_input_ids: torch.Tensor
-    ) -> torch.Tensor:
+        decoder_input_ids: torch.Tensor,
+        hidden_states_history: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        스파이크 격자와 디코더 입력으로부터 로짓 생성 (윈도우 기반)
+        스파이크 격자와 디코더 입력으로부터 로짓 생성 (윈도우 기반 CLK 히든 시퀀스)
         
         Args:
             grid_spikes: [B, H, W] 스파이크 그리드
             decoder_input_ids: [B, seq_len] 디코더 입력 토큰들
+            hidden_states_history: [B, clk_count, D] 이전 CLK들의 히든 벡터들 (선택적)
             
         Returns:
             output_logits: [B, window_len, vocab_size] 출력 로짓 (윈도우 크기만큼)
+            updated_history: [B, new_clk_count, D] 업데이트된 히든 벡터 히스토리
         """
         if grid_spikes.dim() == 2:
             grid_spikes = grid_spikes.unsqueeze(0)
@@ -345,8 +305,14 @@ class OutputInterface(nn.Module):
         
         window_len = decoder_window.shape[1]
         
-        # [What] CNN으로 공간 압축
-        memory = self._create_memory_sequence(grid_spikes)
+        # [What] 현재 CLK의 히든 벡터 생성
+        current_hidden_vector = self._create_current_hidden_vector(grid_spikes)  # [B, D]
+        
+        # CLK 히든 시퀀스 업데이트 (윈도우 크기 제한)
+        memory_sequence = self._update_hidden_history(
+            hidden_states_history, 
+            current_hidden_vector
+        )  # [B, clk_window_len, D]
         
         # [Which] 디코더 입력 임베딩 (윈도우만)
         target_embeds = self._prepare_target_embeddings(decoder_window)
@@ -357,41 +323,59 @@ class OutputInterface(nn.Module):
         # Transformer 디코더 실행 (윈도우만 처리)
         decoder_output = self.transformer_decoder(
             tgt=target_embeds,
-            memory=memory,
+            memory=memory_sequence,
             tgt_mask=tgt_mask
         )
         
         # 최종 로짓 계산
         output_logits = self.final_projection(decoder_output)
         
-        return output_logits
+        return output_logits, memory_sequence
     
-    def _create_memory_sequence(self, grid_spikes: torch.Tensor) -> torch.Tensor:
-        """스파이크 격자를 요약 벡터 시퀀스로 변환 (수정됨)"""
+    def _create_current_hidden_vector(self, grid_spikes: torch.Tensor) -> torch.Tensor:
+        """스파이크 격자를 단일 히든 벡터로 압축"""
         batch_size = grid_spikes.shape[0]
         
-        # 1. 스파이크 값에 gain 적용 및 채널 차원 추가
-        spikes_input = (grid_spikes * self.spike_gain).unsqueeze(1)  # [B, 1, H, W]
+        # 1. 스파이크 값에 gain 적용 및 평탄화
+        spikes_input = (grid_spikes * self.spike_gain).view(batch_size, -1)  # [B, H*W]
         
-        # 2. CNN으로 특징 추출: [B, 1, H, W] → [B, C, target_size, target_size]
-        feature_map = self.cnn_encoder(spikes_input)
+        # 2. Linear 압축: [B, H*W] → [B, D]
+        hidden_vector = self.spatial_compressor(spikes_input)
         
-        # 3. 시퀀스로 변환: [B, C, target_size, target_size] → [B, summary_vectors, C]
-        B, C, H_t, W_t = feature_map.shape
-        feature_sequence = feature_map.view(B, C, -1)  # [B, C, summary_vectors]
-        feature_sequence = feature_sequence.permute(0, 2, 1)  # [B, summary_vectors, C]
+        # 3. 정규화
+        hidden_vector = self.layer_norm(hidden_vector)
         
-        # 4. 임베딩 차원으로 투영: [B, summary_vectors, C] → [B, summary_vectors, D]
-        memory_sequence = self.memory_projection(feature_sequence)
+        return hidden_vector
+    
+    def _update_hidden_history(
+        self, 
+        hidden_states_history: Optional[torch.Tensor], 
+        current_hidden_vector: torch.Tensor
+    ) -> torch.Tensor:
+        """CLK 히든 벡터 히스토리를 윈도우 크기로 제한하여 업데이트"""
         
-        # 5. 요약 벡터 위치 임베딩 추가 (선택적)
-        if self.use_summary_position_encoding:
-            positions = torch.arange(self.summary_vectors, device=self.device).unsqueeze(0).expand(batch_size, -1)
-            summary_position_embeds = self.summary_position_embedding(positions)
-            memory_sequence = memory_sequence + summary_position_embeds
+        # 현재 히든 벡터를 시퀀스 차원 추가
+        current_hidden_seq = current_hidden_vector.unsqueeze(1)  # [B, 1, D]
         
-        # 6. 정규화
-        memory_sequence = self.layer_norm(memory_sequence)
+        if hidden_states_history is None:
+            # 첫 번째 CLK인 경우
+            memory_sequence = current_hidden_seq
+        else:
+            # 윈도우 크기 제한 (오래된 것 제거)
+            if hidden_states_history.shape[1] >= self.window_size:
+                # 가장 오래된 것 제거하고 새로운 것 추가
+                trimmed_history = hidden_states_history[:, -(self.window_size-1):]
+                memory_sequence = torch.cat([trimmed_history, current_hidden_seq], dim=1)
+            else:
+                # 아직 윈도우 크기에 도달하지 않은 경우
+                memory_sequence = torch.cat([hidden_states_history, current_hidden_seq], dim=1)
+        
+        # CLK 위치 임베딩 추가 (선택적)
+        if self.use_clk_position_encoding:
+            batch_size, clk_count, embed_dim = memory_sequence.shape
+            clk_positions = torch.arange(clk_count, device=self.device).unsqueeze(0).expand(batch_size, -1)
+            clk_embeds = self.clk_position_embedding(clk_positions)
+            memory_sequence = memory_sequence + clk_embeds
         
         return memory_sequence
     

@@ -265,7 +265,7 @@ class SCSSystem(nn.Module):
         ss_prob: float = 1.0
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
         """
-        v2.0: 윈도우 기반 입력 + 상태 저장하지 않는 출력 처리
+        v3.0: 윈도우 기반 입력 + CLK 히든 시퀀스 기반 출력 처리
         """
         if max_clk is None:
             max_clk = self.timing_manager.max_processing_clk
@@ -297,8 +297,11 @@ class SCSSystem(nn.Module):
         all_logits = []
         all_logits_with_clk = []
         
-        # v2.0: decoder_input_ids 전체 시퀀스 관리
+        # v3.0: decoder_input_ids 전체 시퀀스 관리
         decoder_input_ids = torch.ones(batch_size, 1, dtype=torch.long, device=self.device)  # BOS로 시작
+        
+        # v3.0: CLK 히든 스테이트 히스토리 관리
+        hidden_states_history = None
         
         loss_timing_info = {'start_conditions': None, 'end_conditions': None}
         last_token_id = None
@@ -306,37 +309,41 @@ class SCSSystem(nn.Module):
         for clk in range(max_clk):
             self.current_clk = clk
             
-            # 시스템 업데이트
+            # 시스템 업데이트 (기존과 동일)
             current_spikes = self._phase1_compute_spikes()
             
-            # v2.0: 윈도우 기반 외부 입력
+            # v3.0: 윈도우 기반 외부 입력 (기존과 동일)
             external_input = self._get_external_input_at_clk(
                 input_schedule, clk, attention_mask
             )
             
             self._phase2_update_states(external_input, current_spikes)
             
-            # TimingManager 업데이트
+            # TimingManager 업데이트 (기존과 동일)
             acc_spikes = current_spikes.get(self.acc_node, torch.zeros_like(current_spikes[self.input_node]))
             self.timing_manager.step(clk, acc_spikes, training, input_seq_len, target_seq_len)
 
-            # 출력 시작 결정
+            # 출력 시작 결정 (기존과 동일)
             self.timing_manager.should_start_output(training, input_seq_len)
             
-            # v2.0: 출력 생성 (상태 저장하지 않는 방식)
+            # v3.0: 출력 생성 (CLK 히든 시퀀스 기반)
             if self.timing_manager.output_started:
                 output_spikes = current_spikes[self.output_node]
                 current_pos = self.timing_manager.generated_length
                 
-                # v2.0: 전체 decoder_input_ids를 OutputInterface에 전달
-                all_output_logits = self.output_interface(output_spikes, decoder_input_ids)
+                # v3.0: 히든 스테이트 히스토리와 함께 OutputInterface 호출
+                all_output_logits, hidden_states_history = self.output_interface(
+                    output_spikes, 
+                    decoder_input_ids, 
+                    hidden_states_history
+                )
                 
                 # 마지막 토큰의 로짓만 사용
                 token_logits = all_output_logits[:, -1, :]  # [B, vocab_size]
                 all_logits.append(token_logits)
                 all_logits_with_clk.append((token_logits, clk))
                 
-                # 다음 토큰 결정
+                # 다음 토큰 결정 (기존과 동일)
                 if training and target_schedule is not None and current_pos < target_seq_len:
                     # 학습 모드: scheduled sampling
                     use_teacher = torch.rand(1).item() < ss_prob
@@ -354,7 +361,7 @@ class SCSSystem(nn.Module):
                 decoder_input_ids = torch.cat([decoder_input_ids, next_token], dim=1)
                 last_token_id = next_token[0].item()
                 
-                # 종료 조건 체크
+                # 종료 조건 체크 (기존과 동일)
                 if self.timing_manager.should_end_output(
                     training, 
                     target_seq_len,

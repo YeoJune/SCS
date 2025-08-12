@@ -91,18 +91,9 @@ class AxonalConnections(nn.Module):
                         
                         if 0 <= source_i < source_h and 0 <= source_j < source_w:
                             source_idx = source_i * source_w + source_j
-                            
-                            # 가우시안 분포에서 양수/음수 혼합 초기화
-                            # 약 80% 흥분성, 20% 억제성이 되도록 바이어스 추가
-                            raw_weight = torch.randn(1).item() * weight_scale + 0.5
+                            raw_weight = torch.randn(1).item() * 0.5 + weight_scale
                             
                             adjacency[target_idx, source_idx] = abs(raw_weight)
-                            
-                            # # 약간의 양수 바이어스 (생물학적 현실성)
-                            # if torch.rand(1).item() < 0.8:  # 80% 확률로 흥분성 경향
-                            #     adjacency[target_idx, source_idx] = abs(raw_weight)
-                            # else:  # 20% 확률로 억제성 경향  
-                            #     adjacency[target_idx, source_idx] = -abs(raw_weight)
         
         return adjacency
     

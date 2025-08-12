@@ -120,7 +120,7 @@ class InputInterface(nn.Module):
         grid_height: int,
         grid_width: int,
         embedding_dim: int = 512,
-        window_size: int = 31,
+        window_size: int = 32,
         encoder_layers: int = 6,
         encoder_heads: int = 8,
         encoder_dropout: float = 0.1,
@@ -157,12 +157,9 @@ class InputInterface(nn.Module):
         else:
             self.token_embedding = nn.Embedding(vocab_size, embedding_dim)
         
-        # [CLS] 토큰
-        self.cls_token = nn.Parameter(torch.randn(1, 1, self.embedding_dim) * 0.02)
-        
         # 위치 임베딩
         if self.use_positional_encoding:
-            self.position_embedding = nn.Embedding(window_size + 1, self.embedding_dim)
+            self.position_embedding = nn.Embedding(window_size, self.embedding_dim)
         
         # Transformer Encoder (T5 순서 맞춤)
         encoder_layer = TransformerEncoderLayer(
@@ -235,9 +232,7 @@ class InputInterface(nn.Module):
         # 토큰 임베딩
         token_embeds = self.token_embedding(token_window)
         
-        # [CLS] 토큰 추가
-        cls_tokens = self.cls_token.expand(batch_size, 1, -1)
-        windowed_input = torch.cat([cls_tokens, token_embeds], dim=1)
+        windowed_input = token_embeds
         
         # 위치 임베딩 추가
         if self.use_positional_encoding:
@@ -250,7 +245,7 @@ class InputInterface(nn.Module):
         
         # Transformer Encoder (T5와 동일한 스케일의 입력)
         encoder_output = self.transformer_encoder(windowed_input)
-        context_vector = encoder_output[:, 0, :]  # [CLS] 토큰
+        context_vector = encoder_output[:, -1, :]  # 마지막 토큰
         
         # Linear 매핑 및 Softmax
         membrane_logits = self.pattern_mapper(context_vector)
@@ -284,7 +279,7 @@ class OutputInterface(nn.Module):
         grid_width: int,
         pad_token_id: int,
         embedding_dim: int = 512,
-        window_size: int = 31,
+        window_size: int = 32,
         decoder_layers: int = 6,
         decoder_heads: int = 8,
         dim_feedforward: int = 2048,

@@ -121,7 +121,7 @@ class ModelBuilder:
                 grid_width=output_w,
                 pad_token_id=pad_token_id,
                 embedding_dim=io_config["output_interface"].get("embedding_dim", 256),
-                window_size=io_config["output_interface"].get("window_size", 31),
+                window_size=io_config["output_interface"].get("window_size", 32),
                 decoder_layers=io_config["output_interface"].get("decoder_layers", 2),
                 decoder_heads=io_config["output_interface"].get("decoder_heads", 4),
                 dim_feedforward=io_config["output_interface"].get("dim_feedforward", 1024),

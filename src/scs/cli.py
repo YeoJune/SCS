@@ -544,28 +544,23 @@ def _generate_io_example_metric(model, test_loader, experiment_dir, logger, devi
                         "description": "T5 토큰 임베딩 (std≈23 예상)"
                     })
                     
-                    # Step 2: CLS 토큰 추가
-                    cls_tokens = model.input_interface.cls_token.expand(1, 1, -1)
-                    windowed_input = torch.cat([cls_tokens, token_embeds], dim=1)
-                    
-                    # Step 3: 위치 임베딩 추가
+                    # Step 2: 위치 임베딩 추가 (CLS 토큰 제거됨)
+                    windowed_input = token_embeds
                     if model.input_interface.use_positional_encoding:
                         seq_len = test_window.shape[1]
-                        positions = torch.arange(seq_len + 1, device=device).unsqueeze(0)
+                        positions = torch.arange(seq_len, device=device).unsqueeze(0)
                         position_embeds = model.input_interface.position_embedding(positions)
                         windowed_input = windowed_input + position_embeds
                     
                     traced_data["steps"].append({
-                        "name": "input_with_cls_and_pos",
+                        "name": "input_with_pos",
                         "shape": list(windowed_input.shape),
                         "mean": windowed_input.mean().item(),
                         "std": windowed_input.std().item(),
-                        "cls_mean": cls_tokens.mean().item(),
-                        "cls_std": cls_tokens.std().item(),
-                        "description": "CLS + 위치 임베딩 추가 (여전히 std≈23)"
+                        "description": "위치 임베딩 추가 (CLS 토큰 제거됨, 여전히 std≈23)"
                     })
                     
-                    # Step 4: Dropout 적용 (v5.0 새로 추가)
+                    # Step 3: Dropout 적용 (v5.0 새로 추가)
                     if hasattr(model.input_interface, 'dropout'):
                         dropped_input = model.input_interface.dropout(windowed_input)
                         traced_data["steps"].append({
@@ -577,21 +572,21 @@ def _generate_io_example_metric(model, test_loader, experiment_dir, logger, devi
                         })
                         windowed_input = dropped_input
                     
-                    # Step 5: Transformer Encoder (v5.0: 사전 정규화 제거됨)
+                    # Step 4: Transformer Encoder (v5.0: CLS 토큰 제거, 마지막 토큰 사용)
                     # norm_first=True이므로 내부에서 정규화 수행
                     encoder_output = model.input_interface.transformer_encoder(windowed_input)
-                    context_vector = encoder_output[:, 0, :]  # CLS 토큰
+                    context_vector = encoder_output[:, -1, :]  # 마지막 토큰
                     traced_data["steps"].append({
                         "name": "encoder_output",
                         "shape": list(encoder_output.shape),
                         "full_mean": encoder_output.mean().item(),
                         "full_std": encoder_output.std().item(),
-                        "cls_vector_mean": context_vector.mean().item(),
-                        "cls_vector_std": context_vector.std().item(),
-                        "description": "T5 encoder 내부 정규화로 안정화된 출력 (std≈1.0 예상)"
+                        "last_token_mean": context_vector.mean().item(),
+                        "last_token_std": context_vector.std().item(),
+                        "description": "T5 encoder 출력, 마지막 토큰을 context로 사용"
                     })
                     
-                    # Step 6: Pattern Mapper
+                    # Step 5: Pattern Mapper
                     membrane_logits = model.input_interface.pattern_mapper(context_vector)
                     traced_data["steps"].append({
                         "name": "membrane_logits",
@@ -603,7 +598,7 @@ def _generate_io_example_metric(model, test_loader, experiment_dir, logger, devi
                         "description": "직교 초기화된 linear 매핑 (std≈1.0 예상)"
                     })
                     
-                    # Step 7: 최종 막전위 패턴
+                    # Step 6: 최종 막전위 패턴
                     pattern_probs = torch.softmax(membrane_logits / model.input_interface.softmax_temperature, dim=-1)
                     total_energy = model.input_interface.grid_height * model.input_interface.grid_width * model.input_interface.input_power
                     final_pattern = pattern_probs * total_energy
@@ -708,7 +703,7 @@ def _generate_io_example_metric(model, test_loader, experiment_dir, logger, devi
             if step['name'] == 'input_token_embedding':
                 key_metrics['token_embed_std'] = step['std']
             elif step['name'] == 'encoder_output':
-                key_metrics['cls_vector_std'] = step['cls_vector_std']
+                key_metrics['last_token_std'] = step['last_token_std']
             elif step['name'] == 'membrane_logits':
                 key_metrics['membrane_logits_std'] = step['std']
             elif step['name'] == 'output_hidden_vector_analysis':
@@ -717,8 +712,8 @@ def _generate_io_example_metric(model, test_loader, experiment_dir, logger, devi
         
         logger.info("🎯 핵심 지표 요약:")
         logger.info(f"   토큰 임베딩 std: {key_metrics.get('token_embed_std', 'N/A'):.3f} (목표: ~23)")
-        logger.info(f"   CLS 벡터 std: {key_metrics.get('cls_vector_std', 'N/A'):.3f} (목표: ~1.0)")
-        logger.info(f"   막전위 로짓 std: {key_metrics.get('membrane_logits_std', 'N/A'):.3f} (목표: ~1.0)")
+        logger.info(f"   마지막 토큰 std: {key_metrics.get('last_token_std', 'N/A'):.3f} (T5 encoder 출력)")
+        logger.info(f"   막전위 로짓 std: {key_metrics.get('membrane_logits_std', 'N/A'):.3f} (직교 변환)")
         logger.info(f"   압축 파워: {key_metrics.get('compressor_power', 'N/A'):.3f} (목표: ~0.1)")
         logger.info(f"   스파스 히든 std: {key_metrics.get('sparse_hidden_std', 'N/A'):.3f} (목표: ~0.1)")
         
@@ -726,7 +721,7 @@ def _generate_io_example_metric(model, test_loader, experiment_dir, logger, devi
         logger.warning(f"⚠️ IO 파이프라인 분석 중 오류: {e}")
         import traceback
         logger.debug(traceback.format_exc())
-
+        
 # --- 모드별 실행 함수 ---
 def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
     """학습 모드 실행 (새로운 선언적 조립 구조 지원)"""

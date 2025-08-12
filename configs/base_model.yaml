@@ -50,7 +50,7 @@ axonal_connections:
 io_system:
   input_interface:
     embedding_dim: 512
-    window_size: 15
+    window_size: 16
     encoder_layers: 1
     encoder_heads: 8
     encoder_dropout: 0.1
@@ -62,7 +62,7 @@ io_system:
 
   output_interface:
     embedding_dim: 512
-    window_size: 15
+    window_size: 16
     decoder_layers: 1
     decoder_heads: 8
     dim_feedforward: 2048

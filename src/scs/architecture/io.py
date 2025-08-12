@@ -248,6 +248,7 @@ class OutputInterface(nn.Module):
             self.grid_height * self.grid_width, 
             self.embedding_dim
         )
+        self.compressor_power = nn.Parameter(torch.tensor(0.5), requires_grad=True)  # 학습 가능한 파라미터
         self._initialize_compressor()
         
         # CLK 위치 임베딩 (선택적)
@@ -361,10 +362,10 @@ class OutputInterface(nn.Module):
         # 2. Linear 압축: [B, H*W] → [B, D]
         hidden_vector = self.spatial_compressor(spikes_input)
         
-        # 3. 정규화
-        hidden_vector = self.layer_norm(hidden_vector)
+        # # 3. 정규화
+        # hidden_vector = self.layer_norm(hidden_vector)
         
-        return hidden_vector
+        return hidden_vector * self.compressor_power
     
     def _update_hidden_history(
         self, 

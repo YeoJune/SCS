@@ -361,7 +361,6 @@ class SCSSystem(nn.Module):
             
             # 시스템 업데이트 (기존과 동일)
             current_spikes = self._phase1_compute_spikes()
-            print(current_spikes)
             
             # v3.0: 윈도우 기반 외부 입력 (기존과 동일)
             external_input = self._get_external_input_at_clk(
@@ -473,9 +472,21 @@ class SCSSystem(nn.Module):
         current_spikes = {}
         for node_name, node in self.nodes.items():
             spikes = node.compute_spikes()
-            current_spikes[node_name] = spikes
+            
+            # === 핵심 수정: .data 또는 (x > 0) 재계산으로 그래프 완전 절단 ===
+            # 방법 A: .data 사용 (간단하지만 비권장)
+            # current_spikes[node_name] = spikes.data.clone()
+            
+            # 방법 B: 순방향 계산만 다시 수행 (더 안전하고 명확함)
+            with torch.no_grad():
+                # compute_spikes의 순방향 로직만 다시 가져옴
+                threshold_exceeded = node.membrane_potential - node.spike_threshold
+                not_refractory = (node.refractory_counter == 0).float()
+                pure_spikes = (threshold_exceeded > 0).float() * not_refractory
+                current_spikes[node_name] = pure_spikes
+                
         return current_spikes
-    
+
     def _phase2_update_states(
         self,
         external_input: Optional[torch.Tensor],

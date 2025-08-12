@@ -22,19 +22,19 @@ system_roles:
 brain_regions:
   IN:
     grid_size: [64, 64]
-    decay_rate: 0.9
+    decay_rate: 0.8
     distance_tau: 1.0
   ACC:
     grid_size: [64, 64]
-    decay_rate: 0.9
+    decay_rate: 0.8
     distance_tau: 1.0
   ADJ:
     grid_size: [64, 64]
-    decay_rate: 0.9
+    decay_rate: 0.8
     distance_tau: 1.0
   OUT:
     grid_size: [64, 64]
-    decay_rate: 0.9
+    decay_rate: 0.8
     distance_tau: 1.0
 
 # === 축삭 연결 (완전 오버라이드) ===
@@ -84,15 +84,24 @@ task:
 
 # === 학습 설정 오버라이드 ===
 learning:
-  epochs: 31
+  epochs: 301
   learning_rate: 5e-4
   eta_min: 2e-4
   max_clk_training: 100
   optimizer: "adamw"
   weight_decay: 1e-4
-  eval_every: 5
-  save_every: 10
+  eval_every: 10
+  save_every: 50
   early_stopping_patience: 100
+
+  use_curriculum_learning: true
+  curriculum_schedule:
+    0: 10
+    50: 20
+    100: 30
+    150: 40
+    200: 50
+    250: 100
 
 timing_manager:
   sync_ema_alpha: 0.2 # EMA 필터링 강도

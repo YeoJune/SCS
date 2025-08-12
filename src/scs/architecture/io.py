@@ -108,18 +108,6 @@ class InputInterface(nn.Module):
         
         # 정규화
         self.layer_norm = nn.LayerNorm(self.embedding_dim)
-    
-    def _initialize_compressor(self):
-        """
-        공간 압축 레이어를 직교 초기화하여 정보 손실 없는 압축 유도.
-        """
-        # Linear 레이어의 가중치: [out_features, in_features]
-        # [D, H*W]
-        torch.nn.init.orthogonal_(self.spatial_compressor.weight)
-        
-        # 편향은 0으로 초기화
-        if self.spatial_compressor.bias is not None:
-            torch.nn.init.constant_(self.spatial_compressor.bias, 0.0)
         
     def _initialize_mapper(self):
         """
@@ -248,7 +236,7 @@ class OutputInterface(nn.Module):
             self.grid_height * self.grid_width, 
             self.embedding_dim
         )
-        self.compressor_power = nn.Parameter(torch.tensor(3), requires_grad=True)  # 학습 가능한 파라미터
+        self.compressor_power = nn.Parameter(torch.tensor(3.0, dtype=torch.float32), requires_grad=True)
         self._initialize_compressor()
         
         # CLK 위치 임베딩 (선택적)

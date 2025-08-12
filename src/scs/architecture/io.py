@@ -186,6 +186,8 @@ class InputInterface(nn.Module):
             self.grid_height * self.grid_width
         )
         self._initialize_mapper()
+
+        self.mapper_norm = RMSNorm(grid_height * grid_width)
         
         # Dropout (T5 스타일, 정규화 대신 사용)
         self.dropout = nn.Dropout(encoder_dropout)
@@ -249,6 +251,7 @@ class InputInterface(nn.Module):
         
         # Linear 매핑 및 Softmax
         membrane_logits = self.pattern_mapper(context_vector)
+        membrane_logits = self.mapper_norm(membrane_logits)
         pattern_probs = F.softmax(membrane_logits / self.softmax_temperature, dim=-1)
         
         # Scaling

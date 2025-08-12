@@ -243,9 +243,6 @@ class SCSSystem(nn.Module):
         self.input_interface = input_interface
         self.output_interface = output_interface
         self.timing_manager = timing_manager
-        
-        self.previous_spikes = {}
-        self._initialize_previous_spikes()
 
         # 스파이크율 누적 변수
         self.accumulated_spike_rates = {}
@@ -253,13 +250,6 @@ class SCSSystem(nn.Module):
 
         self.eos_token_id = eos_token_id
         self.pad_token_id = output_interface.pad_token_id
-    
-    def _initialize_previous_spikes(self, batch_size: int = 1):
-        """이전 스파이크 상태 초기화 (항상 배치)"""
-        for node_name, node in self.nodes.items():
-            self.previous_spikes[node_name] = torch.zeros(
-                batch_size, node.grid_height, node.grid_width, device=self.device
-            )
 
     def _get_external_input_at_clk(
         self,
@@ -354,7 +344,6 @@ class SCSSystem(nn.Module):
         self.reset_state(batch_size)
         
         # 상태 변수 초기화
-        accumulated_spike_rates = []
         all_logits = []
         all_logits_with_clk = []
         
@@ -445,8 +434,6 @@ class SCSSystem(nn.Module):
             
             # 스파이크율 누적 (매 CLK마다)
             self._accumulate_spike_rates(current_spikes)
-            
-            self.previous_spikes = {k: v.clone() for k, v in current_spikes.items()}
 
         # 최종 출력 및 processing_info 구성
         if all_logits:
@@ -494,19 +481,14 @@ class SCSSystem(nn.Module):
         current_spikes: Dict[str, torch.Tensor]
     ):
         """Phase 2: 입력 통합 및 상태 업데이트"""
-        
-        # 지역 연결용: influence_strength 적용
-        modulated_current_spikes = {}
-        for node_name, current_spike in current_spikes.items():
-            influence = self.nodes[node_name].influence_strength
-            modulated_current_spikes[node_name] = current_spike * influence
 
         # 축삭 연결용: 순수한 스파이크
         axonal_inputs = self.axonal_connections(current_spikes)
         
         for node_name, node in self.nodes.items():
+            influence = self.nodes[node_name].influence_strength
             internal_input = self.local_connections[node_name](
-                modulated_current_spikes[node_name]  # 지역 연결은 influence 적용
+                current_spikes[node_name] * influence  # 지역 연결은 influence 적용
             )
             
             axonal_input = axonal_inputs.get(node_name)  # 축삭은 순수 스파이크
@@ -545,8 +527,6 @@ class SCSSystem(nn.Module):
         
         for node in self.nodes.values():
             node.reset_state(batch_size)
-        
-        self._initialize_previous_spikes(batch_size)
     
     def _accumulate_spike_rates(self, current_spikes: Dict[str, torch.Tensor]):
         """매 CLK마다 개별 노드의 스파이크율 편차를 누적 (설정된 노드만)"""

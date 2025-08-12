@@ -248,7 +248,7 @@ class OutputInterface(nn.Module):
             self.grid_height * self.grid_width, 
             self.embedding_dim
         )
-        self.compressor_power = nn.Parameter(torch.tensor(0.5), requires_grad=True)  # 학습 가능한 파라미터
+        self.compressor_power = nn.Parameter(torch.tensor(3), requires_grad=True)  # 학습 가능한 파라미터
         self._initialize_compressor()
         
         # CLK 위치 임베딩 (선택적)

@@ -590,6 +590,23 @@ def _generate_io_example_metric(model, test_loader, experiment_dir, logger, devi
                         "std": final_pattern_2d.std().item(),
                         "total_energy": total_energy
                     })
+
+                    # 디버깅 정보 추가
+                    print(f"🔍 디버깅 정보:")
+                    print(f"  입력 토큰 범위: {input_tokens.min()} ~ {input_tokens.max()}")
+                    print(f"  Vocab size: {model.input_interface.token_embedding.num_embeddings}")
+                    print(f"  임베딩 가중치 통계:")
+                    print(f"    mean: {model.input_interface.token_embedding.weight.mean():.6f}")
+                    print(f"    std: {model.input_interface.token_embedding.weight.std():.6f}")
+                    print(f"    min: {model.input_interface.token_embedding.weight.min():.6f}")
+                    print(f"    max: {model.input_interface.token_embedding.weight.max():.6f}")
+                    
+                    # 개별 토큰의 임베딩 확인
+                    first_token = input_tokens[0, 0].item()
+                    first_embedding = model.input_interface.token_embedding.weight[first_token]
+                    print(f"  첫 번째 토큰 ({first_token}) 임베딩 통계:")
+                    print(f"    mean: {first_embedding.mean():.6f}")
+                    print(f"    std: {first_embedding.std():.6f}")
             
             return traced_data
         

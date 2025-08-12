@@ -361,6 +361,7 @@ class SCSSystem(nn.Module):
             
             # 시스템 업데이트 (기존과 동일)
             current_spikes = self._phase1_compute_spikes()
+            print(current_spikes)
             
             # v3.0: 윈도우 기반 외부 입력 (기존과 동일)
             external_input = self._get_external_input_at_clk(

@@ -495,6 +495,122 @@ def _save_spike_visualizations(model, experiment_dir, test_loader, logger):
     except Exception as e:
         logger.warning(f"⚠️ 시각화 생성 중 오류 (무시하고 계속): {e}")
 
+def _generate_io_example_metric(model, test_loader, experiment_dir, logger, device):
+    """IO 파이프라인 중간값 추적 및 학습 전후 비교"""
+    try:
+        # 첫 번째 테스트 샘플 추출
+        first_batch = next(iter(test_loader))
+        sample_input = first_batch['input_tokens'][0:1].to(device)  # [1, seq_len]
+        sample_target = first_batch['target_tokens'][0:1].to(device)
+        sample_mask = first_batch.get('attention_mask')
+        if sample_mask is not None:
+            sample_mask = sample_mask[0:1].to(device)
+        
+        logger.info(f"🔍 분석 대상 샘플:")
+        logger.info(f"   입력 길이: {sample_input.shape[1]}")
+        logger.info(f"   타겟 길이: {sample_target.shape[1]}")
+        
+        def trace_pipeline(model, input_tokens, target_tokens, attention_mask, phase_name):
+            """파이프라인 중간값 추적"""
+            model.eval()
+            traced_data = {"phase": phase_name, "steps": []}
+            
+            with torch.no_grad():
+                # 1. InputInterface 추적
+                if hasattr(model, 'input_interface'):
+                    window_size = model.input_interface.window_size
+                    if input_tokens.shape[1] >= window_size:
+                        test_window = input_tokens[:, :window_size]
+                    else:
+                        pad_size = window_size - input_tokens.shape[1]
+                        padding = torch.zeros(1, pad_size, dtype=torch.long, device=input_tokens.device)
+                        test_window = torch.cat([padding, input_tokens], dim=1)
+                    
+                    # 토큰 임베딩
+                    token_embeds = model.input_interface.token_embedding(test_window)
+                    traced_data["steps"].append({
+                        "name": "input_token_embedding",
+                        "shape": list(token_embeds.shape),
+                        "mean": token_embeds.mean().item(),
+                        "std": token_embeds.std().item(),
+                        "min": token_embeds.min().item(),
+                        "max": token_embeds.max().item()
+                    })
+                    
+                    # CLS 토큰 추가
+                    cls_tokens = model.input_interface.cls_token.expand(1, 1, -1)
+                    windowed_input = torch.cat([cls_tokens, token_embeds], dim=1)
+                    traced_data["steps"].append({
+                        "name": "input_with_cls",
+                        "shape": list(windowed_input.shape),
+                        "mean": windowed_input.mean().item(),
+                        "std": windowed_input.std().item(),
+                        "cls_mean": cls_tokens.mean().item(),
+                        "cls_std": cls_tokens.std().item()
+                    })
+                    
+                    # 정규화
+                    normalized_input = model.input_interface.layer_norm(windowed_input)
+                    traced_data["steps"].append({
+                        "name": "input_normalized",
+                        "shape": list(normalized_input.shape),
+                        "mean": normalized_input.mean().item(),
+                        "std": normalized_input.std().item()
+                    })
+                    
+                    # Transformer Encoder
+                    encoder_output = model.input_interface.transformer_encoder(normalized_input)
+                    context_vector = encoder_output[:, 0, :]  # CLS 토큰
+                    traced_data["steps"].append({
+                        "name": "encoder_output",
+                        "shape": list(encoder_output.shape),
+                        "cls_vector_mean": context_vector.mean().item(),
+                        "cls_vector_std": context_vector.std().item()
+                    })
+                    
+                    # Pattern Mapper
+                    membrane_logits = model.input_interface.pattern_mapper(context_vector)
+                    traced_data["steps"].append({
+                        "name": "membrane_logits",
+                        "shape": list(membrane_logits.shape),
+                        "mean": membrane_logits.mean().item(),
+                        "std": membrane_logits.std().item()
+                    })
+                    
+                    # 최종 막전위 패턴
+                    pattern_probs = torch.softmax(membrane_logits / model.input_interface.softmax_temperature, dim=-1)
+                    total_energy = model.input_interface.grid_height * model.input_interface.grid_width * model.input_interface.input_power
+                    final_pattern = pattern_probs * total_energy
+                    final_pattern_2d = final_pattern.view(1, model.input_interface.grid_height, model.input_interface.grid_width)
+                    
+                    traced_data["steps"].append({
+                        "name": "final_membrane_pattern",
+                        "shape": list(final_pattern_2d.shape),
+                        "mean": final_pattern_2d.mean().item(),
+                        "std": final_pattern_2d.std().item(),
+                        "total_energy": total_energy
+                    })
+            
+            return traced_data
+        
+        # 분석 실행
+        logger.info("📊 학습 완료된 모델 파이프라인 추적 중...")
+        trained_trace = trace_pipeline(model, sample_input, sample_target, sample_mask, "trained_model")
+        
+        # 결과 저장
+        metric_dir = experiment_dir / "io_example_metrics"
+        metric_dir.mkdir(exist_ok=True)
+        
+        import json
+        with open(metric_dir / "pipeline_trace_trained.json", 'w') as f:
+            json.dump(trained_trace, f, indent=2)
+        
+        logger.info(f"✅ IO 파이프라인 분석 완료: {metric_dir}")
+        logger.info(f"   📊 추적된 단계 수: {len(trained_trace['steps'])}")
+        
+    except Exception as e:
+        logger.warning(f"⚠️ IO 파이프라인 분석 중 오류: {e}")
+
 # --- 모드별 실행 함수 ---
 def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
     """학습 모드 실행 (새로운 선언적 조립 구조 지원)"""
@@ -691,6 +807,9 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
         
         logger.info("🎨 스파이크 패턴 시각화 생성 중...")
         _save_spike_visualizations(model, experiment_dir, test_loader, logger)
+        
+        _generate_io_example_metric(model, test_loader, experiment_dir, logger, device)
+
 
     except Exception as e:
         logger.error(f"❌ 학습 중 치명적인 오류 발생: {e}", exc_info=True)

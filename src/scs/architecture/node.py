@@ -24,11 +24,12 @@ class SpikeNode(nn.Module):
         self,
         grid_height: int,
         grid_width: int,
-        decay_rate: float = 0.9,
-        spike_threshold: float = 0.0,
-        refractory_base: int = 3,
-        refractory_adaptive_factor: float = 10.0,
-        surrogate_beta: float = 10.0,
+        decay_rate: float = 0.8,
+        refractory_damping_factor: float = 0.2,
+        spike_threshold: float = 1.0,
+        refractory_base: int = 1,
+        refractory_adaptive_factor: float = 5.0,
+        surrogate_beta: float = 3.0,
         ema_alpha: float = 0.1,  # EMA 감쇠 계수
         device: str = "cuda"
     ):
@@ -37,6 +38,7 @@ class SpikeNode(nn.Module):
         self.grid_height = grid_height
         self.grid_width = grid_width
         self.decay_rate = decay_rate
+        self.refractory_damping_factor = refractory_damping_factor
         self.spike_threshold = spike_threshold
         self.refractory_base = refractory_base
         self.refractory_adaptive_factor = refractory_adaptive_factor
@@ -166,8 +168,19 @@ class SpikeNode(nn.Module):
         원본: V_i(t+1) = λ * (V_i(t) + I_total(t))
         벡터화: 2차원 격자 전체에 element-wise 연산
         """
-        # 막전위 업데이트 (벡터화: 문서 명세)
-        new_potential = self.decay_rate * self.membrane_potential + total_input        
+        
+        # 휴지기 상태 마스크 생성 (휴지기면 True)
+        is_refractory = (self.refractory_counter > 0)
+        
+        # 조건부로 total_input의 크기 조절
+        damped_input = torch.where(
+            is_refractory,
+            total_input * self.refractory_damping_factor,
+            total_input
+        )
+        
+        # 막전위 업데이트
+        new_potential = self.decay_rate * self.membrane_potential + damped_input
         
         return new_potential
     

@@ -24,7 +24,8 @@ brain_regions:
 
 # === 스파이크 역학 ===
 spike_dynamics:
-  threshold: 1.0
+  refractory_damping_factor: 0.2
+  spike_threshold: 1.0
   refractory_base: 1
   refractory_adaptive_factor: 5.0
   surrogate_beta: 3.0

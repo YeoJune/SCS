@@ -59,9 +59,9 @@ task:
 
 # === 학습 설정 오버라이드 ===
 learning:
-  epochs: 501
-  learning_rate: 2e-4
-  eta_min: 1e-4
+  epochs: 251
+  learning_rate: 5e-4
+  eta_min: 2e-4
   max_clk_training: 100
   optimizer: "adamw"
   weight_decay: 1e-4
@@ -74,10 +74,10 @@ learning:
   curriculum_schedule:
     0: 10
     50: 20
-    150: 30
-    250: 40
-    350: 50
-    450: 60
+    100: 30
+    150: 40
+    200: 50
+    250: 100
 
 timing_manager:
   sync_ema_alpha: 0.1 # EMA 필터링 강도

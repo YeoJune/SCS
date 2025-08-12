@@ -100,7 +100,7 @@ learning:
 
   spike_reg_weight: 1.0 # 스파이크 정규화 가중치
   node_target_spike_rates: # 이 노드들만 정규화됨
-    IN: 0.05
+    IN: 0.1
     OUT: 0.1
 
   timing_weight: 0.0 # 타이밍 손실 가중치

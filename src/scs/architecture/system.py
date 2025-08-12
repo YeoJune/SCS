@@ -471,15 +471,7 @@ class SCSSystem(nn.Module):
         """Phase 1: 현재 막전위 기준 스파이크 계산"""
         current_spikes = {}
         for node_name, node in self.nodes.items():
-            spikes = node.compute_spikes()
-            
-            # === 핵심 수정: .data 또는 (x > 0) 재계산으로 그래프 완전 절단 ===
-            # 방법 A: .data 사용 (간단하지만 비권장)
-            # current_spikes[node_name] = spikes.data.clone()
-            
-            # 방법 B: 순방향 계산만 다시 수행 (더 안전하고 명확함)
             with torch.no_grad():
-                # compute_spikes의 순방향 로직만 다시 가져옴
                 threshold_exceeded = node.membrane_potential - node.spike_threshold
                 not_refractory = (node.refractory_counter == 0).float()
                 pure_spikes = (threshold_exceeded > 0).float() * not_refractory

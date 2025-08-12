@@ -170,12 +170,13 @@ class InputInterface(nn.Module):
             nhead=encoder_heads,
             dim_feedforward=dim_feedforward,
             dropout=encoder_dropout,
-            norm_first=True,  # 🔥 T5와 동일한 순서: Input → Norm → Attention
+            norm_first=True,
             batch_first=True
         )
         self.transformer_encoder = TransformerEncoder(
             encoder_layer,
-            num_layers=encoder_layers
+            num_layers=encoder_layers,
+            enable_nested_tensor=False
         )
         
         # T5 Encoder 이식
@@ -246,9 +247,6 @@ class InputInterface(nn.Module):
         
         # Dropout 적용 (T5 스타일)
         windowed_input = self.dropout(windowed_input)
-        
-        # 🔥 사전 정규화 제거! T5 encoder가 내부에서 정규화 수행
-        # windowed_input = self.layer_norm(windowed_input)  # ← 이 라인 제거됨
         
         # Transformer Encoder (T5와 동일한 스케일의 입력)
         encoder_output = self.transformer_encoder(windowed_input)
@@ -334,9 +332,7 @@ class OutputInterface(nn.Module):
             self.grid_height * self.grid_width, 
             self.embedding_dim
         )
-        # 🔥 T5 메모리 스케일 맞춤: 0.1로 초기값 축소
-        # T5 Encoder Final LayerNorm: mean=0.24, std=0.079
-        # 이 작은 스케일에서 시작하여 점진적 학습 유도
+        
         self.compressor_power = nn.Parameter(torch.tensor(0.1, dtype=torch.float32), requires_grad=True)
         self._initialize_compressor()
         
@@ -478,7 +474,7 @@ class OutputInterface(nn.Module):
         # 정규화 (std=1.0)
         hidden_vector = self.layer_norm(hidden_vector)
         
-        # T5 메모리 스케일 맞춤 (초기값 0.1 → std≈0.1, T5의 std≈0.08과 유사)
+        # T5 메모리 스케일 맞춤
         return hidden_vector * self.compressor_power
     
     def _update_hidden_history(

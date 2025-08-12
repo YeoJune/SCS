@@ -42,52 +42,27 @@ axonal_connections:
     # 기본 정보 처리 경로
     - source: "IN"
       target: "ADJ"
-      kernel_size: 5
-      stride: 1
-      padding: 2
-      dilation: 1
-      weight_scale: 0.7
-
-    - source: "ADJ"
-      target: "OUT"
-      kernel_size: 3
-      stride: 1
-      padding: 1
-      dilation: 1
+      stride: 2
       weight_scale: 0.9
 
-    # 모니터링 및 조절 경로
     - source: "ADJ"
-      target: "ACC"
-      kernel_size: 3
-      stride: 1
-      padding: 1
-      dilation: 1
-      weight_scale: 0.6
+      target: "IN"
+      stride: 4
+      weight_scale: 0.2
 
-    - source: "ACC"
+    - source: "ADJ"
+      target: "OUT"
+      stride: 2
+      weight_scale: 0.9
+
+    - source: "OUT"
       target: "ADJ"
-      kernel_size: 7
-      stride: 1
-      padding: 3
-      dilation: 1
-      weight_scale: 0.4
-
-    # 보조 경로 (컨텍스트 유지)
-    - source: "IN"
-      target: "ACC"
-      kernel_size: 1
-      stride: 1
-      padding: 0
-      dilation: 1
-      weight_scale: 0.3
+      stride: 4
+      weight_scale: 0.2
 
     - source: "IN"
       target: "OUT"
-      kernel_size: 1
-      stride: 1
-      padding: 0
-      dilation: 1
+      stride: 4
       weight_scale: 0.3
 
 # === 작업 설정 오버라이드 ===

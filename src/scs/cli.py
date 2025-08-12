@@ -84,157 +84,77 @@ def calculate_conv2d_output_size(input_size: int, kernel_size: int, stride: int 
     return (input_size + 2 * padding - dilation * (kernel_size - 1) - 1) // stride + 1
 
 
-def validate_axonal_connections(config: Dict[str, Any]) -> List[str]:
-    """축삭 연결의 차원 호환성 검증"""
-    errors = []
-    
-    if "brain_regions" not in config or "axonal_connections" not in config:
-        return errors
-    
-    brain_regions = config["brain_regions"]
-    connections = config["axonal_connections"].get("connections", [])
-    
-    # 각 타겟 노드별로 연결들을 그룹화
-    target_connections = {}
-    for conn in connections:
-        source = conn.get("source")
-        target = conn.get("target")
-        
-        if not source or not target:
-            continue
-            
-        if target not in target_connections:
-            target_connections[target] = []
-        target_connections[target].append(conn)
-    
-    # 각 타겟 노드에 대해 차원 검증
-    for target, target_conns in target_connections.items():
-        if target not in brain_regions:
-            continue
-            
-        target_grid_size = brain_regions[target].get("grid_size")
-        if not target_grid_size or len(target_grid_size) != 2:
-            continue
-            
-        target_h, target_w = target_grid_size
-        
-        for conn in target_conns:
-            source = conn["source"]
-            if source not in brain_regions:
-                continue
-                
-            source_grid_size = brain_regions[source].get("grid_size")
-            if not source_grid_size or len(source_grid_size) != 2:
-                continue
-                
-            source_h, source_w = source_grid_size
-            
-            # Conv2d 파라미터 추출
-            kernel_size = conn.get("kernel_size", 1)
-            stride = conn.get("stride", 1)
-            padding = conn.get("padding", 0)
-            dilation = conn.get("dilation", 1)
-            
-            # 출력 크기 계산
-            try:
-                output_h = calculate_conv2d_output_size(source_h, kernel_size, stride, padding, dilation)
-                output_w = calculate_conv2d_output_size(source_w, kernel_size, stride, padding, dilation)
-                
-                # 타겟 크기와 비교
-                if output_h != target_h or output_w != target_w:
-                    errors.append(
-                        f"축삥 연결 차원 불일치: {source}→{target}\n"
-                        f"   소스 크기: {source_grid_size}, 타겟 크기: {target_grid_size}\n"
-                        f"   Conv2d 파라미터: kernel_size={kernel_size}, stride={stride}, padding={padding}, dilation={dilation}\n"
-                        f"   계산된 출력 크기: [{output_h}, {output_w}] (예상: [{target_h}, {target_w}])\n"
-                        f"   해결책: padding을 조정하거나 다른 Conv2d 파라미터를 수정하세요."
-                    )
-                    
-            except Exception as calc_error:
-                errors.append(
-                    f"축삥 연결 {source}→{target}의 차원 계산 중 오류: {calc_error}"
-                )
-    
-    return errors
-
-
 # --- 설정 파일 검증 모드 ---
 def validate_mode(args: argparse.Namespace):
-    """설정 파일 구조 검증 모드"""
-    print("🔍 설정 파일 구조 검증을 시작합니다...")
-    
-    try:
-        # 설정 파일 로드
-        config_path = Path(args.config)
-        if not config_path.is_absolute():
-            config_path = Path.cwd() / config_path
-        config = load_config(config_path)
-        
-        # ModelBuilder를 통한 기본 구조 검증
-        validation_errors = ModelBuilder.validate_config_structure(config)
-        
-        # 축삥 연결 차원 검증 추가
-        dimension_errors = validate_axonal_connections(config)
-        
-        all_errors = validation_errors + dimension_errors
-        
-        if not all_errors:
-            print("✅ 설정 파일 구조가 올바릅니다!")
-            
-            # 간단한 모델 생성 테스트 (실제 디바이스 사용 안함)
-            try:
-                model = ModelBuilder.build_scs_from_config(config, device="cpu")
-                total_params = sum(p.numel() for p in model.parameters())
-                print(f"📊 모델 정보:")
-                print(f"   - 총 매개변수: {total_params:,}")
-                print(f"   - 뇌 영역 수: {len(config['brain_regions'])}")
-                print(f"   - 축삭 연결 수: {len(config['axonal_connections']['connections'])}")
-                print(f"   - 입력 노드: {config['system_roles']['input_node']}")
-                print(f"   - 출력 노드: {config['system_roles']['output_node']}")
-                
-                # 축별 연결 차원 정보 출력
-                print(f"📐 축삭 연결 차원 검증:")
-                for conn in config['axonal_connections']['connections']:
-                    source = conn['source']
-                    target = conn['target']
-                    source_size = config['brain_regions'][source]['grid_size']
-                    target_size = config['brain_regions'][target]['grid_size']
-                    
-                    kernel_size = conn.get('kernel_size', 1)
-                    stride = conn.get('stride', 1)
-                    padding = conn.get('padding', 0)
-                    dilation = conn.get('dilation', 1)
-                    
-                    output_h = calculate_conv2d_output_size(source_size[0], kernel_size, stride, padding, dilation)
-                    output_w = calculate_conv2d_output_size(source_size[1], kernel_size, stride, padding, dilation)
-                    
-                    print(f"   - {source}→{target}: {source_size} → [{output_h}, {output_w}] (타겟: {target_size})")
-                
-                print("✅ 모델 생성 및 차원 검증 테스트 성공!")
-            except Exception as model_error:
-                print(f"⚠️  모델 생성 테스트 실패: {model_error}")
-                return False
-                
-        else:
-            print("❌ 설정 파일에서 다음 오류들이 발견되었습니다:")
-            for i, error in enumerate(all_errors, 1):
-                print(f"   {i}. {error}")
-            
-            # 차원 오류가 있을 경우 도움말 제공
-            if dimension_errors:
-                print("\n💡 축삭 연결 차원 문제 해결 가이드:")
-                print("   1. Conv2d 출력 크기 공식: floor((Input + 2*Padding - Dilation*(Kernel-1) - 1) / Stride + 1)")
-                print("   2. 동일한 크기 유지: stride=1일 때 padding = (kernel_size-1)/2")
-                print("   3. 크기 축소: stride > 1 또는 padding을 줄이세요")
-                print("   4. 온라인 계산기: https://pytorch.org/docs/stable/generated/torch.nn.Conv2d.html")
-            
-            return False
-            
-        return True
-        
-    except Exception as e:
-        print(f"❌ 설정 파일 검증 중 오류 발생: {e}")
-        return False
+   """설정 파일 구조 검증 모드"""
+   print("🔍 설정 파일 구조 검증을 시작합니다...")
+   
+   try:
+       # 설정 파일 로드
+       config_path = Path(args.config)
+       if not config_path.is_absolute():
+           config_path = Path.cwd() / config_path
+       config = load_config(config_path)
+       
+       # ModelBuilder를 통한 기본 구조 검증
+       validation_errors = ModelBuilder.validate_config_structure(config)
+       
+       all_errors = validation_errors
+       
+       if not all_errors:
+           print("✅ 설정 파일 구조가 올바릅니다!")
+           
+           # 간단한 모델 생성 테스트 (실제 디바이스 사용 안함)
+           try:
+               model = ModelBuilder.build_scs_from_config(config, device="cpu")
+               total_params = sum(p.numel() for p in model.parameters())
+               print(f"📊 모델 정보:")
+               print(f"   - 총 매개변수: {total_params:,}")
+               print(f"   - 뇌 영역 수: {len(config['brain_regions'])}")
+               print(f"   - 축삭 연결 수: {len(config['axonal_connections']['connections'])}")
+               print(f"   - 입력 노드: {config['system_roles']['input_node']}")
+               print(f"   - 출력 노드: {config['system_roles']['output_node']}")
+               
+               # 축삭 연결 차원 정보 출력 (새로운 stride 방식)
+               print(f"📐 축삭 연결 차원 검증:")
+               for conn in config['axonal_connections']['connections']:
+                   source = conn['source']
+                   target = conn['target']
+                   source_size = config['brain_regions'][source]['grid_size']
+                   target_size = config['brain_regions'][target]['grid_size']
+                   
+                   stride = conn.get('stride', 4)  # 새로운 stride 기본값
+                   
+                   # stride 기반 샘플링 개수 계산
+                   source_samples_h = source_size[0] // stride
+                   source_samples_w = source_size[1] // stride
+                   
+                   # 타겟 stride 계산
+                   target_stride_h = target_size[0] // source_samples_h if source_samples_h > 0 else target_size[0]
+                   target_stride_w = target_size[1] // source_samples_w if source_samples_w > 0 else target_size[1]
+                   
+                   total_connections = source_samples_h * source_samples_w
+                   
+                   print(f"   - {source}→{target}: {source_size} (stride:{stride}) → {total_connections}개 연결 → {target_size}")
+                   print(f"     샘플: {source_samples_h}x{source_samples_w}, 타겟 stride: {target_stride_h}x{target_stride_w}")
+               
+               print("✅ 모델 생성 및 차원 검증 테스트 성공!")
+           except Exception as model_error:
+               print(f"⚠️  모델 생성 테스트 실패: {model_error}")
+               return False
+               
+       else:
+           print("❌ 설정 파일에서 다음 오류들이 발견되었습니다:")
+           for i, error in enumerate(all_errors, 1):
+               print(f"   {i}. {error}")
+           
+           return False
+           
+       return True
+       
+   except Exception as e:
+       print(f"❌ 설정 파일 검증 중 오류 발생: {e}")
+       return False
 
 
 # --- 데이터셋 이름 추출 헬퍼 ---
@@ -721,7 +641,7 @@ def _generate_io_example_metric(model, test_loader, experiment_dir, logger, devi
         logger.warning(f"⚠️ IO 파이프라인 분석 중 오류: {e}")
         import traceback
         logger.debug(traceback.format_exc())
-        
+
 # --- 모드별 실행 함수 ---
 def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
     """학습 모드 실행 (새로운 선언적 조립 구조 지원)"""
@@ -740,8 +660,7 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
         # 2. 설정 파일 사전 검증 (차원 검증 포함)
         logger.info("📋 설정 파일 구조 및 차원 검증 중...")
         validation_errors = ModelBuilder.validate_config_structure(config)
-        dimension_errors = validate_axonal_connections(config)
-        all_errors = validation_errors + dimension_errors
+        all_errors = validation_errors
         
         if all_errors:
             logger.error("❌ 설정 파일 검증 실패:")
@@ -1028,8 +947,7 @@ def evaluate_mode(args: argparse.Namespace):
         # 3. 설정 파일 검증 (경고만, 평가는 계속)
         logger.info("📋 저장된 설정 파일 검증 중...")
         validation_errors = ModelBuilder.validate_config_structure(config)
-        dimension_errors = validate_axonal_connections(config)
-        all_errors = validation_errors + dimension_errors
+        all_errors = validation_errors
         
         if all_errors:
             logger.warning("⚠️ 저장된 설정 파일에 일부 문제가 있지만 평가를 계속합니다:")

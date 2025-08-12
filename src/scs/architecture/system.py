@@ -13,7 +13,12 @@ from .timing import TimingManager
 
 class AxonalConnections(nn.Module):
     """
-    인접행렬 기반 축삭 연결 - 자연스러운 흥분성/억제성 학습
+    Stride 기반 축삭 연결 - 간격을 두고 규칙적으로 연결
+    
+    핵심 아이디어:
+    - Source에서 stride만큼 띄워서 샘플링
+    - Target도 동일한 개수가 되도록 stride 스케일링
+    - 1:1 대응으로 깔끔하게 연결
     """
     
     def __init__(
@@ -31,74 +36,99 @@ class AxonalConnections(nn.Module):
         # 인접행렬들을 저장할 ParameterDict
         self.adjacency_matrices = nn.ParameterDict()
         
-        self._initialize_adjacency_connections()
+        self._initialize_stride_connections()
 
     def _get_grid_size(self, node_name: str) -> tuple:
         """노드의 그리드 크기 가져오기"""
         return self.node_grid_sizes.get(node_name, (64, 64))
     
-    def _initialize_adjacency_connections(self):
-        """Conv2d 설정을 기반으로 인접행렬 연결 초기화 - 자연스러운 양수/음수 혼합"""
+    def _initialize_stride_connections(self):
+        """Stride 기반 축삭 연결 초기화"""
         for conn in self.connections:
             source = conn["source"]
             target = conn["target"]
-            kernel_size = conn["kernel_size"]
-            stride = conn.get("stride", 1)
-            padding = conn.get("padding", 0)
-            dilation = conn.get("dilation", 1)
-            weight_scale = conn["weight_scale"]
+            stride = conn.get("stride", 4)  # 기본 4칸 간격
+            weight_scale = conn.get("weight_scale", 1.0)
             
             conn_key = f"{source}_to_{target}"
             
-            # 인접행렬 생성 (양수/음수 혼합 초기화)
-            adjacency_matrix = self._create_adjacency_with_mixed_signs(
-                source, target, kernel_size, stride, padding, dilation, weight_scale
+            adjacency_matrix = self._create_stride_adjacency(
+                source, target, stride, weight_scale
             )
             
             self.adjacency_matrices[conn_key] = nn.Parameter(adjacency_matrix)
     
-    def _create_adjacency_with_mixed_signs(
+    def _create_stride_adjacency(
         self, 
         source: str, 
         target: str, 
-        kernel_size: int, 
         stride: int, 
-        padding: int, 
-        dilation: int, 
         weight_scale: float
     ) -> torch.Tensor:
-        """양수/음수 혼합된 인접행렬 초기화"""
+        """
+        Stride 기반 인접행렬 생성
         
+        Args:
+            source: 소스 노드명
+            target: 타겟 노드명  
+            stride: 소스에서의 샘플링 간격
+            weight_scale: 가중치 스케일
+            
+        Returns:
+            adjacency: [target_size, source_size] 인접행렬
+        """
         source_h, source_w = self._get_grid_size(source)
         target_h, target_w = self._get_grid_size(target)
         
         source_size = source_h * source_w
         target_size = target_h * target_w
         
+        # 소스 샘플링 개수 계산
+        source_samples_h = source_h // stride
+        source_samples_w = source_w // stride
+        
+        # 타겟 stride 계산 (동일한 개수 맞추기)
+        target_stride_h = target_h // source_samples_h if source_samples_h > 0 else target_h
+        target_stride_w = target_w // source_samples_w if source_samples_w > 0 else target_w
+        
+        # 인접행렬 초기화
         adjacency = torch.zeros(target_size, source_size, device=self.device)
         
-        for target_i in range(target_h):
-            for target_j in range(target_w):
-                target_idx = target_i * target_w + target_j
+        # 1:1 대응 연결 생성
+        for i in range(min(source_samples_h, target_h // target_stride_h)):
+            for j in range(min(source_samples_w, target_w // target_stride_w)):
+                # 소스 위치 (stride 간격으로 샘플링)
+                source_i = i * stride
+                source_j = j * stride
                 
-                source_center_i = target_i * stride - padding
-                source_center_j = target_j * stride - padding
+                # 타겟 위치 (스케일링된 stride로 배치)
+                target_i = i * target_stride_h
+                target_j = j * target_stride_w
                 
-                for ki in range(kernel_size):
-                    for kj in range(kernel_size):
-                        source_i = source_center_i + ki * dilation
-                        source_j = source_center_j + kj * dilation
-                        
-                        if 0 <= source_i < source_h and 0 <= source_j < source_w:
-                            source_idx = source_i * source_w + source_j
-                            raw_weight = torch.randn(1).item() * 0.5 + weight_scale
-                            
-                            adjacency[target_idx, source_idx] = abs(raw_weight)
+                # 경계 검사
+                if (source_i < source_h and source_j < source_w and 
+                    target_i < target_h and target_j < target_w):
+                    
+                    # 1D 인덱스 변환
+                    source_idx = source_i * source_w + source_j
+                    target_idx = target_i * target_w + target_j
+                    
+                    # 가중치 설정 (가우시안 노이즈 + 스케일)
+                    weight = torch.randn(1).item() * 0.3 + weight_scale
+                    adjacency[target_idx, source_idx] = abs(weight)
         
         return adjacency
     
     def forward(self, node_spikes: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """인접행렬 기반 축삭 연결 처리 - 마스크 제거"""
+        """
+        Stride 기반 축삭 신호 전파
+        
+        Args:
+            node_spikes: {node_name: [B, H, W]} 노드별 스파이크
+            
+        Returns:
+            axonal_inputs: {node_name: [B, H, W]} 노드별 축삭 입력
+        """
         axonal_inputs = {}
         
         for conn in self.connections:
@@ -114,26 +144,66 @@ class AxonalConnections(nn.Module):
             if conn_key not in self.adjacency_matrices:
                 continue
             
+            # 배치 차원 정규화
             if source_spikes.dim() == 2:
                 source_spikes = source_spikes.unsqueeze(0)
             
             batch_size = source_spikes.shape[0]
             
-            # 인접행렬의 양수/음수 가중치가 흥분성/억제성을 결정
+            # 2D → 1D 평탄화
             flat_spikes = source_spikes.view(batch_size, -1)
             
+            # 인접행렬 곱셈: [B, source_size] @ [source_size, target_size] = [B, target_size]
             adjacency = self.adjacency_matrices[conn_key]
             batch_output = flat_spikes @ adjacency.T
             
+            # 1D → 2D 복원
             target_h, target_w = self._get_grid_size(target)
             axonal_signal = batch_output.view(batch_size, target_h, target_w)
             
+            # 다중 소스 신호 누적
             if target not in axonal_inputs:
                 axonal_inputs[target] = axonal_signal
             else:
                 axonal_inputs[target] += axonal_signal
         
         return axonal_inputs
+    
+    def get_connection_info(self) -> Dict[str, Dict]:
+        """연결 정보 출력 (디버깅용)"""
+        info = {}
+        
+        for conn in self.connections:
+            source = conn["source"]
+            target = conn["target"]
+            stride = conn.get("stride", 4)
+            
+            source_h, source_w = self._get_grid_size(source)
+            target_h, target_w = self._get_grid_size(target)
+            
+            source_samples_h = source_h // stride
+            source_samples_w = source_w // stride
+            
+            target_stride_h = target_h // source_samples_h if source_samples_h > 0 else target_h
+            target_stride_w = target_w // source_samples_w if source_samples_w > 0 else target_w
+            
+            conn_key = f"{source}_to_{target}"
+            
+            # 실제 연결 개수 계산
+            adjacency = self.adjacency_matrices[conn_key]
+            num_connections = (adjacency > 0).sum().item()
+            
+            info[conn_key] = {
+                "source_grid": (source_h, source_w),
+                "target_grid": (target_h, target_w),
+                "source_stride": stride,
+                "target_stride": (target_stride_h, target_stride_w),
+                "source_samples": (source_samples_h, source_samples_w),
+                "total_connections": num_connections,
+                "connection_density": num_connections / (source_h * source_w * target_h * target_w)
+            }
+        
+        return info
 
 class SCSSystem(nn.Module):
     """

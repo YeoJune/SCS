@@ -38,10 +38,7 @@ axonal_connections:
   connections:
     - source: "IN"
       target: "OUT"
-      kernel_size: 1
       stride: 1
-      padding: 0
-      dilation: 1
       weight_scale: 1.0
 
 # === 작업 설정 오버라이드 ===

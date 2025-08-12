@@ -223,7 +223,7 @@ class ModelBuilder:
                 errors.append("axonal_connections에 'connections' 리스트가 필요합니다.")
             else:
                 for i, conn in enumerate(config["axonal_connections"]["connections"]):
-                    required_conn_fields = ["source", "target", "kernel_size", "weight_scale"]
+                    required_conn_fields = ["source", "target", "stride", "weight_scale"]
                     for field in required_conn_fields:
                         if field not in conn:
                             errors.append(f"연결 {i}에 '{field}' 필드가 필요합니다.")

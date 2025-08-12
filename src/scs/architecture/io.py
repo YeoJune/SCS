@@ -15,6 +15,18 @@ import math
 import warnings
 
 
+class RMSNorm(nn.Module):
+    """RMS Normalization (T5 스타일)"""
+    def __init__(self, dim, eps=1e-6):
+        super().__init__()
+        self.scale = nn.Parameter(torch.ones(dim))
+        self.eps = eps
+    
+    def forward(self, x):
+        rms = torch.sqrt(torch.mean(x**2, dim=-1, keepdim=True) + self.eps)
+        return self.scale * x / rms
+
+
 def load_t5_embeddings(model_name: str = "t5-base"):
     """T5 체크포인트에서 임베딩 로드"""
     print(f"Loading T5 embeddings from {model_name}...")
@@ -169,7 +181,7 @@ class InputInterface(nn.Module):
         self._initialize_mapper()
         
         # 정규화
-        self.layer_norm = nn.LayerNorm(self.embedding_dim)
+        self.layer_norm = RMSNorm(self.embedding_dim)
     
     def _transplant_t5_encoder(self, t5_model):
         """T5 encoder 가중치 이식"""
@@ -339,7 +351,7 @@ class OutputInterface(nn.Module):
                 self.final_projection.weight.copy_(t5_data['lm_head_weights'])
             print(f"Loaded T5 LM head: {self.final_projection.weight.shape}")
         
-        self.layer_norm = nn.LayerNorm(self.embedding_dim)
+        self.layer_norm = RMSNorm(self.embedding_dim)
     
     def _transplant_t5_decoder(self, t5_model):
         """T5 decoder 가중치 이식"""

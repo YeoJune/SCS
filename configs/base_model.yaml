@@ -95,9 +95,9 @@ learning:
   optimizer: "adamw"
 
   # Scheduled Sampling
-  use_scheduled_sampling: false
-  ss_start_prob: 1.0
-  ss_end_prob: 0.05
+  use_scheduled_sampling: true
+  ss_start_prob: 0.0
+  ss_end_prob: 0.0
   ss_decay_epochs: 30
 
   spike_reg_weight: 1.0 # 스파이크 정규화 가중치

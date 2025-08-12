@@ -24,7 +24,7 @@ brain_regions:
 
 # === 스파이크 역학 ===
 spike_dynamics:
-  threshold: 3.0
+  threshold: 1.0
   refractory_base: 1
   refractory_adaptive_factor: 1.0
   surrogate_beta: 3.0
@@ -52,7 +52,7 @@ io_system:
     encoder_heads: 8
     encoder_dropout: 0.1
     dim_feedforward: 2048
-    input_power: 0.15
+    input_power: 0.05
     softmax_temperature: 0.5
     use_positional_encoding: false
     t5_model_name: "t5-small"

@@ -497,12 +497,12 @@ class SCSSystem(nn.Module):
         
         # 지역 연결용: influence_strength 적용
         modulated_previous_spikes = {}
-        for node_name, prev_spikes in self.previous_spikes.items():
+        for node_name, prev_spikes in current_spikes.items():
             influence = self.nodes[node_name].influence_strength
             modulated_previous_spikes[node_name] = prev_spikes * influence
         
         # 축삭 연결용: 순수한 스파이크 (influence_strength 제거)
-        axonal_inputs = self.axonal_connections(self.previous_spikes)
+        axonal_inputs = self.axonal_connections(current_spikes)
         
         for node_name, node in self.nodes.items():
             internal_input = self.local_connections[node_name](

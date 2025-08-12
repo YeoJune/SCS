@@ -495,20 +495,21 @@ class SCSSystem(nn.Module):
     ):
         """Phase 2: 입력 통합 및 상태 업데이트"""
         
+        # 지역 연결용: influence_strength 적용
         modulated_previous_spikes = {}
         for node_name, prev_spikes in self.previous_spikes.items():
             influence = self.nodes[node_name].influence_strength
-            
             modulated_previous_spikes[node_name] = prev_spikes * influence
         
-        axonal_inputs = self.axonal_connections(modulated_previous_spikes)
+        # 축삭 연결용: 순수한 스파이크 (influence_strength 제거)
+        axonal_inputs = self.axonal_connections(self.previous_spikes)
         
         for node_name, node in self.nodes.items():
             internal_input = self.local_connections[node_name](
-                modulated_previous_spikes[node_name]
+                modulated_previous_spikes[node_name]  # 지역 연결은 influence 적용
             )
             
-            axonal_input = axonal_inputs.get(node_name)
+            axonal_input = axonal_inputs.get(node_name)  # 축삭은 순수 스파이크
             
             node_external_input = external_input if node_name == self.input_node else None
             
@@ -517,7 +518,7 @@ class SCSSystem(nn.Module):
                 internal_input=internal_input,
                 axonal_input=axonal_input
             )
-
+            
     def _phase3_post_spike_processing(self, current_spikes: Dict[str, torch.Tensor]):
         """Phase 3: 스파이크 후처리"""
         for node_name, node in self.nodes.items():

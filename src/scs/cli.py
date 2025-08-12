@@ -496,7 +496,13 @@ def _save_spike_visualizations(model, experiment_dir, test_loader, logger):
         logger.warning(f"⚠️ 시각화 생성 중 오류 (무시하고 계속): {e}")
 
 def _generate_io_example_metric(model, test_loader, experiment_dir, logger, device):
-    """IO 파이프라인 중간값 추적 및 학습 전후 비교"""
+    """
+    IO 파이프라인 중간값 추적 및 학습 전후 비교 (v5.0 맞춤)
+    
+    주요 변경사항:
+    - InputInterface: 사전 정규화 제거, dropout 추가 반영
+    - OutputInterface: compressor_power 변경, 메모리 스케일 추적
+    """
     try:
         # 첫 번째 테스트 샘플 추출
         first_batch = next(iter(test_loader))
@@ -511,12 +517,12 @@ def _generate_io_example_metric(model, test_loader, experiment_dir, logger, devi
         logger.info(f"   타겟 길이: {sample_target.shape[1]}")
         
         def trace_pipeline(model, input_tokens, target_tokens, attention_mask, phase_name):
-            """파이프라인 중간값 추적"""
+            """파이프라인 중간값 추적 (v5.0 반영)"""
             model.eval()
             traced_data = {"phase": phase_name, "steps": []}
             
             with torch.no_grad():
-                # 1. InputInterface 추적
+                # ============ InputInterface 추적 ============
                 if hasattr(model, 'input_interface'):
                     window_size = model.input_interface.window_size
                     if input_tokens.shape[1] >= window_size:
@@ -526,7 +532,7 @@ def _generate_io_example_metric(model, test_loader, experiment_dir, logger, devi
                         padding = torch.zeros(1, pad_size, dtype=torch.long, device=input_tokens.device)
                         test_window = torch.cat([padding, input_tokens], dim=1)
                     
-                    # 토큰 임베딩
+                    # Step 1: 토큰 임베딩 (T5 가중치)
                     token_embeds = model.input_interface.token_embedding(test_window)
                     traced_data["steps"].append({
                         "name": "input_token_embedding",
@@ -534,79 +540,149 @@ def _generate_io_example_metric(model, test_loader, experiment_dir, logger, devi
                         "mean": token_embeds.mean().item(),
                         "std": token_embeds.std().item(),
                         "min": token_embeds.min().item(),
-                        "max": token_embeds.max().item()
+                        "max": token_embeds.max().item(),
+                        "description": "T5 토큰 임베딩 (std≈23 예상)"
                     })
                     
-                    # CLS 토큰 추가
+                    # Step 2: CLS 토큰 추가
                     cls_tokens = model.input_interface.cls_token.expand(1, 1, -1)
                     windowed_input = torch.cat([cls_tokens, token_embeds], dim=1)
+                    
+                    # Step 3: 위치 임베딩 추가
+                    if model.input_interface.use_positional_encoding:
+                        seq_len = test_window.shape[1]
+                        positions = torch.arange(seq_len + 1, device=device).unsqueeze(0)
+                        position_embeds = model.input_interface.position_embedding(positions)
+                        windowed_input = windowed_input + position_embeds
+                    
                     traced_data["steps"].append({
-                        "name": "input_with_cls",
+                        "name": "input_with_cls_and_pos",
                         "shape": list(windowed_input.shape),
                         "mean": windowed_input.mean().item(),
                         "std": windowed_input.std().item(),
                         "cls_mean": cls_tokens.mean().item(),
-                        "cls_std": cls_tokens.std().item()
+                        "cls_std": cls_tokens.std().item(),
+                        "description": "CLS + 위치 임베딩 추가 (여전히 std≈23)"
                     })
                     
-                    # 정규화
-                    normalized_input = model.input_interface.layer_norm(windowed_input)
-                    traced_data["steps"].append({
-                        "name": "input_normalized",
-                        "shape": list(normalized_input.shape),
-                        "mean": normalized_input.mean().item(),
-                        "std": normalized_input.std().item()
-                    })
+                    # Step 4: Dropout 적용 (v5.0 새로 추가)
+                    if hasattr(model.input_interface, 'dropout'):
+                        dropped_input = model.input_interface.dropout(windowed_input)
+                        traced_data["steps"].append({
+                            "name": "input_after_dropout",
+                            "shape": list(dropped_input.shape),
+                            "mean": dropped_input.mean().item(),
+                            "std": dropped_input.std().item(),
+                            "description": "T5 스타일 dropout 적용"
+                        })
+                        windowed_input = dropped_input
                     
-                    # Transformer Encoder
-                    encoder_output = model.input_interface.transformer_encoder(normalized_input)
+                    # Step 5: Transformer Encoder (v5.0: 사전 정규화 제거됨)
+                    # norm_first=True이므로 내부에서 정규화 수행
+                    encoder_output = model.input_interface.transformer_encoder(windowed_input)
                     context_vector = encoder_output[:, 0, :]  # CLS 토큰
                     traced_data["steps"].append({
                         "name": "encoder_output",
                         "shape": list(encoder_output.shape),
+                        "full_mean": encoder_output.mean().item(),
+                        "full_std": encoder_output.std().item(),
                         "cls_vector_mean": context_vector.mean().item(),
-                        "cls_vector_std": context_vector.std().item()
+                        "cls_vector_std": context_vector.std().item(),
+                        "description": "T5 encoder 내부 정규화로 안정화된 출력 (std≈1.0 예상)"
                     })
                     
-                    # Pattern Mapper
+                    # Step 6: Pattern Mapper
                     membrane_logits = model.input_interface.pattern_mapper(context_vector)
                     traced_data["steps"].append({
                         "name": "membrane_logits",
                         "shape": list(membrane_logits.shape),
                         "mean": membrane_logits.mean().item(),
-                        "std": membrane_logits.std().item()
+                        "std": membrane_logits.std().item(),
+                        "min": membrane_logits.min().item(),
+                        "max": membrane_logits.max().item(),
+                        "description": "직교 초기화된 linear 매핑 (std≈1.0 예상)"
                     })
                     
-                    # 최종 막전위 패턴
+                    # Step 7: 최종 막전위 패턴
                     pattern_probs = torch.softmax(membrane_logits / model.input_interface.softmax_temperature, dim=-1)
                     total_energy = model.input_interface.grid_height * model.input_interface.grid_width * model.input_interface.input_power
                     final_pattern = pattern_probs * total_energy
                     final_pattern_2d = final_pattern.view(1, model.input_interface.grid_height, model.input_interface.grid_width)
+                    
+                    # 패턴 분석
+                    active_neurons = (final_pattern > 0.1).sum().item()  # 임계값 이상 활성화
+                    max_activation = final_pattern.max().item()
+                    sparsity = (final_pattern < 0.01).sum().item() / final_pattern.numel()
                     
                     traced_data["steps"].append({
                         "name": "final_membrane_pattern",
                         "shape": list(final_pattern_2d.shape),
                         "mean": final_pattern_2d.mean().item(),
                         "std": final_pattern_2d.std().item(),
-                        "total_energy": total_energy
+                        "total_energy": total_energy,
+                        "active_neurons": active_neurons,
+                        "max_activation": max_activation,
+                        "sparsity_ratio": sparsity,
+                        "softmax_temperature": model.input_interface.softmax_temperature,
+                        "input_power": model.input_interface.input_power,
+                        "description": "Softmax + 에너지 스케일링된 최종 패턴"
                     })
-
-                    # 디버깅 정보 추가
-                    print(f"🔍 디버깅 정보:")
-                    print(f"  입력 토큰 범위: {input_tokens.min()} ~ {input_tokens.max()}")
-                    print(f"  Vocab size: {model.input_interface.token_embedding.num_embeddings}")
-                    print(f"  임베딩 가중치 통계:")
-                    print(f"    mean: {model.input_interface.token_embedding.weight.mean():.6f}")
-                    print(f"    std: {model.input_interface.token_embedding.weight.std():.6f}")
-                    print(f"    min: {model.input_interface.token_embedding.weight.min():.6f}")
-                    print(f"    max: {model.input_interface.token_embedding.weight.max():.6f}")
+                
+                # ============ OutputInterface 추적 ============
+                if hasattr(model, 'output_interface'):
+                    # 가상의 스파이크 그리드 생성 (테스트용)
+                    grid_h, grid_w = model.output_interface.grid_height, model.output_interface.grid_width
                     
-                    # 개별 토큰의 임베딩 확인
-                    first_token = input_tokens[0, 0].item()
-                    first_embedding = model.input_interface.token_embedding.weight[first_token]
-                    print(f"  첫 번째 토큰 ({first_token}) 임베딩 통계:")
-                    print(f"    mean: {first_embedding.mean():.6f}")
-                    print(f"    std: {first_embedding.std():.6f}")
+                    # 케이스 1: 완전 비활성화
+                    zero_spikes = torch.zeros(1, grid_h, grid_w, device=device)
+                    zero_hidden = model.output_interface._create_current_hidden_vector(zero_spikes)
+                    
+                    # 케이스 2: 스파스 활성화 (10개 뉴런)
+                    sparse_spikes = torch.zeros(1, grid_h, grid_w, device=device)
+                    flat_sparse = sparse_spikes.view(-1)
+                    indices = torch.randperm(grid_h * grid_w)[:10]
+                    flat_sparse[indices] = 1.0
+                    sparse_spikes = flat_sparse.view(1, grid_h, grid_w)
+                    sparse_hidden = model.output_interface._create_current_hidden_vector(sparse_spikes)
+                    
+                    # compressor_power 값 추적
+                    compressor_power = model.output_interface.compressor_power.item()
+                    
+                    traced_data["steps"].append({
+                        "name": "output_hidden_vector_analysis",
+                        "compressor_power": compressor_power,
+                        "zero_spikes": {
+                            "shape": list(zero_hidden.shape),
+                            "mean": zero_hidden.mean().item(),
+                            "std": zero_hidden.std().item(),
+                            "l2_norm": torch.norm(zero_hidden).item()
+                        },
+                        "sparse_spikes": {
+                            "active_count": 10,
+                            "shape": list(sparse_hidden.shape),
+                            "mean": sparse_hidden.mean().item(),
+                            "std": sparse_hidden.std().item(),
+                            "l2_norm": torch.norm(sparse_hidden).item()
+                        },
+                        "description": f"v5.0: compressor_power={compressor_power:.3f}, T5 메모리 스케일 맞춤 (std≈0.1 예상)"
+                    })
+                    
+                    # 디코더 입력 임베딩 추적
+                    if target_tokens.shape[1] > 0:
+                        window_size = model.output_interface.window_size
+                        if target_tokens.shape[1] >= window_size:
+                            decoder_window = target_tokens[:, :window_size]
+                        else:
+                            decoder_window = target_tokens
+                        
+                        target_embeds = model.output_interface._prepare_target_embeddings(decoder_window)
+                        traced_data["steps"].append({
+                            "name": "output_target_embeddings",
+                            "shape": list(target_embeds.shape),
+                            "mean": target_embeds.mean().item(),
+                            "std": target_embeds.std().item(),
+                            "description": "T5 디코더 입력 임베딩 (RMSNorm 정규화됨)"
+                        })
             
             return traced_data
         
@@ -619,14 +695,37 @@ def _generate_io_example_metric(model, test_loader, experiment_dir, logger, devi
         metric_dir.mkdir(exist_ok=True)
         
         import json
-        with open(metric_dir / "pipeline_trace_trained.json", 'w') as f:
+        with open(metric_dir / "pipeline_trace_trained_v5.json", 'w') as f:
             json.dump(trained_trace, f, indent=2)
         
-        logger.info(f"✅ IO 파이프라인 분석 완료: {metric_dir}")
+        # 요약 로깅
+        logger.info(f"✅ IO 파이프라인 분석 완료 (v5.0): {metric_dir}")
         logger.info(f"   📊 추적된 단계 수: {len(trained_trace['steps'])}")
+        
+        # 핵심 지표 요약
+        key_metrics = {}
+        for step in trained_trace['steps']:
+            if step['name'] == 'input_token_embedding':
+                key_metrics['token_embed_std'] = step['std']
+            elif step['name'] == 'encoder_output':
+                key_metrics['cls_vector_std'] = step['cls_vector_std']
+            elif step['name'] == 'membrane_logits':
+                key_metrics['membrane_logits_std'] = step['std']
+            elif step['name'] == 'output_hidden_vector_analysis':
+                key_metrics['compressor_power'] = step['compressor_power']
+                key_metrics['sparse_hidden_std'] = step['sparse_spikes']['std']
+        
+        logger.info("🎯 핵심 지표 요약:")
+        logger.info(f"   토큰 임베딩 std: {key_metrics.get('token_embed_std', 'N/A'):.3f} (목표: ~23)")
+        logger.info(f"   CLS 벡터 std: {key_metrics.get('cls_vector_std', 'N/A'):.3f} (목표: ~1.0)")
+        logger.info(f"   막전위 로짓 std: {key_metrics.get('membrane_logits_std', 'N/A'):.3f} (목표: ~1.0)")
+        logger.info(f"   압축 파워: {key_metrics.get('compressor_power', 'N/A'):.3f} (목표: ~0.1)")
+        logger.info(f"   스파스 히든 std: {key_metrics.get('sparse_hidden_std', 'N/A'):.3f} (목표: ~0.1)")
         
     except Exception as e:
         logger.warning(f"⚠️ IO 파이프라인 분석 중 오류: {e}")
+        import traceback
+        logger.debug(traceback.format_exc())
 
 # --- 모드별 실행 함수 ---
 def train_mode(args: argparse.Namespace, config: Dict[str, Any]):

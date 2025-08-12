@@ -22,15 +22,15 @@ system_roles:
 brain_regions:
   IN:
     grid_size: [64, 64]
-    decay_rate: 0.9
+    decay_rate: 0.8
     distance_tau: 1.0
   ACC:
     grid_size: [64, 64]
-    decay_rate: 0.9
+    decay_rate: 0.8
     distance_tau: 1.0
   OUT:
     grid_size: [64, 64]
-    decay_rate: 0.9
+    decay_rate: 0.8
     distance_tau: 1.0
 
 # === 축삭 연결 ===
@@ -62,7 +62,7 @@ task:
 
 # === 학습 설정 오버라이드 ===
 learning:
-  epochs: 451
+  epochs: 101
   learning_rate: 3e-4
   eta_min: 1e-4
   max_clk_training: 100

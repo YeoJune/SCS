@@ -541,8 +541,8 @@ class SCSSystem(nn.Module):
             if node_name not in getattr(self, 'node_target_spike_rates', {}):
                 continue  # 설정되지 않은 노드는 정규화하지 않음
             
-            # 노드별 스파이크율 계산 (배치 평균)
-            current_spike_rate = spikes.mean().item()
+            # 최적화: inplace mean 계산으로 메모리 할당 최소화
+            current_spike_rate = torch.mean(spikes).item()
             
             # 해당 노드의 target_spike_rate 가져오기
             target_rate = self.node_target_spike_rates[node_name]

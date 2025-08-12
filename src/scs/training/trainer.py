@@ -453,178 +453,129 @@ class SCSTrainer:
         
     def evaluate(self, test_loader: DataLoader, save_examples: int = 10) -> Dict[str, Any]:
         """
-        설계 원칙:
-        1. 기존 방식과 동일한 파라미터로 개별 샘플 처리
-        2. 모든 평가를 실제 추론 모드로만 수행  
-        3. 배치는 개별 결과의 단순 집계
-        
-        Args:
-            test_loader: 테스트 데이터 로더
-            save_examples: 저장할 예시 개수 (기본 10개)
-        
-        Returns:
-            평가 결과 + 예시 데이터
+        기존 evaluate 메서드 수정 - 배치 처리 후 개별 샘플로 분해
         """
         self.model.eval()
         
-        # 개별 샘플 결과 누적용
         all_sample_results = []
         saved_examples = []
-        
         total_samples = 0
         
         with torch.no_grad():
             for batch_idx, batch in enumerate(test_loader):
                 batch_size = batch['input_tokens'].shape[0]
                 
-                # =====================================
-                # 배치를 개별 샘플로 분해하여 각각 순수 추론
-                # =====================================
+                # 🚀 배치 전체를 모델에 한 번에 전달 (기존 _evaluate_single_sample_inference 대신)
+                input_tokens = batch['input_tokens'].to(self.device)
+                target_tokens = batch['target_tokens'].to(self.device)
+                attention_mask = batch.get('attention_mask')
+                if attention_mask is not None:
+                    attention_mask = attention_mask.to(self.device)
+                
+                # 배치 단위로 모델 실행
+                output_logits, processing_info = self.model(
+                    input_schedule=input_tokens,
+                    max_clk=self.config.max_clk_training,
+                    training=False,
+                    target_schedule=target_tokens,
+                    attention_mask=attention_mask
+                )
+                
+                # 배치 결과를 개별 샘플로 분해
                 for sample_idx in range(batch_size):
-                    sample_result = self._evaluate_single_sample_inference(
-                        batch, sample_idx, total_samples
+                    sample_result = self._extract_sample_result(
+                        batch, output_logits, processing_info, sample_idx, total_samples
                     )
                     
                     all_sample_results.append(sample_result)
                     total_samples += 1
                     
-                    # 예시 저장 (초기 몇 개만)
                     if len(saved_examples) < save_examples:
                         saved_examples.append(sample_result)
 
+        # ... 기존 결과 집계 코드 그대로 ...
         print(f"\n=== 전체 {total_samples}개 샘플 결과 집계 ===")
         
-        # 정확도 계산
         total_accuracy = sum(result['accuracy'] for result in all_sample_results) / len(all_sample_results)
-        
-        # 손실 계산 (있는 경우)
         losses = [result['loss'] for result in all_sample_results if result['loss'] is not None]
         avg_loss = sum(losses) / len(losses) if losses else 0.0
-        
-        # 기타 메트릭 계산 (기존 SCSMetrics 방식과 동일)
         convergence_rate = sum(result['convergence_achieved'] for result in all_sample_results) / len(all_sample_results)
         avg_processing_clk = sum(result['processing_clk'] for result in all_sample_results if isinstance(result['processing_clk'], (int, float))) / len(all_sample_results)
         avg_tokens_generated = sum(result['tokens_generated'] for result in all_sample_results if isinstance(result['tokens_generated'], (int, float))) / len(all_sample_results)
-        
-        # 처리 효율성 (기존 SCSMetrics와 동일)
         processing_efficiency = max(0.0, 1.0 - (avg_processing_clk / self.config.max_clk_training))
-        
-        # 종합 점수 (기존 SCSMetrics와 동일)
         comprehensive_score = (
             0.4 * convergence_rate +
             0.3 * processing_efficiency +
-            0.2 * min(1.0, (avg_tokens_generated / 10.0)) +  # spike_rate 대신
+            0.2 * min(1.0, (avg_tokens_generated / 10.0)) +
             0.1 * total_accuracy
         )
         
         results = {
-            # ✅ 기존과 동일한 메트릭 이름들
             'test_accuracy': total_accuracy,
             'test_loss': avg_loss,
             'comprehensive_score': comprehensive_score,
             'convergence_rate': convergence_rate,
             'processing_efficiency': processing_efficiency,
-            
-            # 예시 데이터
             'examples': saved_examples,
             'num_examples_saved': len(saved_examples),
             'total_batches_evaluated': len(set(result.get('batch_idx', 0) for result in all_sample_results))
         }
         
         print(f"최종 결과: 정확도={total_accuracy:.4f}, 종합점수={comprehensive_score:.4f}")
-        
         return results
 
-    def _evaluate_single_sample_inference(self, batch: Dict[str, torch.Tensor], sample_idx: int, global_idx: int) -> Dict[str, Any]:
-        """단일 샘플을 기존 방식과 동일한 파라미터로 추론 평가
-        
-        Args:
-            batch: 원본 배치
-            sample_idx: 배치 내 샘플 인덱스  
-            global_idx: 전체 샘플 인덱스
-            
-        Returns:
-            개별 샘플 평가 결과
-        """
+    def _extract_sample_result(
+        self,
+        batch: Dict[str, torch.Tensor],
+        output_logits: torch.Tensor,  # [B, seq_len, vocab_size]
+        processing_info: Dict[str, Any],
+        sample_idx: int,
+        global_idx: int
+    ) -> Dict[str, Any]:
+        """배치 결과에서 개별 샘플 결과 추출 (기존 _evaluate_single_sample_inference 대체)"""
         try:
-            device = self.config.device
-            
-            # =====================================
-            # 1. 개별 샘플 추출 및 준비 (기존과 동일)
-            # =====================================
-            single_input = batch['input_tokens'][sample_idx:sample_idx+1].to(device)  # [1, seq_len]
-            single_target = batch['target_tokens'][sample_idx:sample_idx+1].to(device)  # [1, seq_len]
-            single_mask = batch['attention_mask'][sample_idx:sample_idx+1].to(device) if 'attention_mask' in batch else None
-            
             # 텍스트 복원
             input_text = self._decode_tokens_to_text(batch['input_tokens'][sample_idx])
             target_text = self._decode_tokens_to_text(batch['target_tokens'][sample_idx])
             
-            # =====================================
-            # 3. ✅ 새로운 모델 호출 (target_start_clk 제거)
-            # =====================================
-            output_logits, processing_info = self.model(
-                input_schedule=single_input,
-                max_clk=self.config.max_clk_training,
-                training=False,  # 추론 모드
-                target_schedule=single_target,
-                attention_mask=single_mask
-                # ss_prob 파라미터 제거 - inference 모드에서는 기본값 사용
-            )
-            
-            # =====================================
-            # 4. 생성 결과 추출 (기존과 동일)
-            # =====================================
-            if output_logits.shape[1] > 0:
-                # 기존과 동일: argmax 사용
-                generated_tokens = output_logits[0].argmax(dim=-1)  # [seq_len]
+            # 생성 결과 추출
+            if output_logits.shape[1] > 0 and sample_idx < output_logits.shape[0]:
+                generated_tokens = output_logits[sample_idx].argmax(dim=-1)
                 generated_text = self._decode_tokens_to_text(generated_tokens)
             else:
                 generated_tokens = torch.tensor([], dtype=torch.long)
                 generated_text = "[빈 출력]"
             
-            # =====================================
-            # 5. 정확도 계산 (기존 SCSMetrics와 동일 방식)
-            # =====================================
-            # 기존처럼 output_logits vs target으로 계산
-            try:
-                from scs.training.metric import SCSMetrics
-                accuracy = SCSMetrics.accuracy(
-                    output_logits,  # 차원 조작 제거
-                    single_target,
-                    pad_token_id=self.config.pad_token_id
-                )
-            except:
-                # 폴백: 직접 계산
-                accuracy = self._calculate_sequence_accuracy_fallback(generated_tokens, batch['target_tokens'][sample_idx])
-            
-            # =====================================
-            # 6. 손실 계산 (train_batch와 일관성 맞춤)
-            # =====================================
-            loss = None
-            if output_logits.shape[1] > 0 and single_target.shape[1] > 0:
+            # 개별 샘플 정확도 계산
+            if output_logits.shape[1] > 0 and sample_idx < output_logits.shape[0]:
                 try:
-                    # 기존과 동일한 loss 계산 (train_batch와 동일한 방식)
-                    if hasattr(self, 'loss_fn') and self.loss_fn is not None:
-                        # train_batch와 동일: 차원 조작 없이 직접 계산
-                        loss = self.loss_fn(output_logits, single_target, processing_info).item()
-                    else:
-                        # 폴백: CrossEntropyLoss
-                        min_len = min(output_logits.shape[1], single_target.shape[1])
-                        trimmed_logits = output_logits[:min_len, :].unsqueeze(0)  # [1, min_len, vocab]
-                        trimmed_target = single_target[:, :min_len]               # [1, min_len]
-                        
-                        loss_fn = torch.nn.CrossEntropyLoss(ignore_index=self.config.pad_token_id)
-                        loss = loss_fn(trimmed_logits.view(-1, trimmed_logits.shape[-1]), trimmed_target.view(-1)).item()
-                except Exception as e:
-                    print(f"  손실 계산 실패 (샘플 {global_idx}): {e}")
+                    from scs.training.metric import SCSMetrics
+                    accuracy = SCSMetrics.accuracy(
+                        output_logits[sample_idx:sample_idx+1],
+                        batch['target_tokens'][sample_idx:sample_idx+1].to(output_logits.device),
+                        pad_token_id=self.config.pad_token_id
+                    )
+                except:
+                    accuracy = self._calculate_sequence_accuracy_fallback(
+                        generated_tokens, batch['target_tokens'][sample_idx]
+                    )
+            else:
+                accuracy = 0.0
+            
+            # 손실 계산 (배치 평균 사용)
+            loss = None
+            if hasattr(self, 'loss_fn') and self.loss_fn is not None:
+                try:
+                    sample_target = batch['target_tokens'][sample_idx:sample_idx+1].to(output_logits.device)
+                    loss = self.loss_fn(
+                        output_logits[sample_idx:sample_idx+1], 
+                        sample_target, 
+                        processing_info
+                    ).item()
+                except:
                     loss = None
             
-            # =====================================
-            # 7. 결과 구성 (기존 예시와 동일 포맷)
-            # =====================================
-            result = {
-                # 기존 _extract_examples_from_batch와 동일한 필드들
+            return {
                 'input_text': input_text,
                 'target_text': target_text,
                 'generated_text': generated_text,
@@ -632,23 +583,16 @@ class SCSTrainer:
                 'processing_clk': processing_info.get('processing_clk', 'unknown'),
                 'tokens_generated': processing_info.get('tokens_generated', 'unknown'),
                 'convergence_achieved': processing_info.get('convergence_achieved', False),
-                'batch_accuracy': accuracy,  # 개별 샘플이므로 동일
-                'generation_method': 'pure_inference',
-                
-                # 추가 정보
+                'batch_accuracy': accuracy,
+                'generation_method': 'batch_inference',
                 'loss': loss,
                 'global_index': global_idx,
-                'batch_idx': global_idx // batch['input_tokens'].shape[0],  # 대략적인 배치 인덱스
+                'batch_idx': global_idx // batch['input_tokens'].shape[0],
             }
             
-            return result
-            
         except Exception as e:
-            print(f"  샘플 {global_idx} 평가 실패: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"  샘플 {global_idx} 추출 실패: {e}")
             
-            # 폴백 결과
             try:
                 input_text = self._decode_tokens_to_text(batch['input_tokens'][sample_idx])
                 target_text = self._decode_tokens_to_text(batch['target_tokens'][sample_idx])
@@ -659,7 +603,7 @@ class SCSTrainer:
             return {
                 'input_text': input_text,
                 'target_text': target_text,
-                'generated_text': "[평가 실패]",
+                'generated_text': "[추출 실패]",
                 'accuracy': 0.0,
                 'loss': None,
                 'processing_clk': self.config.max_clk_training,

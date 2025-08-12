@@ -38,6 +38,9 @@ class TimingManager:
         else:
             self._mode = 'adaptive'
 
+        # 최적화: 재사용 가능한 버퍼 미리 할당
+        self._instant_sync_buffer = None
+
         self.reset()
 
     def reset(self):
@@ -48,6 +51,9 @@ class TimingManager:
         self.generated_length = 0
         self.target_start_clk = None
         self.target_end_clk = None
+        
+        # 최적화: 버퍼 초기화 (첫 번째 step에서 크기 결정됨)
+        self._instant_sync_buffer = None
 
     def step(
         self,
@@ -60,12 +66,23 @@ class TimingManager:
         """매 CLK마다 상태를 업데이트합니다."""
         self.current_clk = current_clk
 
-        # 안정화된 동기화 지표 업데이트 (배치 처리 지원)
-        instant_sync = acc_node_spikes.mean(dim=[1, 2])
-        self.stable_sync_index = (
-            self.sync_ema_alpha * instant_sync +
-            (1 - self.sync_ema_alpha) * self.stable_sync_index
-        )
+        # 최적화: 버퍼 초기화 (첫 호출 시에만)
+        if self._instant_sync_buffer is None:
+            # acc_node_spikes의 배치 크기에 맞춰 버퍼 생성
+            batch_shape = acc_node_spikes.shape[:-2]  # [B] 또는 [] (단일)
+            self._instant_sync_buffer = torch.empty(batch_shape, device=acc_node_spikes.device)
+
+        # 최적화: inplace mean 연산으로 메모리 할당 없음
+        torch.mean(acc_node_spikes, dim=[-2, -1], out=self._instant_sync_buffer)
+        instant_sync = self._instant_sync_buffer
+
+        # 최적화: inplace EMA 업데이트
+        if isinstance(self.stable_sync_index, (int, float)):
+            # 첫 번째 호출 시 텐서로 변환
+            self.stable_sync_index = torch.full_like(instant_sync, self.stable_sync_index)
+        
+        # inplace EMA: self.stable_sync_index = alpha * instant + (1-alpha) * stable_sync_index
+        self.stable_sync_index.mul_(1 - self.sync_ema_alpha).add_(instant_sync, alpha=self.sync_ema_alpha)
         
         if self.output_started:
             self.generated_length += 1
@@ -162,3 +179,4 @@ class TimingManager:
     @property
     def mode(self) -> str:
         return self._mode
+    

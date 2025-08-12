@@ -248,6 +248,9 @@ class LocalConnectivity(nn.Module):
         # 거리별 가중치 초기화
         self._initialize_distance_weights()
         
+        # 최적화: shift 패턴 사전 계산
+        self._precompute_shift_patterns()
+        
     def _initialize_distance_weights(self):
         """
         거리 기반 가중치 초기화
@@ -261,6 +264,17 @@ class LocalConnectivity(nn.Module):
         
         # 학습 가능한 파라미터로 등록
         self.distance_weights = nn.Parameter(weights)
+        
+    def _precompute_shift_patterns(self):
+        """거리별 shift 패턴을 미리 계산하여 저장"""
+        self.shift_patterns = {}
+        for distance in range(1, self.max_distance + 1):
+            shifts = []
+            for dx in range(-distance, distance + 1):
+                for dy in range(-distance, distance + 1):
+                    if abs(dx) + abs(dy) == distance:  # 맨하탄 거리
+                        shifts.append((dx, dy))
+            self.shift_patterns[distance] = shifts
         
     def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:
         """
@@ -299,7 +313,7 @@ class LocalConnectivity(nn.Module):
     
     def _get_neighbors_at_distance(self, grid_spikes: torch.Tensor, distance: int) -> torch.Tensor:
         """
-        특정 거리의 모든 이웃 뉴런들의 기여도 계산 (배치 처리)
+        특정 거리의 모든 이웃 뉴런들의 기여도 계산 (배치 처리) - 최적화된 버전
         
         Args:
             grid_spikes: [B, H, W]
@@ -308,26 +322,22 @@ class LocalConnectivity(nn.Module):
         Returns:
             이웃 합산 [B, H, W]
         """
-        # 해당 거리의 모든 방향 벡터 미리 계산
-        shifts = []
-        for dx in range(-distance, distance + 1):
-            for dy in range(-distance, distance + 1):
-                if abs(dx) + abs(dy) == distance:  # 맨하탄 거리
-                    shifts.append((dx, dy))
+        # 사전 계산된 shift 패턴 가져오기
+        shifts = self.shift_patterns.get(distance, [])
         
         if not shifts:
             return torch.zeros_like(grid_spikes)
         
-        # 모든 방향의 이웃들을 한번에 수집
-        neighbors_sum = torch.zeros_like(grid_spikes)
-        
         # 배치 차원을 고려한 roll 연산 (항상 [B, H, W])
         height_dim, width_dim = 1, 2
-            
+        
+        # 최적화: 모든 방향의 이웃들을 벡터화하여 처리
+        shifted_grids = []
         for dx, dy in shifts:
             # 2차원 Roll 연산으로 이웃 위치의 스파이크 가져오기
             shifted = torch.roll(grid_spikes, shifts=dx, dims=height_dim)  # height 방향
             shifted = torch.roll(shifted, shifts=dy, dims=width_dim)       # width 방향
-            neighbors_sum += shifted
+            shifted_grids.append(shifted)
         
-        return neighbors_sum
+        # 벡터화된 합산 (기존의 순차적 덧셈과 수학적으로 동일)
+        return torch.stack(shifted_grids, dim=0).sum(dim=0)

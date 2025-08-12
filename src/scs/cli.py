@@ -717,7 +717,7 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
         val_loader = create_dataloader(
             dataset_name=dataset_name, 
             split="validation", 
-            batch_size=1, 
+            batch_size=config["data_loading"]["batch_size"],  # 🔧 1 대신 동일한 배치 크기
             max_length=config["data_loading"]["tokenizer"]["max_length"], 
             tokenizer=tokenizer,
             num_samples=val_samples,
@@ -796,7 +796,7 @@ def train_mode(args: argparse.Namespace, config: Dict[str, Any]):
         test_loader = create_dataloader(
             dataset_name=dataset_name, 
             split="test", 
-            batch_size=1, 
+            batch_size=config["data_loading"]["batch_size"],  # 🔧 1 대신 동일한 배치 크기
             max_length=config["data_loading"]["tokenizer"]["max_length"], 
             tokenizer=tokenizer,
             num_samples=test_samples,
@@ -986,7 +986,7 @@ def evaluate_mode(args: argparse.Namespace):
         test_loader = create_dataloader(
             dataset_name=dataset_name, 
             split="test", 
-            batch_size=1, 
+            batch_size=config["data_loading"]["batch_size"],  # 🔧 1 대신 설정값 사용
             max_length=config["data_loading"]["tokenizer"]["max_length"], 
             tokenizer=tokenizer,
             num_samples=test_samples,

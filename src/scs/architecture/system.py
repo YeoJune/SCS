@@ -472,7 +472,7 @@ class SCSSystem(nn.Module):
         current_spikes = {}
         for node_name, node in self.nodes.items():
             spikes = node.compute_spikes()
-            current_spikes[node_name] = spikes
+            current_spikes[node_name] = spikes.clone()
         return current_spikes
     
     def _phase2_update_states(

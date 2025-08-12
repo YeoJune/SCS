@@ -350,8 +350,8 @@ class OutputInterface(nn.Module):
         # 2. Linear 압축: [B, H*W] → [B, D]
         hidden_vector = self.spatial_compressor(spikes_input)
         
-        # # 3. 정규화
-        # hidden_vector = self.layer_norm(hidden_vector)
+        # 3. 정규화
+        hidden_vector = self.layer_norm(hidden_vector)
         
         return hidden_vector * self.compressor_power
     

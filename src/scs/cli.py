@@ -269,7 +269,6 @@ def _save_spike_visualizations(model, experiment_dir, test_loader, logger):
                # 상태 업데이트
                model._phase2_update_states(external_input, current_spikes)
                model._phase3_post_spike_processing(current_spikes)
-               model.previous_spikes = {k: v.clone() for k, v in current_spikes.items()}
                
                # 스파이크 패턴 저장 (CPU로 이동)
                spike_pattern = {}

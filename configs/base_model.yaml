@@ -53,7 +53,7 @@ io_system:
     encoder_heads: 8
     encoder_dropout: 0.1
     dim_feedforward: 2048
-    input_power: 0.02
+    input_power: 0.05
     softmax_temperature: 1.0
     use_positional_encoding: false
     t5_model_name: "t5-small"

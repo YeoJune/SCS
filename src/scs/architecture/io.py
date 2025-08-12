@@ -1,8 +1,12 @@
 # src/scs/architecture/io.py
 """
-입출력 인터페이스 구현 v4.0 (T5 체크포인트 이식)
+입출력 인터페이스 구현 v5.0 (T5 스케일 정합성 보정)
 입력: 토큰 윈도우 → 단일 문맥 벡터 → 공간 분산
 출력: 공간 집중 → 단일 히든 벡터 → CLK 윈도우 누적
+
+주요 변경사항:
+1. InputInterface: T5 정규화 순서 맞춤 (norm_first=True, 사전 정규화 제거)
+2. OutputInterface: compressor_power 초기값 축소 (T5 메모리 스케일 맞춤)
 """
 
 import torch
@@ -103,7 +107,11 @@ def transplant_decoder_layer(scs_layer, t5_layer, include_cross_attention=False)
 
 class InputInterface(nn.Module):
     """
-    입력 인터페이스 v4.0: [CLS] 토큰 Self-Attention + Linear 매핑 + T5 이식
+    입력 인터페이스 v5.0: T5 정규화 순서 맞춤
+    
+    주요 변경사항:
+    - norm_first=True로 T5 블록 순서와 일치 (Input → Norm → Attention)
+    - 사전 정규화(layer_norm) 제거하여 T5 가중치가 올바른 스케일 입력 받도록 함
     """
     
     def __init__(
@@ -156,12 +164,13 @@ class InputInterface(nn.Module):
         if self.use_positional_encoding:
             self.position_embedding = nn.Embedding(window_size + 1, self.embedding_dim)
         
-        # Transformer Encoder
+        # Transformer Encoder (T5 순서 맞춤)
         encoder_layer = TransformerEncoderLayer(
             d_model=self.embedding_dim,
             nhead=encoder_heads,
             dim_feedforward=dim_feedforward,
             dropout=encoder_dropout,
+            norm_first=True,  # 🔥 T5와 동일한 순서: Input → Norm → Attention
             batch_first=True
         )
         self.transformer_encoder = TransformerEncoder(
@@ -180,8 +189,8 @@ class InputInterface(nn.Module):
         )
         self._initialize_mapper()
         
-        # 정규화
-        self.layer_norm = RMSNorm(self.embedding_dim)
+        # Dropout (T5 스타일, 정규화 대신 사용)
+        self.dropout = nn.Dropout(encoder_dropout)
     
     def _transplant_t5_encoder(self, t5_model):
         """T5 encoder 가중치 이식"""
@@ -209,7 +218,7 @@ class InputInterface(nn.Module):
         
     def forward(self, token_window: torch.Tensor) -> torch.Tensor:
         """
-        윈도우 기반 일괄 처리
+        윈도우 기반 일괄 처리 (T5 스케일 맞춤)
         
         Args:
             token_window: [B, window_size] 토큰 윈도우
@@ -235,10 +244,13 @@ class InputInterface(nn.Module):
             position_embeds = self.position_embedding(positions)
             windowed_input = windowed_input + position_embeds
         
-        # 정규화
-        windowed_input = self.layer_norm(windowed_input)
+        # Dropout 적용 (T5 스타일)
+        windowed_input = self.dropout(windowed_input)
         
-        # Transformer Encoder
+        # 🔥 사전 정규화 제거! T5 encoder가 내부에서 정규화 수행
+        # windowed_input = self.layer_norm(windowed_input)  # ← 이 라인 제거됨
+        
+        # Transformer Encoder (T5와 동일한 스케일의 입력)
         encoder_output = self.transformer_encoder(windowed_input)
         context_vector = encoder_output[:, 0, :]  # [CLS] 토큰
         
@@ -260,7 +272,11 @@ class InputInterface(nn.Module):
 
 class OutputInterface(nn.Module):
     """
-    출력 인터페이스 v4.0: Linear 공간 압축 + CLK 윈도우 누적 + T5 이식
+    출력 인터페이스 v5.0: T5 메모리 스케일 맞춤
+    
+    주요 변경사항:
+    - compressor_power 초기값을 0.1로 축소 (T5 메모리 스케일과 맞춤)
+    - 자연스러운 커리큘럼 학습 유도 (언어모델링 → SNN 정보 활용)
     """
     
     def __init__(
@@ -318,7 +334,10 @@ class OutputInterface(nn.Module):
             self.grid_height * self.grid_width, 
             self.embedding_dim
         )
-        self.compressor_power = nn.Parameter(torch.tensor(3.0, dtype=torch.float32), requires_grad=True)
+        # 🔥 T5 메모리 스케일 맞춤: 0.1로 초기값 축소
+        # T5 Encoder Final LayerNorm: mean=0.24, std=0.079
+        # 이 작은 스케일에서 시작하여 점진적 학습 유도
+        self.compressor_power = nn.Parameter(torch.tensor(0.1, dtype=torch.float32), requires_grad=True)
         self._initialize_compressor()
         
         # 위치 임베딩
@@ -386,7 +405,7 @@ class OutputInterface(nn.Module):
         hidden_states_history: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        스파이크 격자와 디코더 입력으로부터 로짓 생성
+        스파이크 격자와 디코더 입력으로부터 로짓 생성 (T5 스케일 맞춤)
         
         Args:
             grid_spikes: [B, H, W] 스파이크 그리드
@@ -413,7 +432,7 @@ class OutputInterface(nn.Module):
         
         window_len = decoder_window.shape[1]
         
-        # 현재 CLK의 히든 벡터 생성
+        # 현재 CLK의 히든 벡터 생성 (T5 메모리 스케일 맞춤)
         current_hidden_vector = self._create_current_hidden_vector(grid_spikes)
         
         # CLK 히든 시퀀스 업데이트
@@ -441,18 +460,25 @@ class OutputInterface(nn.Module):
         return output_logits, memory_sequence
     
     def _create_current_hidden_vector(self, grid_spikes: torch.Tensor) -> torch.Tensor:
-        """스파이크 격자를 단일 히든 벡터로 압축"""
+        """
+        스파이크 격자를 단일 히든 벡터로 압축 (T5 메모리 스케일 맞춤)
+        
+        변경사항:
+        - compressor_power 초기값 0.1 → T5 인코더 출력과 유사한 스케일 (std≈0.08)
+        - 점진적 학습: 언어모델링부터 시작 → SNN 정보 점차 활용
+        """
         batch_size = grid_spikes.shape[0]
         
         # 스파이크 값 평탄화
         spikes_input = grid_spikes.view(batch_size, -1)
         
-        # Linear 압축
+        # Linear 압축 (직교 초기화로 분산 보존)
         hidden_vector = self.spatial_compressor(spikes_input)
         
-        # 정규화
+        # 정규화 (std=1.0)
         hidden_vector = self.layer_norm(hidden_vector)
         
+        # T5 메모리 스케일 맞춤 (초기값 0.1 → std≈0.1, T5의 std≈0.08과 유사)
         return hidden_vector * self.compressor_power
     
     def _update_hidden_history(
@@ -485,7 +511,7 @@ class OutputInterface(nn.Module):
         return memory_sequence
     
     def _prepare_target_embeddings(self, decoder_window: torch.Tensor) -> torch.Tensor:
-        """디코더 윈도우 토큰들을 임베딩으로 변환"""
+        """디코더 윈도우 토큰들을 임베딩으로 변환 (T5 스타일 유지)"""
         batch_size, window_len = decoder_window.shape
         
         # 토큰 임베딩
@@ -499,7 +525,7 @@ class OutputInterface(nn.Module):
         else:
             combined_embeds = token_embeds
         
-        # 정규화
+        # 정규화 (T5 디코더 블록 진입 전 정규화와 동일)
         return self.layer_norm(combined_embeds)
     
     def _generate_causal_mask(self, size: int) -> torch.Tensor:

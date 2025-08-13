@@ -22,49 +22,24 @@ system_roles:
 brain_regions:
   IN:
     grid_size: [64, 64]
-    decay_rate: 0.9
+    decay_rate: 0.8
     distance_tau: 1.0
   ACC:
     grid_size: [64, 64]
-    decay_rate: 0.9
-    distance_tau: 1.0
-  ADJ:
-    grid_size: [64, 64]
-    decay_rate: 0.9
+    decay_rate: 0.8
     distance_tau: 1.0
   OUT:
     grid_size: [64, 64]
-    decay_rate: 0.9
+    decay_rate: 0.8
     distance_tau: 1.0
 
-# === 축삭 연결 (완전 오버라이드) ===
+# === 축삭 연결 ===
 axonal_connections:
   connections:
-    # 기본 정보 처리 경로
-    - source: "IN"
-      target: "ADJ"
-      stride: 2
-      weight_scale: 0.9
-
-    - source: "ADJ"
-      target: "IN"
-      stride: 4
-      weight_scale: 0.2
-
-    - source: "ADJ"
-      target: "OUT"
-      stride: 2
-      weight_scale: 0.9
-
-    - source: "OUT"
-      target: "ADJ"
-      stride: 4
-      weight_scale: 0.2
-
     - source: "IN"
       target: "OUT"
-      stride: 4
-      weight_scale: 0.3
+      stride: 1
+      weight_scale: 1.0
 
 # === 작업 설정 오버라이드 ===
 task:
@@ -75,36 +50,47 @@ task:
 
 # === 학습 설정 오버라이드 ===
 learning:
-  epochs: 31
-  learning_rate: 1e-4
+  epochs: 251
+  learning_rate: 5e-4
+  eta_min: 2e-4
   max_clk_training: 100
   optimizer: "adamw"
-  weight_decay: 0.01
-  eval_every: 5
-  save_every: 10
+  weight_decay: 1e-4
+  eval_every: 10
+  save_every: 50
   early_stopping_patience: 100
 
+  # 점진적 커리큘럼 학습
+  use_curriculum_learning: true
+  curriculum_schedule:
+    0: 10
+    50: 20
+    100: 30
+    150: 40
+    200: 50
+    250: 100
+
 timing_manager:
-  sync_ema_alpha: 0.2 # EMA 필터링 강도
-  sync_threshold_start: 0.4 # 시작 임계값
+  sync_ema_alpha: 0.1 # EMA 필터링 강도
+  sync_threshold_start: 0.3 # 시작 임계값
   sync_threshold_end: 0.1 # 종료 임계값
   min_processing_clk: 0 # 최소 처리 시간
   max_processing_clk: 500 # 최대 처리 시간
   min_output_length: 5 # 최소 출력 길이
   fixed_len: -1 # -1: 적응 모드, >0: 고정 길이
-  fixed_delay: 5 # -1: 적응 모드, ≥0: 고정 지연
+  fixed_delay: 2 # -1: 적응 모드, ≥0: 고정 지연
 
 # === 데이터 로딩 오버라이드 ===
 data_loading:
-  batch_size: 32
+  batch_size: 64
   tokenizer:
     name: "t5-small"
     max_length: 128
 
 data:
-  train_samples: 100
-  val_samples: 20
-  test_samples: 20
+  train_samples: -1
+  val_samples: -1
+  test_samples: -1
 
 # === 평가 설정 ===
 evaluation:

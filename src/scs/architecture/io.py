@@ -268,11 +268,12 @@ class InputInterface(nn.Module):
 
 class OutputInterface(nn.Module):
     """
-    출력 인터페이스 v5.0: T5 메모리 스케일 맞춤
+    출력 인터페이스 v6.0: 히든 윈도우 내부 관리
     
     주요 변경사항:
-    - compressor_power 초기값을 0.1로 축소 (T5 메모리 스케일과 맞춤)
-    - 자연스러운 커리큘럼 학습 유도 (언어모델링 → SNN 정보 활용)
+    - hidden_window를 OutputInterface 내부에서 관리
+    - 매 CLK마다 update_hidden_window() 호출로 윈도우 슬라이딩
+    - forward()는 순수 토큰 생성만 담당 (내부 히든 윈도우 사용)
     """
     
     def __init__(
@@ -288,7 +289,6 @@ class OutputInterface(nn.Module):
         dim_feedforward: int = 2048,
         dropout: float = 0.1,
         use_positional_encoding: bool = True,
-        use_clk_position_encoding: bool = True,
         t5_model_name: Optional[str] = None,
         transplant_cross_attention: bool = False,
         device: str = "cuda"
@@ -302,9 +302,11 @@ class OutputInterface(nn.Module):
         self.embedding_dim = embedding_dim
         self.window_size = window_size
         self.use_positional_encoding = use_positional_encoding
-        self.use_clk_position_encoding = use_clk_position_encoding
         self.transplant_cross_attention = transplant_cross_attention
         self.device = device
+        
+        # 히든 윈도우 내부 관리
+        self.hidden_window = None  # [B, window_size, embedding_dim]
         
         # T5 임베딩 로드 및 초기화
         if t5_model_name is not None:
@@ -325,7 +327,7 @@ class OutputInterface(nn.Module):
                 padding_idx=self.pad_token_id
             )
         
-        # Linear 공간 압축
+        # Linear 공간 압축 (히든 벡터 생성용)
         self.spatial_compressor = nn.Linear(
             self.grid_height * self.grid_width, 
             self.embedding_dim
@@ -335,9 +337,6 @@ class OutputInterface(nn.Module):
         self._initialize_compressor()
         
         # 위치 임베딩
-        if self.use_clk_position_encoding:
-            self.clk_position_embedding = nn.Embedding(window_size, self.embedding_dim)
-        
         if self.use_positional_encoding:
             self.position_embedding = nn.Embedding(window_size, self.embedding_dim)
         
@@ -392,75 +391,28 @@ class OutputInterface(nn.Module):
         if self.spatial_compressor.bias is not None:
             torch.nn.init.constant_(self.spatial_compressor.bias, 0.0)
     
-    def forward(
-        self,
-        grid_spikes: torch.Tensor,
-        decoder_input_ids: torch.Tensor,
-        hidden_states_history: Optional[torch.Tensor] = None
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def reset_state(self, batch_size: int):
+        """히든 윈도우 초기화"""
+        self.hidden_window = torch.zeros(
+            batch_size, 
+            self.window_size, 
+            self.embedding_dim,
+            device=self.device
+        )
+    
+    def _create_hidden_vector(self, grid_spikes: torch.Tensor) -> torch.Tensor:
         """
-        스파이크 격자와 디코더 입력으로부터 로짓 생성 (T5 스케일 맞춤)
+        스파이크 격자를 단일 히든 벡터로 압축
         
         Args:
             grid_spikes: [B, H, W] 스파이크 그리드
-            decoder_input_ids: [B, seq_len] 디코더 입력 토큰들
-            hidden_states_history: [B, clk_count, D] 이전 CLK들의 히든 벡터들
             
         Returns:
-            output_logits: [B, window_len, vocab_size] 출력 로짓
-            updated_history: [B, new_clk_count, D] 업데이트된 히든 벡터 히스토리
+            hidden_vector: [B, embedding_dim] 히든 벡터
         """
         if grid_spikes.dim() == 2:
             grid_spikes = grid_spikes.unsqueeze(0)
         
-        if decoder_input_ids.dim() == 1:
-            decoder_input_ids = decoder_input_ids.unsqueeze(0)
-        
-        batch_size = decoder_input_ids.shape[0]
-        
-        # 윈도우 크기로 제한
-        if decoder_input_ids.shape[1] > self.window_size:
-            decoder_window = decoder_input_ids[:, -self.window_size:]
-        else:
-            decoder_window = decoder_input_ids
-        
-        window_len = decoder_window.shape[1]
-        
-        # 현재 CLK의 히든 벡터 생성 (T5 메모리 스케일 맞춤)
-        current_hidden_vector = self._create_current_hidden_vector(grid_spikes)
-        
-        # CLK 히든 시퀀스 업데이트
-        memory_sequence = self._update_hidden_history(
-            hidden_states_history, 
-            current_hidden_vector
-        )
-        
-        # 디코더 입력 임베딩
-        target_embeds = self._prepare_target_embeddings(decoder_window)
-        
-        # Causal mask 생성
-        tgt_mask = self._generate_causal_mask(window_len)
-        
-        # Transformer 디코더 실행
-        decoder_output = self.transformer_decoder(
-            tgt=target_embeds,
-            memory=memory_sequence,
-            tgt_mask=tgt_mask
-        )
-        
-        # 최종 로짓 계산
-        output_logits = self.final_projection(decoder_output)
-        
-        return output_logits, memory_sequence
-    
-    def _create_current_hidden_vector(self, grid_spikes: torch.Tensor) -> torch.Tensor:
-        """
-        스파이크 격자를 단일 히든 벡터로 압축 (T5 메모리 스케일 맞춤)
-        
-        변경사항:
-        - compressor_power 초기값 0.1 → T5 인코더 출력과 유사한 스케일 (std≈0.08)
-        - 점진적 학습: 언어모델링부터 시작 → SNN 정보 점차 활용
-        """
         batch_size = grid_spikes.shape[0]
         
         # 스파이크 값 평탄화
@@ -475,45 +427,65 @@ class OutputInterface(nn.Module):
         # T5 메모리 스케일 맞춤
         return hidden_vector * self.compressor_power
     
-    def _update_hidden_history(
-        self, 
-        hidden_states_history: Optional[torch.Tensor], 
-        current_hidden_vector: torch.Tensor
-    ) -> torch.Tensor:
-        """CLK 히든 벡터 히스토리를 윈도우 크기로 제한하여 업데이트"""
+    def update_hidden_window(self, grid_spikes: torch.Tensor):
+        """
+        매 CLK마다 호출 - 히든 윈도우 슬라이딩 업데이트
         
-        # 현재 히든 벡터를 시퀀스 차원 추가
-        current_hidden_seq = current_hidden_vector.unsqueeze(1)
+        Args:
+            grid_spikes: [B, H, W] 현재 CLK의 스파이크 그리드
+        """
+        current_hidden = self._create_hidden_vector(grid_spikes)
         
-        if hidden_states_history is None:
-            memory_sequence = current_hidden_seq
-        else:
-            # 윈도우 크기 제한
-            if hidden_states_history.shape[1] >= self.window_size:
-                trimmed_history = hidden_states_history[:, -(self.window_size-1):]
-                memory_sequence = torch.cat([trimmed_history, current_hidden_seq], dim=1)
-            else:
-                memory_sequence = torch.cat([hidden_states_history, current_hidden_seq], dim=1)
-        
-        # CLK 위치 임베딩 추가
-        if self.use_clk_position_encoding:
-            batch_size, clk_count, embed_dim = memory_sequence.shape
-            clk_positions = torch.arange(clk_count, device=self.device).unsqueeze(0).expand(batch_size, -1)
-            clk_embeds = self.clk_position_embedding(clk_positions)
-            memory_sequence = memory_sequence + clk_embeds
-        
-        return memory_sequence
+        # 슬라이딩 윈도우 업데이트
+        self.hidden_window = torch.cat([
+            self.hidden_window[:, 1:, :],    # 맨 앞 제거
+            current_hidden.unsqueeze(1)      # 맨 뒤 추가
+        ], dim=1)
     
-    def _prepare_target_embeddings(self, decoder_window: torch.Tensor) -> torch.Tensor:
-        """디코더 윈도우 토큰들을 임베딩으로 변환 (T5 스타일 유지)"""
-        batch_size, window_len = decoder_window.shape
+    def forward(self, decoder_input_ids: torch.Tensor) -> torch.Tensor:
+        """
+        내부 히든 윈도우를 사용하여 토큰 생성 (순수 토큰 생성)
+        
+        Args:
+            decoder_input_ids: [B, seq_len] 디코더 입력 토큰들
+            
+        Returns:
+            output_logits: [B, seq_len, vocab_size] 출력 로짓
+        """
+        if decoder_input_ids.dim() == 1:
+            decoder_input_ids = decoder_input_ids.unsqueeze(0)
+        
+        batch_size = decoder_input_ids.shape[0]
+        seq_len = decoder_input_ids.shape[1]
+        
+        # 디코더 입력 임베딩
+        target_embeds = self._prepare_target_embeddings(decoder_input_ids)
+        
+        # Causal mask 생성
+        tgt_mask = self._generate_causal_mask(seq_len)
+        
+        # Transformer 디코더 실행 (내부 히든 윈도우 사용)
+        decoder_output = self.transformer_decoder(
+            tgt=target_embeds,
+            memory=self.hidden_window,  # 내부 히든 윈도우 사용
+            tgt_mask=tgt_mask
+        )
+        
+        # 최종 로짓 계산
+        output_logits = self.final_projection(decoder_output)
+        
+        return output_logits
+    
+    def _prepare_target_embeddings(self, decoder_input_ids: torch.Tensor) -> torch.Tensor:
+        """디코더 입력 토큰들을 임베딩으로 변환 (T5 스타일 유지)"""
+        batch_size, seq_len = decoder_input_ids.shape
         
         # 토큰 임베딩
-        token_embeds = self.token_embedding(decoder_window)
+        token_embeds = self.token_embedding(decoder_input_ids)
         
         # 위치 임베딩 추가
         if self.use_positional_encoding:
-            positions = torch.arange(window_len, device=self.device).unsqueeze(0).expand(batch_size, -1)
+            positions = torch.arange(seq_len, device=self.device).unsqueeze(0).expand(batch_size, -1)
             position_embeds = self.position_embedding(positions)
             combined_embeds = token_embeds + position_embeds
         else:

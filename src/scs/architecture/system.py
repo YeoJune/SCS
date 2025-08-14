@@ -316,7 +316,7 @@ class SCSSystem(nn.Module):
         ss_prob: float = 1.0
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
         """
-        v3.0: 윈도우 기반 입력 + CLK 히든 시퀀스 기반 출력 처리
+        v6.0: OutputInterface 내부 히든 윈도우 관리
         """
         if max_clk is None:
             max_clk = self.timing_manager.max_processing_clk
@@ -347,11 +347,8 @@ class SCSSystem(nn.Module):
         all_logits = []
         all_logits_with_clk = []
         
-        # v3.0: decoder_input_ids 전체 시퀀스 관리
+        # decoder_input_ids 전체 시퀀스 관리
         decoder_input_ids = torch.ones(batch_size, 1, dtype=torch.long, device=self.device)  # BOS로 시작
-        
-        # v3.0: CLK 히든 스테이트 히스토리 관리
-        hidden_states_history = None
         
         loss_timing_info = {'start_conditions': None, 'end_conditions': None}
         last_token_id = None
@@ -359,41 +356,41 @@ class SCSSystem(nn.Module):
         for clk in range(max_clk):
             self.current_clk = clk
             
-            # 시스템 업데이트 (기존과 동일)
+            # Phase 1: 현재 막전위 기준 스파이크 계산
             current_spikes = self._phase1_compute_spikes()
             
-            # v3.0: 윈도우 기반 외부 입력 (기존과 동일)
+            # 윈도우 기반 외부 입력
             external_input = self._get_external_input_at_clk(
                 input_schedule, clk, attention_mask
             )
             
+            # Phase 2: 입력 통합 및 상태 업데이트
             self._phase2_update_states(external_input, current_spikes)
             
-            # TimingManager 업데이트 (기존과 동일)
+            # v6.0: 매 CLK마다 OutputInterface 히든 윈도우 업데이트
+            output_spikes = current_spikes[self.output_node]
+            self.output_interface.update_hidden_window(output_spikes)
+            
+            # TimingManager 업데이트
             acc_spikes = current_spikes.get(self.acc_node, torch.zeros_like(current_spikes[self.input_node]))
             self.timing_manager.step(clk, acc_spikes, training, input_seq_len, target_seq_len)
 
-            # 출력 시작 결정 (기존과 동일)
+            # 출력 시작 결정
             self.timing_manager.should_start_output(training, input_seq_len)
             
-            # v3.0: 출력 생성 (CLK 히든 시퀀스 기반)
+            # v6.0: 토큰 생성 (내부 히든 윈도우 사용)
             if self.timing_manager.output_started:
-                output_spikes = current_spikes[self.output_node]
                 current_pos = self.timing_manager.generated_length
                 
-                # v3.0: 히든 스테이트 히스토리와 함께 OutputInterface 호출
-                all_output_logits, hidden_states_history = self.output_interface(
-                    output_spikes, 
-                    decoder_input_ids, 
-                    hidden_states_history
-                )
+                # v6.0: OutputInterface는 decoder_input_ids만 받음 (내부 히든 윈도우 사용)
+                all_output_logits = self.output_interface(decoder_input_ids)
                 
                 # 마지막 토큰의 로짓만 사용
                 token_logits = all_output_logits[:, -1, :]  # [B, vocab_size]
                 all_logits.append(token_logits)
                 all_logits_with_clk.append((token_logits, clk))
                 
-                # 다음 토큰 결정 (기존과 동일)
+                # 다음 토큰 결정
                 if training and target_schedule is not None and current_pos < target_seq_len:
                     # 학습 모드: scheduled sampling
                     use_teacher = torch.rand(1).item() < ss_prob
@@ -411,7 +408,7 @@ class SCSSystem(nn.Module):
                 decoder_input_ids = torch.cat([decoder_input_ids, next_token], dim=1)
                 last_token_id = next_token[0].item()
                 
-                # 종료 조건 체크 (기존과 동일)
+                # 종료 조건 체크
                 if self.timing_manager.should_end_output(
                     training, 
                     target_seq_len,
@@ -429,7 +426,7 @@ class SCSSystem(nn.Module):
                     else:
                         loss_timing_info['end_conditions'] = info
             
-            # 후처리
+            # Phase 3: 스파이크 후처리
             self._phase3_post_spike_processing(current_spikes)
             
             # 스파이크율 누적 (매 CLK마다)
@@ -533,6 +530,8 @@ class SCSSystem(nn.Module):
         
         for node in self.nodes.values():
             node.reset_state(batch_size)
+
+        self.output_interface.reset_state(batch_size)
     
     def _accumulate_spike_rates(self, current_spikes: Dict[str, torch.Tensor]):
         """매 CLK마다 개별 노드의 스파이크율 편차를 누적 (설정된 노드만)"""

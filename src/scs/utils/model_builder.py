@@ -131,7 +131,6 @@ class ModelBuilder:
                     "use_positional_encoding", 
                     io_config["output_interface"].get("positional_encoding", True)
                 ),
-                use_clk_position_encoding=io_config["output_interface"].get("use_clk_position_encoding", False),
                 t5_model_name=io_config["output_interface"].get("t5_model_name", "t5-base"),
                 device=device
             )

@@ -98,7 +98,7 @@ learning:
   ss_end_prob: 0.0
   ss_decay_epochs: 0
 
-  spike_reg_weight: 1.0 # 스파이크 정규화 가중치
+  spike_reg_weight: 0.0 # 스파이크 정규화 가중치
   node_target_spike_rates: # 이 노드들만 정규화됨
     IN: 0.1
     OUT: 0.1
@@ -107,8 +107,8 @@ learning:
   sync_target_start: 0.5 # 시작 시점 동기화 목표
   sync_target_end: 0.0 # 종료 시점 동기화 목표
 
-  use_temporal_weighting: true
-  initial_temporal_weight: 10.0 # 초기 CLK에 높은 중요도
+  use_temporal_weighting: false
+  initial_temporal_weight: 5.0 # 초기 CLK에 높은 중요도
   final_temporal_weight: 1.0 # 나중 CLK에 기본 중요도
 
   # 점진적 커리큘럼 학습
@@ -130,7 +130,7 @@ learning:
       - "output_interface.spatial_compressor"
       - "output_interface.transformer_decoder.layers.0.self_attn"
     unfreeze_schedule: # 에포크별 해제 스케줄
-      1000: # 에포크 1000에 T5 임베딩 해제
+      10000: # 에포크 10000에 T5 임베딩 해제
         - "input_interface.token_embedding"
         - "output_interface.token_embedding"
         - "output_interface.final_projection"

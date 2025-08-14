@@ -28,17 +28,42 @@ brain_regions:
     grid_size: [64, 64]
     decay_rate: 0.8
     distance_tau: 1.0
+  ADJ:
+    grid_size: [64, 64]
+    decay_rate: 0.8
+    distance_tau: 1.0
   OUT:
     grid_size: [64, 64]
     decay_rate: 0.8
     distance_tau: 1.0
 
-# === 축삭 연결 ===
+# === 축삭 연결 (완전 오버라이드) ===
 axonal_connections:
   connections:
+    # 기본 정보 처리 경로
     - source: "IN"
+      target: "ADJ"
+      stride: 1
+      weight_scale: 1.0
+
+    - source: "ADJ"
+      target: "IN"
+      stride: 2
+      weight_scale: 1.0
+
+    - source: "ADJ"
       target: "OUT"
       stride: 1
+      weight_scale: 1.0
+
+    - source: "OUT"
+      target: "ADJ"
+      stride: 2
+      weight_scale: 1.0
+
+    - source: "IN"
+      target: "OUT"
+      stride: 2
       weight_scale: 1.0
 
 # === 작업 설정 오버라이드 ===
@@ -53,16 +78,16 @@ task:
   bert_config:
     mask_probability: 0.05 # 5% 토큰 마스킹
     random_token_prob: 0.1 # 10% 랜덤 토큰으로 대체
-    unchanged_prob: 0.1 # 10% 원본 유지
+    unchanged_prob: 1.0 # 100% 원본 유지
     min_masks: 1 # 최소 마스크 개수
     max_masks_ratio: 0.5 # 최대 50% 마스킹
 
 # === 학습 설정 오버라이드 ===
 learning:
-  epochs: 251
+  epochs: 51
   learning_rate: 5e-4
   eta_min: 2e-4
-  max_clk_training: 100
+  max_clk_training: 128
   optimizer: "adamw"
   weight_decay: 1e-4
   eval_every: 10
@@ -72,12 +97,7 @@ learning:
   # 점진적 커리큘럼 학습
   use_curriculum_learning: true
   curriculum_schedule:
-    0: 10
-    50: 20
-    100: 30
-    150: 40
-    200: 50
-    250: 100
+    0: 64
 
 timing_manager:
   sync_ema_alpha: 0.1 # EMA 필터링 강도
@@ -87,7 +107,7 @@ timing_manager:
   max_processing_clk: 500 # 최대 처리 시간
   min_output_length: 5 # 최소 출력 길이
   fixed_len: -1 # -1: 적응 모드, >0: 고정 길이
-  fixed_delay: 2 # -1: 적응 모드, ≥0: 고정 지연
+  fixed_delay: 3 # -1: 적응 모드, ≥0: 고정 지연
 
 # === 데이터 로딩 오버라이드 ===
 data_loading:

@@ -253,7 +253,7 @@ def _save_spike_visualizations(model, experiment_dir, test_loader, logger):
            
            all_spike_patterns = []  # CLK별 스파이크 패턴 저장
            
-           max_clk = min(50, model.timing_manager.max_processing_clk)  # 시각화용으로 제한
+           max_clk = min(500, model.timing_manager.max_processing_clk)  # 시각화용으로 제한
            
            for clk in range(max_clk):
                model.current_clk = clk

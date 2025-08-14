@@ -541,41 +541,46 @@ def _generate_io_example_metric(model, test_loader, experiment_dir, logger, devi
                 
                 # ============ OutputInterface 추적 ============
                 if hasattr(model, 'output_interface'):
-                    # 가상의 스파이크 그리드 생성 (테스트용)
+                    # v6.0: OutputInterface 상태 초기화 (히든 윈도우 내부 관리)
                     grid_h, grid_w = model.output_interface.grid_height, model.output_interface.grid_width
+                    batch_size = 1
+                    model.output_interface.reset_state(batch_size)
                     
-                    # 케이스 1: 완전 비활성화
-                    zero_spikes = torch.zeros(1, grid_h, grid_w, device=device)
-                    zero_hidden = model.output_interface._create_current_hidden_vector(zero_spikes)
+                    # 케이스 1: 완전 비활성화 스파이크로 윈도우 업데이트
+                    zero_spikes = torch.zeros(batch_size, grid_h, grid_w, device=device)
+                    model.output_interface.update_hidden_window(zero_spikes)
                     
-                    # 케이스 2: 스파스 활성화 (10개 뉴런)
-                    sparse_spikes = torch.zeros(1, grid_h, grid_w, device=device)
-                    flat_sparse = sparse_spikes.view(-1)
+                    # 케이스 2: 스파스 활성화 (10개 뉴런)로 윈도우 업데이트
+                    sparse_spikes = torch.zeros(batch_size, grid_h, grid_w, device=device)
+                    flat_sparse = sparse_spikes.view(batch_size, -1)
                     indices = torch.randperm(grid_h * grid_w)[:10]
-                    flat_sparse[indices] = 1.0
-                    sparse_spikes = flat_sparse.view(1, grid_h, grid_w)
-                    sparse_hidden = model.output_interface._create_current_hidden_vector(sparse_spikes)
+                    flat_sparse[:, indices] = 1.0
+                    sparse_spikes = flat_sparse.view(batch_size, grid_h, grid_w)
+                    model.output_interface.update_hidden_window(sparse_spikes)
                     
-                    # compressor_power 값 추적
+                    # 현재 히든 윈도우 상태 분석
+                    current_hidden_window = model.output_interface.hidden_window  # [B, window_size, embedding_dim]
                     compressor_power = model.output_interface.compressor_power.item()
                     
+                    # 윈도우의 마지막 벡터 (가장 최근 업데이트된 것) 분석
+                    latest_hidden = current_hidden_window[:, -1, :]  # [B, embedding_dim]
+                    
                     traced_data["steps"].append({
-                        "name": "output_hidden_vector_analysis",
+                        "name": "output_hidden_window_analysis",
                         "compressor_power": compressor_power,
-                        "zero_spikes": {
-                            "shape": list(zero_hidden.shape),
-                            "mean": zero_hidden.mean().item(),
-                            "std": zero_hidden.std().item(),
-                            "l2_norm": torch.norm(zero_hidden).item()
+                        "hidden_window_shape": list(current_hidden_window.shape),
+                        "latest_hidden_vector": {
+                            "shape": list(latest_hidden.shape),
+                            "mean": latest_hidden.mean().item(),
+                            "std": latest_hidden.std().item(),
+                            "l2_norm": torch.norm(latest_hidden).item()
                         },
-                        "sparse_spikes": {
-                            "active_count": 10,
-                            "shape": list(sparse_hidden.shape),
-                            "mean": sparse_hidden.mean().item(),
-                            "std": sparse_hidden.std().item(),
-                            "l2_norm": torch.norm(sparse_hidden).item()
+                        "window_stats": {
+                            "window_mean": current_hidden_window.mean().item(),
+                            "window_std": current_hidden_window.std().item(),
+                            "window_l2_norm": torch.norm(current_hidden_window).item()
                         },
-                        "description": f"v5.0: compressor_power={compressor_power:.3f}, T5 메모리 스케일 맞춤 (std≈0.1 예상)"
+                        "description": f"v6.0: 히든 윈도우 내부 관리, compressor_power={compressor_power:.3f}, 스파스 스파이크 업데이트 후 상태"
                     })
                     
                     # 디코더 입력 임베딩 추적

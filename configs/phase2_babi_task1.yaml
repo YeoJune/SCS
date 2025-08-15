@@ -64,6 +64,10 @@ axonal_connections:
       target: "OUT"
       stride: 2
       weight_scale: 1.0
+    - source: "MEM2"
+      target: "ACC"
+      stride: 2
+      weight_scale: 1.0
 
 # === 작업 설정 오버라이드 ===
 task:

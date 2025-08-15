@@ -32,13 +32,37 @@ brain_regions:
     grid_size: [64, 64]
     decay_rate: 0.8
     distance_tau: 1.0
+  MEM1:
+    grid_size: [64, 64]
+    decay_rate: 0.8
+    distance_tau: 1.0
+  MEM2:
+    grid_size: [64, 64]
+    decay_rate: 0.8
+    distance_tau: 1.0
 
 # === 축삭 연결 ===
 axonal_connections:
   connections:
     - source: "IN"
+      target: "MEM1"
+      stride: 1
+      weight_scale: 1.0
+    - source: "MEM1"
+      target: "MEM2"
+      stride: 1
+      weight_scale: 1.0
+    - source: "MEM2"
+      target: "MEM1"
+      stride: 1
+      weight_scale: 1.0
+    - source: "MEM2"
       target: "OUT"
       stride: 1
+      weight_scale: 1.0
+    - source: "IN"
+      target: "OUT"
+      stride: 2
       weight_scale: 1.0
 
 # === 작업 설정 오버라이드 ===
@@ -53,7 +77,7 @@ learning:
   epochs: 251
   learning_rate: 5e-4
   eta_min: 2e-4
-  max_clk_training: 100
+  max_clk_training: 128
   optimizer: "adamw"
   weight_decay: 1e-4
   eval_every: 10
@@ -63,12 +87,10 @@ learning:
   # 점진적 커리큘럼 학습
   use_curriculum_learning: true
   curriculum_schedule:
-    0: 10
-    50: 20
-    100: 30
-    150: 40
-    200: 50
-    250: 100
+    0: 32
+    50: 64
+    100: 96
+    150: 128
 
 timing_manager:
   sync_ema_alpha: 0.1 # EMA 필터링 강도
@@ -78,7 +100,7 @@ timing_manager:
   max_processing_clk: 500 # 최대 처리 시간
   min_output_length: 5 # 최소 출력 길이
   fixed_len: -1 # -1: 적응 모드, >0: 고정 길이
-  fixed_delay: 2 # -1: 적응 모드, ≥0: 고정 지연
+  fixed_delay: 5 # -1: 적응 모드, ≥0: 고정 지연
 
 # === 데이터 로딩 오버라이드 ===
 data_loading:

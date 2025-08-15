@@ -228,7 +228,7 @@ class bAbIDataset(BaseDataset):
             
             return {
                 'input_text': input_text,
-                'target_text': f"{input_text} Answer: {answer_text}",
+                'target_text': f"{question_text} Answer: {answer_text}",
                 'metadata': {
                     'index': idx, 
                     'task': item.get('task', self.task_id),

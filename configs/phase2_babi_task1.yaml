@@ -99,8 +99,8 @@ timing_manager:
   min_processing_clk: 0 # 최소 처리 시간
   max_processing_clk: 500 # 최대 처리 시간
   min_output_length: 5 # 최소 출력 길이
-  fixed_len: -1 # -1: 적응 모드, >0: 고정 길이
-  fixed_delay: 5 # -1: 적응 모드, ≥0: 고정 지연
+  fixed_len: 10 # -1: 적응 모드, >0: 고정 길이
+  fixed_delay: -1 # -1: 적응 모드, ≥0: 고정 지연
 
 # === 데이터 로딩 오버라이드 ===
 data_loading:

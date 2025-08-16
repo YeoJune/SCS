@@ -13,13 +13,12 @@ from .timing import TimingManager
 
 class AxonalConnections(nn.Module):
     """
-    Stride 기반 축삭 연결 - 내부 sparse 구현으로 메모리 효율성 개선
+    Stride 기반 축삭 연결 - 최적화된 직접 인덱싱 구현
     
     핵심 아이디어:
     - Source에서 stride만큼 띄워서 샘플링
-    - Target도 동일한 개수가 되도록 stride 스케일링
-    - 1:1 대응으로 깔끔하게 연결
-    - 내부적으로는 sparse 저장으로 메모리 절약
+    - Target에 1:1 대응으로 배치
+    - Sparse 저장 대신 직접 stride 연산 사용
     """
     
     def __init__(
@@ -34,9 +33,9 @@ class AxonalConnections(nn.Module):
         self.node_grid_sizes = node_grid_sizes or {}
         self.device = device
         
-        # Sparse 연결 정보 저장
-        self.connection_indices = {}  # {conn_key: (source_indices, target_indices)}
-        self.connection_weights = nn.ParameterDict()  # {conn_key: weights}
+        # 연결별 가중치와 매핑 정보 저장
+        self.connection_weights = nn.ParameterDict()
+        self.connection_info = {}
         
         self._initialize_stride_connections()
 
@@ -45,94 +44,71 @@ class AxonalConnections(nn.Module):
         return self.node_grid_sizes.get(node_name, (64, 64))
     
     def _initialize_stride_connections(self):
-        """Stride 기반 축삭 연결 초기화"""
+        """Stride 기반 연결 초기화"""
         for conn in self.connections:
             source = conn["source"]
             target = conn["target"]
-            stride = conn.get("stride", 4)  # 기본 4칸 간격
+            stride = conn.get("stride", 4)
             weight_scale = conn.get("weight_scale", 1.0)
             
             conn_key = f"{source}_to_{target}"
             
-            source_indices, target_indices, weights = self._create_stride_connection(
-                source, target, stride, weight_scale
-            )
+            # 연결 매핑 정보 계산
+            mapping_info = self._compute_stride_mapping(source, target, stride)
+            self.connection_info[conn_key] = mapping_info
             
-            self.connection_indices[conn_key] = (source_indices, target_indices)
+            # 가중치 생성
+            weights = self._create_weights(mapping_info, weight_scale)
             self.connection_weights[conn_key] = nn.Parameter(weights)
     
-    def _create_stride_connection(
-        self, 
-        source: str, 
-        target: str, 
-        stride: int, 
-        weight_scale: float
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _compute_stride_mapping(self, source: str, target: str, stride: int) -> Dict[str, Any]:
         """
-        Stride 기반 연결 생성 (sparse 형태로)
+        Stride 매핑 정보 계산
         
-        Args:
-            source: 소스 노드명
-            target: 타겟 노드명  
-            stride: 소스에서의 샘플링 간격
-            weight_scale: 가중치 스케일
-            
         Returns:
-            source_indices: [num_connections] 소스 인덱스들
-            target_indices: [num_connections] 타겟 인덱스들
-            weights: [num_connections] 연결 가중치들
+            mapping_info: 연결 매핑에 필요한 모든 정보
         """
         source_h, source_w = self._get_grid_size(source)
         target_h, target_w = self._get_grid_size(target)
         
-        # 소스 샘플링 개수 계산
+        # 소스 샘플링 크기
         source_samples_h = source_h // stride
         source_samples_w = source_w // stride
         
-        # 타겟 stride 계산 (동일한 개수 맞추기)
+        # 타겟 배치 stride
         target_stride_h = target_h // source_samples_h if source_samples_h > 0 else target_h
         target_stride_w = target_w // source_samples_w if source_samples_w > 0 else target_w
         
-        # 연결 리스트 수집
-        source_indices = []
-        target_indices = []
-        weights = []
+        # 실제 연결 가능한 크기
+        effective_h = min(source_samples_h, target_h // target_stride_h)
+        effective_w = min(source_samples_w, target_w // target_stride_w)
         
-        # 1:1 대응 연결 생성
-        for i in range(min(source_samples_h, target_h // target_stride_h)):
-            for j in range(min(source_samples_w, target_w // target_stride_w)):
-                # 소스 위치 (stride 간격으로 샘플링)
-                source_i = i * stride
-                source_j = j * stride
-                
-                # 타겟 위치 (스케일링된 stride로 배치)
-                target_i = i * target_stride_h
-                target_j = j * target_stride_w
-                
-                # 경계 검사
-                if (source_i < source_h and source_j < source_w and 
-                    target_i < target_h and target_j < target_w):
-                    
-                    # 1D 인덱스 변환
-                    source_idx = source_i * source_w + source_j
-                    target_idx = target_i * target_w + target_j
-                    
-                    source_indices.append(source_idx)
-                    target_indices.append(target_idx)
-                    
-                    # 가중치 설정 (가우시안 노이즈 + 스케일)
-                    weight = torch.randn(1).item() * 0.3 + weight_scale
-                    weights.append(abs(weight))
+        return {
+            "source_grid": (source_h, source_w),
+            "target_grid": (target_h, target_w),
+            "source_stride": stride,
+            "target_stride": (target_stride_h, target_stride_w),
+            "source_samples": (source_samples_h, source_samples_w),
+            "effective_size": (effective_h, effective_w),
+            "num_connections": effective_h * effective_w
+        }
+    
+    def _create_weights(self, mapping_info: Dict[str, Any], weight_scale: float) -> torch.Tensor:
+        """
+        연결에 대한 가중치 생성
         
-        return (
-            torch.tensor(source_indices, dtype=torch.long, device=self.device),
-            torch.tensor(target_indices, dtype=torch.long, device=self.device),
-            torch.tensor(weights, dtype=torch.float, device=self.device)
-        )
+        Returns:
+            weights: [effective_h, effective_w] 크기의 가중치 텐서
+        """
+        effective_h, effective_w = mapping_info["effective_size"]
+        
+        # 가우시안 노이즈 + 스케일로 가중치 생성
+        weights = torch.randn(effective_h, effective_w, device=self.device) * 0.3 + weight_scale
+        return torch.abs(weights)  # 양수 가중치
     
     def forward(self, node_spikes: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """
-        Stride 기반 축삭 신호 전파
+        최적화된 stride 기반 축삭 신호 전파
         
         Args:
             node_spikes: {node_name: [B, H, W]} 노드별 스파이크
@@ -149,27 +125,18 @@ class AxonalConnections(nn.Module):
             if source not in node_spikes:
                 continue
             
-            source_spikes = node_spikes[source]
             conn_key = f"{source}_to_{target}"
-            
-            if conn_key not in self.connection_indices:
+            if conn_key not in self.connection_info:
                 continue
+            
+            source_spikes = node_spikes[source]
             
             # 배치 차원 정규화
             if source_spikes.dim() == 2:
                 source_spikes = source_spikes.unsqueeze(0)
             
-            batch_size = source_spikes.shape[0]
-            
-            # 2D → 1D 평탄화
-            flat_spikes = source_spikes.view(batch_size, -1)
-            
-            # Sparse 연결 적용
-            axonal_signal = self._sparse_forward(flat_spikes, conn_key)
-            
-            # 1D → 2D 복원
-            target_h, target_w = self._get_grid_size(target)
-            axonal_signal = axonal_signal.view(batch_size, target_h, target_w)
+            # 최적화된 stride 연결 적용
+            axonal_signal = self._apply_stride_connection(source_spikes, conn_key)
             
             # 다중 소스 신호 누적
             if target not in axonal_inputs:
@@ -179,103 +146,55 @@ class AxonalConnections(nn.Module):
         
         return axonal_inputs
     
-    def _sparse_forward(self, flat_spikes: torch.Tensor, conn_key: str) -> torch.Tensor:
+    def _apply_stride_connection(self, source_spikes: torch.Tensor, conn_key: str) -> torch.Tensor:
         """
-        벡터화된 sparse 연결을 통한 신호 전파
+        최적화된 stride 연결 적용
         
         Args:
-            flat_spikes: [B, source_size] 평탄화된 소스 스파이크
+            source_spikes: [B, H, W] 소스 스파이크
             conn_key: 연결 키
             
         Returns:
-            output: [B, target_size] 타겟 신호
+            target_signal: [B, target_H, target_W] 타겟 신호
         """
-        source_indices, target_indices = self.connection_indices[conn_key]
+        mapping_info = self.connection_info[conn_key]
         weights = self.connection_weights[conn_key]
         
-        batch_size, source_size = flat_spikes.shape
+        source_h, source_w = mapping_info["source_grid"]
+        target_h, target_w = mapping_info["target_grid"]
+        source_stride = mapping_info["source_stride"]
+        target_stride_h, target_stride_w = mapping_info["target_stride"]
+        effective_h, effective_w = mapping_info["effective_size"]
         
-        # target_size를 연결 정보에서 가져오기 (전체 그리드 크기)
-        target_node = None
-        for conn in self.connections:
-            if f"{conn['source']}_to_{conn['target']}" == conn_key:
-                target_node = conn['target']
-                break
+        batch_size = source_spikes.shape[0]
         
-        if target_node is None:
-            raise ValueError(f"Connection key {conn_key} not found in connections")
+        # 1. Source Stride 샘플링: [B, H, W] → [B, samples_h, samples_w]
+        source_sampled = source_spikes[:, ::source_stride, ::source_stride]
         
-        target_h, target_w = self._get_grid_size(target_node)
-        target_size = target_h * target_w
+        # 유효 영역만 추출
+        source_sampled = source_sampled[:, :effective_h, :effective_w]
         
-        # 벡터화된 연산을 위한 인덱스 확장
-        # [B, num_connections] 형태로 배치별 소스 값들 추출
-        batch_indices = torch.arange(batch_size, device=self.device).unsqueeze(1)  # [B, 1]
-        source_indices_expanded = source_indices.unsqueeze(0).expand(batch_size, -1)  # [B, num_connections]
+        # 2. 가중치 적용: element-wise 곱셈
+        weighted_signal = source_sampled * weights.unsqueeze(0)  # [B, effective_h, effective_w]
         
-        # 모든 배치의 연결된 소스 값들을 한 번에 추출: [B, num_connections]
-        source_values = flat_spikes[batch_indices, source_indices_expanded]
+        # 3. Target 크기로 배치
+        target_signal = torch.zeros(batch_size, target_h, target_w, 
+                                   device=source_spikes.device, dtype=source_spikes.dtype)
         
-        # 가중치 적용: [B, num_connections]
-        weighted_values = source_values * weights.unsqueeze(0)
+        # Target stride에 따라 배치
+        if target_stride_h == 1 and target_stride_w == 1:
+            # 연속 배치 (가장 일반적인 경우)
+            target_signal[:, :effective_h, :effective_w] = weighted_signal
+        else:
+            # Stride 배치
+            for i in range(effective_h):
+                for j in range(effective_w):
+                    target_i = i * target_stride_h
+                    target_j = j * target_stride_w
+                    if target_i < target_h and target_j < target_w:
+                        target_signal[:, target_i, target_j] = weighted_signal[:, i, j]
         
-        # 출력 텐서 초기화
-        output = torch.zeros(batch_size, target_size, device=self.device)
-        
-        # 벡터화된 scatter_add 연산
-        # 배치 차원과 타겟 인덱스를 결합한 플랫 인덱스 생성
-        batch_offsets = torch.arange(batch_size, device=self.device).unsqueeze(1) * target_size  # [B, 1]
-        target_indices_expanded = target_indices.unsqueeze(0).expand(batch_size, -1)  # [B, num_connections]
-        flat_target_indices = (batch_offsets + target_indices_expanded).view(-1)  # [B * num_connections]
-        
-        # 플랫 출력에 scatter_add
-        flat_output = output.view(-1)  # [B * target_size]
-        flat_weighted_values = weighted_values.view(-1)  # [B * num_connections]
-        
-        flat_output.scatter_add_(0, flat_target_indices, flat_weighted_values)
-        
-        return flat_output.view(batch_size, target_size)
-    
-    def get_connection_info(self) -> Dict[str, Dict]:
-        """연결 정보 출력 (디버깅용)"""
-        info = {}
-        
-        for conn in self.connections:
-            source = conn["source"]
-            target = conn["target"]
-            stride = conn.get("stride", 4)
-            
-            source_h, source_w = self._get_grid_size(source)
-            target_h, target_w = self._get_grid_size(target)
-            
-            source_samples_h = source_h // stride
-            source_samples_w = source_w // stride
-            
-            target_stride_h = target_h // source_samples_h if source_samples_h > 0 else target_h
-            target_stride_w = target_w // source_samples_w if source_samples_w > 0 else target_w
-            
-            conn_key = f"{source}_to_{target}"
-            
-            # 실제 연결 개수 계산
-            if conn_key in self.connection_weights:
-                num_connections = len(self.connection_weights[conn_key])
-                total_possible = source_h * source_w * target_h * target_w
-                connection_density = num_connections / total_possible
-            else:
-                num_connections = 0
-                connection_density = 0.0
-            
-            info[conn_key] = {
-                "source_grid": (source_h, source_w),
-                "target_grid": (target_h, target_w),
-                "source_stride": stride,
-                "target_stride": (target_stride_h, target_stride_w),
-                "source_samples": (source_samples_h, source_samples_w),
-                "total_connections": num_connections,
-                "connection_density": connection_density
-            }
-        
-        return info
+        return target_signal
 
 class SCSSystem(nn.Module):
     """

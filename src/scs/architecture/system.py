@@ -121,19 +121,9 @@ class AxonalConnections(nn.Module):
             )
             source_patches = source_patches.transpose(1, 2)
             
-            # 2. bmm을 위한 차원 재구성 (reshape 사용)
-            num_patches = source_patches.shape[1]
-            source_patch_size = source_patches.shape[2]
-            source_patches_reshaped = source_patches.reshape(-1, source_patch_size, 1)
-
             patch_transforms = self.patch_transforms[conn_key]
-            target_patch_size = patch_transforms.shape[1]
-            patch_transforms_expanded = patch_transforms.expand(batch_size, -1, -1, -1)
-            patch_transforms_reshaped = patch_transforms_expanded.reshape(-1, target_patch_size, source_patch_size)
 
-            # 3. 배치 행렬 곱셈
-            transformed_patches = torch.bmm(patch_transforms_reshaped, source_patches_reshaped)
-            transformed_patches = transformed_patches.view(batch_size, num_patches, target_patch_size)
+            transformed_patches = torch.einsum('bps,pts->bpt', source_patches, patch_transforms)
             
             # 4. 게이트 가중치 적용
             patch_gates = self.patch_gates[conn_key]

@@ -42,29 +42,10 @@ axonal_connections:
   connections:
     # 기본 정보 처리 경로
     - source: "IN"
-      target: "ADJ"
-      stride: 1
-      weight_scale: 1.0
-
-    - source: "ADJ"
-      target: "IN"
-      stride: 2
-      weight_scale: 1.0
-
-    - source: "ADJ"
       target: "OUT"
-      stride: 1
-      weight_scale: 1.0
-
-    - source: "OUT"
-      target: "ADJ"
-      stride: 2
-      weight_scale: 1.0
-
-    - source: "IN"
-      target: "OUT"
-      stride: 2
-      weight_scale: 1.0
+      patch_size: 2
+      patch_weight_scale: 1.0
+      inner_weight_scale: 1.0
 
 # === 작업 설정 오버라이드 ===
 task:
@@ -107,7 +88,7 @@ timing_manager:
   max_processing_clk: 500 # 최대 처리 시간
   min_output_length: 5 # 최소 출력 길이
   fixed_len: -1 # -1: 적응 모드, >0: 고정 길이
-  fixed_delay: 3 # -1: 적응 모드, ≥0: 고정 지연
+  fixed_delay: 2 # -1: 적응 모드, ≥0: 고정 지연
 
 # === 데이터 로딩 오버라이드 ===
 data_loading:

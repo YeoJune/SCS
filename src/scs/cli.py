@@ -76,14 +76,6 @@ def validate_args(args: argparse.Namespace):
     if args.experiment_dir and not Path(args.experiment_dir).exists():
         raise FileNotFoundError(f"실험 디렉토리를 찾을 수 없습니다: {args.experiment_dir}")
 
-
-# --- Conv2d 출력 차원 계산 함수 ---
-def calculate_conv2d_output_size(input_size: int, kernel_size: int, stride: int = 1, 
-                                padding: int = 0, dilation: int = 1) -> int:
-    """Conv2d 출력 크기 계산"""
-    return (input_size + 2 * padding - dilation * (kernel_size - 1) - 1) // stride + 1
-
-
 # --- 설정 파일 검증 모드 ---
 def validate_mode(args: argparse.Namespace):
    """설정 파일 구조 검증 모드"""
@@ -115,7 +107,7 @@ def validate_mode(args: argparse.Namespace):
                print(f"   - 입력 노드: {config['system_roles']['input_node']}")
                print(f"   - 출력 노드: {config['system_roles']['output_node']}")
                
-               # 축삭 연결 차원 정보 출력 (새로운 stride 방식)
+               # 축삭 연결 차원 정보 출력 (패치 기반)
                print(f"📐 축삭 연결 차원 검증:")
                for conn in config['axonal_connections']['connections']:
                    source = conn['source']
@@ -123,20 +115,26 @@ def validate_mode(args: argparse.Namespace):
                    source_size = config['brain_regions'][source]['grid_size']
                    target_size = config['brain_regions'][target]['grid_size']
                    
-                   stride = conn.get('stride', 4)  # 새로운 stride 기본값
+                   patch_size = conn.get('patch_size', 4)  # 패치 크기
                    
-                   # stride 기반 샘플링 개수 계산
-                   source_samples_h = source_size[0] // stride
-                   source_samples_w = source_size[1] // stride
+                   # 소스 기준 패치 수 계산
+                   source_patches_h = source_size[0] // patch_size
+                   source_patches_w = source_size[1] // patch_size
+                   num_patches = source_patches_h * source_patches_w
                    
-                   # 타겟 stride 계산
-                   target_stride_h = target_size[0] // source_samples_h if source_samples_h > 0 else target_size[0]
-                   target_stride_w = target_size[1] // source_samples_w if source_samples_w > 0 else target_size[1]
+                   # 타겟 패치 크기 (동일한 패치 수 맞추기)
+                   target_patch_h = target_size[0] // source_patches_h if source_patches_h > 0 else target_size[0]
+                   target_patch_w = target_size[1] // source_patches_w if source_patches_w > 0 else target_size[1]
                    
-                   total_connections = source_samples_h * source_samples_w
+                   # 패치별 파라미터 수
+                   source_patch_size = patch_size * patch_size
+                   target_patch_size = target_patch_h * target_patch_w
+                   gate_params = num_patches
+                   inner_params = num_patches * target_patch_size * source_patch_size
+                   total_conn_params = gate_params + inner_params
                    
-                   print(f"   - {source}→{target}: {source_size} (stride:{stride}) → {total_connections}개 연결 → {target_size}")
-                   print(f"     샘플: {source_samples_h}x{source_samples_w}, 타겟 stride: {target_stride_h}x{target_stride_w}")
+                   print(f"   - {source}→{target}: {source_size} (patch:{patch_size}×{patch_size}) → {num_patches}개 패치 → {target_size}")
+                   print(f"     패치 배치: {source_patches_h}×{source_patches_w} → {target_patch_h}×{target_patch_w}, 파라미터: {total_conn_params:,}개")
                
                print("✅ 모델 생성 및 차원 검증 테스트 성공!")
            except Exception as model_error:
@@ -155,8 +153,7 @@ def validate_mode(args: argparse.Namespace):
    except Exception as e:
        print(f"❌ 설정 파일 검증 중 오류 발생: {e}")
        return False
-
-
+   
 # --- 데이터셋 이름 추출 헬퍼 ---
 def get_dataset_name_from_config(config: Dict[str, Any], logger) -> str:
     """설정 파일에서 데이터셋 이름 추출 (다양한 형식 지원)"""

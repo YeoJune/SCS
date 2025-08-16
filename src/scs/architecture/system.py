@@ -5,6 +5,7 @@ SCS 시스템 통합 - 순수한 구현만
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from typing import Dict, List, Optional, Tuple, Any
 
 from .node import SpikeNode, LocalConnectivity
@@ -13,9 +14,14 @@ from .timing import TimingManager
 
 class AxonalConnections(nn.Module):
     """
-    (최종 안정 버전) Stride 기반 희소 축삭 연결
-    - 사전 계산된 인덱스와 요소별 곱셈으로, 수학적으로 정확하게 구현
+    패치 기반 축삭 연결 - 계층적 가중치를 가진 완전 비공유 패치 연결
+    
+    핵심 아이디어:
+    - 소스를 patch_size×patch_size 패치로 분할
+    - 타겟은 동일한 패치 수가 되도록 자동 조정
+    - 각 패치별로 독립적인 게이트 가중치 + 내부 변환 행렬
     """
+    
     def __init__(
         self,
         connections: List[Dict[str, Any]],
@@ -23,74 +29,132 @@ class AxonalConnections(nn.Module):
         device: str = "cuda"
     ):
         super().__init__()
+        
         self.connections = connections
         self.node_grid_sizes = node_grid_sizes or {}
         self.device = device
         
-        self.connection_weights = nn.ParameterDict()
-        self._precompute_connections()
+        # 패치별 게이트 가중치와 내부 변환 행렬
+        self.patch_gates = nn.ParameterDict()
+        self.patch_transforms = nn.ParameterDict()
+        
+        self._create_patch_connections()
 
     def _get_grid_size(self, node_name: str) -> tuple:
+        """노드의 그리드 크기 가져오기"""
         return self.node_grid_sizes.get(node_name, (64, 64))
     
-    def _precompute_connections(self):
-        """Stride 기반 연결을 위한 인덱스와 가중치 사전 계산"""
+    def _create_patch_connections(self):
+        """패치 기반 연결 생성"""
         for conn in self.connections:
-            source, target = conn["source"], conn["target"]
-            stride = conn.get("stride", 4)
-            weight_scale = conn.get("weight_scale", 1.0)
+            source = conn["source"]
+            target = conn["target"]
+            patch_size = conn.get("patch_size", 4)
+            patch_weight_scale = conn.get("patch_weight_scale", 1.0)
+            inner_weight_scale = conn.get("inner_weight_scale", 1.0)
+            
             conn_key = f"{source}_to_{target}"
             
             source_h, source_w = self._get_grid_size(source)
             target_h, target_w = self._get_grid_size(target)
             
-            # 소스 샘플링 위치 (stride 간격)
-            source_y = torch.arange(0, source_h, stride, device=self.device)
-            source_x = torch.arange(0, source_w, stride, device=self.device)
+            # 소스 기준 패치 수 계산
+            source_patches_h = source_h // patch_size
+            source_patches_w = source_w // patch_size
+            num_patches = source_patches_h * source_patches_w
             
-            # 타겟 배치 위치
-            target_y = torch.arange(len(source_y), device=self.device)
-            target_x = torch.arange(len(source_x), device=self.device)
+            # 타겟 패치 크기 (동일한 패치 수 맞추기)
+            target_patch_h = target_h // source_patches_h
+            target_patch_w = target_w // source_patches_w
             
-            # 브로드캐스팅을 위한 인덱스 그리드 생성
-            source_yy, source_xx = torch.meshgrid(source_y, source_x, indexing='ij')
-            target_yy, target_xx = torch.meshgrid(target_y, target_x, indexing='ij')
-
-            # 인덱스를 버퍼로 등록 (학습되지 않음)
-            self.register_buffer(f"{conn_key}_source_y", source_yy)
-            self.register_buffer(f"{conn_key}_source_x", source_xx)
-            self.register_buffer(f"{conn_key}_target_y", target_yy)
-            self.register_buffer(f"{conn_key}_target_x", target_xx)
+            # 패치별 게이트 가중치 [num_patches]
+            patch_gates = torch.randn(num_patches, device=self.device) * 0.3 + patch_weight_scale
+            self.patch_gates[conn_key] = nn.Parameter(patch_gates.abs())
             
-            # 가중치 생성 (학습 가능)
-            weights = (torch.randn(source_yy.shape, device=self.device) * 0.3 + weight_scale).abs()
-            self.connection_weights[conn_key] = nn.Parameter(weights)
+            # 패치별 내부 변환 행렬 [num_patches, target_patch_size, source_patch_size]
+            source_patch_size = patch_size * patch_size
+            target_patch_size = target_patch_h * target_patch_w
+            
+            inner_transforms = torch.randn(
+                num_patches, target_patch_size, source_patch_size, device=self.device
+            ) * 0.3 + inner_weight_scale
+            self.patch_transforms[conn_key] = nn.Parameter(inner_transforms)
     
     def forward(self, node_spikes: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """
+        패치 기반 축삭 신호 전파
+        
+        Args:
+            node_spikes: {node_name: [B, H, W]} 노드별 스파이크
+            
+        Returns:
+            axonal_inputs: {node_name: [B, H, W]} 노드별 축삭 입력
+        """
         axonal_inputs = {}
+        
         for conn in self.connections:
-            source, target = conn["source"], conn["target"]
-            if source not in node_spikes: continue
+            source = conn["source"]
+            target = conn["target"]
+            
+            if source not in node_spikes:
+                continue
             
             source_spikes = node_spikes[source]
             conn_key = f"{source}_to_{target}"
+            patch_size = conn.get("patch_size", 4)
+            
+            # 배치 차원 정규화
+            if source_spikes.dim() == 2:
+                source_spikes = source_spikes.unsqueeze(0)
+            
             batch_size = source_spikes.shape[0]
+            source_h, source_w = self._get_grid_size(source)
             target_h, target_w = self._get_grid_size(target)
             
+            # 소스 패치 분할
+            source_patches_h = source_h // patch_size
+            source_patches_w = source_w // patch_size
+            
+            # 타겟 패치 크기
+            target_patch_h = target_h // source_patches_h
+            target_patch_w = target_w // source_patches_w
+            
+            # unfold를 사용한 패치 추출 [B, patch_size*patch_size, num_patches]
+            source_patches = F.unfold(
+                source_spikes.unsqueeze(1),  # [B, 1, H, W]
+                kernel_size=patch_size,
+                stride=patch_size
+            )  # [B, patch_size^2, num_patches]
+            
+            # 패치별 처리를 위해 차원 재배열 [B, num_patches, patch_size^2]
+            source_patches = source_patches.transpose(1, 2)
+            
+            # 게이트 가중치와 내부 변환 행렬 가져오기
+            patch_gates = self.patch_gates[conn_key]  # [num_patches]
+            patch_transforms = self.patch_transforms[conn_key]  # [num_patches, target_patch_size, source_patch_size]
+            
+            # 배치 행렬 곱셈: [B, num_patches, target_patch_size]
+            transformed_patches = torch.bmm(
+                patch_transforms.unsqueeze(0).expand(batch_size, -1, -1, -1).view(-1, *patch_transforms.shape[1:]),
+                source_patches.view(-1, source_patches.shape[2], 1)
+            ).view(batch_size, patch_transforms.shape[0], patch_transforms.shape[1])
+            
+            # 게이트 가중치 적용 [B, num_patches, target_patch_size]
+            gated_patches = transformed_patches * patch_gates.unsqueeze(0).unsqueeze(2)
+            
+            # fold를 사용한 타겟 그리드 재구성
+            target_output = F.fold(
+                gated_patches.transpose(1, 2),  # [B, target_patch_size, num_patches]
+                output_size=(target_h, target_w),
+                kernel_size=(target_patch_h, target_patch_w),
+                stride=(target_patch_h, target_patch_w)
+            ).squeeze(1)  # [B, H, W]
+            
+            # 다중 소스 신호 누적
             if target not in axonal_inputs:
-                axonal_inputs[target] = torch.zeros(batch_size, target_h, target_w, device=self.device)
-            
-            # 사전 계산된 인덱스 가져오기
-            source_y = getattr(self, f"{conn_key}_source_y")
-            source_x = getattr(self, f"{conn_key}_source_x")
-            target_y = getattr(self, f"{conn_key}_target_y")
-            target_x = getattr(self, f"{conn_key}_target_x")
-            weights = self.connection_weights[conn_key]
-            
-            # 벡터화 연산: 샘플링 → 가중치 적용 → 배치
-            sampled_spikes = source_spikes[:, source_y, source_x]
-            weighted_spikes = sampled_spikes * weights
-            axonal_inputs[target][:, target_y, target_x] += weighted_spikes
+                axonal_inputs[target] = target_output
+            else:
+                axonal_inputs[target] += target_output
         
         return axonal_inputs
 

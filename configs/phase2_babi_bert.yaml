@@ -43,28 +43,33 @@ axonal_connections:
     # 기본 정보 처리 경로
     - source: "IN"
       target: "ADJ"
-      stride: 2
-      weight_scale: 0.9
+      patch_size: 2
+      patch_weight_scale: 1.0
+      inner_weight_scale: 1.0
 
     - source: "ADJ"
       target: "IN"
-      stride: 4
-      weight_scale: 0.2
+      patch_size: 4
+      patch_weight_scale: 0.2
+      inner_weight_scale: 0.2
 
     - source: "ADJ"
       target: "OUT"
-      stride: 2
-      weight_scale: 0.9
+      patch_size: 2
+      patch_weight_scale: 0.9
+      inner_weight_scale: 0.9
 
     - source: "OUT"
       target: "ADJ"
-      stride: 4
-      weight_scale: 0.2
+      patch_size: 4
+      patch_weight_scale: 0.2
+      inner_weight_scale: 0.2
 
     - source: "IN"
       target: "OUT"
-      stride: 4
-      weight_scale: 0.3
+      patch_size: 4
+      patch_weight_scale: 0.3
+      inner_weight_scale: 0.3
 
 # === 작업 설정 오버라이드 ===
 task:

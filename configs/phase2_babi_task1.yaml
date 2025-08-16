@@ -46,24 +46,29 @@ axonal_connections:
   connections:
     - source: "IN"
       target: "MEM1"
-      stride: 2
-      weight_scale: 1.0
+      patch_size: 2
+      patch_weight_scale: 1.0
+      inner_weight_scale: 1.0
     - source: "MEM1"
       target: "MEM2"
-      stride: 1
-      weight_scale: 1.0
+      patch_size: 2
+      patch_weight_scale: 1.0
+      inner_weight_scale: 1.0
     - source: "MEM2"
       target: "MEM1"
-      stride: 1
-      weight_scale: 1.0
+      patch_size: 2
+      patch_weight_scale: 1.0
+      inner_weight_scale: 1.0
     - source: "MEM2"
       target: "OUT"
-      stride: 1
-      weight_scale: 1.0
+      patch_size: 2
+      patch_weight_scale: 1.0
+      inner_weight_scale: 1.0
     - source: "IN"
       target: "OUT"
-      stride: 2
-      weight_scale: 1.0
+      patch_size: 2
+      patch_weight_scale: 1.0
+      inner_weight_scale: 1.0
 
 # === 작업 설정 오버라이드 ===
 task:

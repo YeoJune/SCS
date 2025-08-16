@@ -103,7 +103,6 @@ class AxonalConnections(nn.Module):
             conn_key = f"{source}_to_{target}"
             patch_size = conn.get("patch_size", 4)
             
-            # 배치 차원 정규화
             if source_spikes.dim() == 2:
                 source_spikes = source_spikes.unsqueeze(0)
             
@@ -111,46 +110,44 @@ class AxonalConnections(nn.Module):
             source_h, source_w = self._get_grid_size(source)
             target_h, target_w = self._get_grid_size(target)
             
-            # 소스 패치 분할
-            source_patches_h = source_h // patch_size
-            source_patches_w = source_w // patch_size
+            target_patch_h = target_h // (source_h // patch_size)
+            target_patch_w = target_w // (source_w // patch_size)
             
-            # 타겟 패치 크기
-            target_patch_h = target_h // source_patches_h
-            target_patch_w = target_w // source_patches_w
-            
-            # unfold를 사용한 패치 추출 [B, patch_size*patch_size, num_patches]
+            # 1. unfold를 사용한 패치 추출
             source_patches = F.unfold(
-                source_spikes.unsqueeze(1),  # [B, 1, H, W]
+                source_spikes.unsqueeze(1),
                 kernel_size=patch_size,
                 stride=patch_size
-            )  # [B, patch_size^2, num_patches]
-            
-            # 패치별 처리를 위해 차원 재배열 [B, num_patches, patch_size^2]
+            )
             source_patches = source_patches.transpose(1, 2)
             
-            # 게이트 가중치와 내부 변환 행렬 가져오기
-            patch_gates = self.patch_gates[conn_key]  # [num_patches]
-            patch_transforms = self.patch_transforms[conn_key]  # [num_patches, target_patch_size, source_patch_size]
+            # 2. bmm을 위한 차원 재구성 (reshape 사용)
+            num_patches = source_patches.shape[1]
+            source_patch_size = source_patches.shape[2]
+            source_patches_reshaped = source_patches.reshape(-1, source_patch_size, 1)
+
+            patch_transforms = self.patch_transforms[conn_key]
+            target_patch_size = patch_transforms.shape[1]
+            patch_transforms_expanded = patch_transforms.expand(batch_size, -1, -1, -1)
+            patch_transforms_reshaped = patch_transforms_expanded.reshape(-1, target_patch_size, source_patch_size)
+
+            # 3. 배치 행렬 곱셈
+            transformed_patches = torch.bmm(patch_transforms_reshaped, source_patches_reshaped)
+            transformed_patches = transformed_patches.view(batch_size, num_patches, target_patch_size)
             
-            # 배치 행렬 곱셈: [B, num_patches, target_patch_size]
-            transformed_patches = torch.bmm(
-                patch_transforms.unsqueeze(0).expand(batch_size, -1, -1, -1).view(-1, *patch_transforms.shape[1:]),
-                source_patches.view(-1, source_patches.shape[2], 1)
-            ).view(batch_size, patch_transforms.shape[0], patch_transforms.shape[1])
+            # 4. 게이트 가중치 적용
+            patch_gates = self.patch_gates[conn_key]
+            gated_patches = transformed_patches * patch_gates.view(1, -1, 1)
             
-            # 게이트 가중치 적용 [B, num_patches, target_patch_size]
-            gated_patches = transformed_patches * patch_gates.unsqueeze(0).unsqueeze(2)
-            
-            # fold를 사용한 타겟 그리드 재구성
+            # 5. fold를 사용한 타겟 그리드 재구성
             target_output = F.fold(
-                gated_patches.transpose(1, 2),  # [B, target_patch_size, num_patches]
+                gated_patches.transpose(1, 2),
                 output_size=(target_h, target_w),
                 kernel_size=(target_patch_h, target_patch_w),
                 stride=(target_patch_h, target_patch_w)
-            ).squeeze(1)  # [B, H, W]
+            ).squeeze(1)
             
-            # 다중 소스 신호 누적
+            # 6. 다중 소스 신호 누적
             if target not in axonal_inputs:
                 axonal_inputs[target] = target_output
             else:

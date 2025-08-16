@@ -295,6 +295,10 @@ class SCSSystem(nn.Module):
                 
                 # decoder_input_ids 업데이트
                 decoder_input_ids = torch.cat([decoder_input_ids, next_token], dim=1)
+                
+                if decoder_input_ids.shape[1] > self.output_interface.window_size:
+                    decoder_input_ids = decoder_input_ids[:, -self.output_interface.window_size:]
+                    
                 last_token_id = next_token[0].item()
                 
                 # 종료 조건 체크

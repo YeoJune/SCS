@@ -13,13 +13,12 @@ from .timing import TimingManager
 
 class AxonalConnections(nn.Module):
     """
-    Stride 기반 축삭 연결 - 벡터화 최적화 구현
+    Stride 기반 축삭 연결 - Depthwise Separable Convolution 최적화
     
     핵심 아이디어:
     - Source에서 stride만큼 띄워서 샘플링
-    - Target도 동일한 개수가 되도록 stride 스케일링
-    - 1:1 대응으로 깔끔하게 연결
-    - 사전 계산된 인덱스와 요소별 곱셈으로 최적화
+    - 각 연결마다 독립적인 가중치 (groups=num_connections)
+    - nn.Conv2d의 최적화된 연산 활용
     """
     
     def __init__(
@@ -34,18 +33,17 @@ class AxonalConnections(nn.Module):
         self.node_grid_sizes = node_grid_sizes or {}
         self.device = device
         
-        # 사전 계산된 인덱스들을 저장할 버퍼
-        self.connection_indices = {}
-        self.connection_weights = nn.ParameterDict()
+        # Depthwise Conv 레이어들
+        self.conv_layers = nn.ModuleDict()
         
-        self._precompute_connections()
+        self._create_depthwise_conv_connections()
 
     def _get_grid_size(self, node_name: str) -> tuple:
         """노드의 그리드 크기 가져오기"""
         return self.node_grid_sizes.get(node_name, (64, 64))
     
-    def _precompute_connections(self):
-        """Stride 기반 연결을 위한 인덱스와 가중치 사전 계산"""
+    def _create_depthwise_conv_connections(self):
+        """Depthwise Separable Convolution을 이용한 연결 생성"""
         for conn in self.connections:
             source = conn["source"]
             target = conn["target"]
@@ -55,48 +53,32 @@ class AxonalConnections(nn.Module):
             conn_key = f"{source}_to_{target}"
             
             source_h, source_w = self._get_grid_size(source)
-            target_h, target_w = self._get_grid_size(target)
             
-            # 소스 샘플링 위치 (stride 간격)
-            source_samples_h = source_h // stride
-            source_samples_w = source_w // stride
+            # 샘플링된 연결 개수
+            num_h = source_h // stride
+            num_w = source_w // stride
+            num_connections = num_h * num_w
             
-            # 타겟 배치 위치 (스케일링된 stride)
-            target_stride_h = target_h // source_samples_h if source_samples_h > 0 else target_h
-            target_stride_w = target_w // source_samples_w if source_samples_w > 0 else target_w
+            # Depthwise Separable Convolution
+            # 각 연결이 독립적인 채널로 처리됨
+            self.conv_layers[conn_key] = nn.Conv2d(
+                in_channels=num_connections,
+                out_channels=num_connections,
+                kernel_size=1,
+                groups=num_connections,  # 가중치 공유 방지
+                bias=False,
+                device=self.device
+            )
             
-            # 소스 인덱스 생성
-            source_y = torch.arange(0, source_h, stride, device=self.device)
-            source_x = torch.arange(0, source_w, stride, device=self.device)
-            source_yy, source_xx = torch.meshgrid(source_y, source_x, indexing='ij')
-            
-            # 타겟 인덱스 생성
-            target_y = torch.arange(0, target_h, target_stride_h, device=self.device)
-            target_x = torch.arange(0, target_w, target_stride_w, device=self.device)
-            target_yy, target_xx = torch.meshgrid(target_y, target_x, indexing='ij')
-            
-            # 크기 맞추기 (최소값으로)
-            min_h = min(source_yy.shape[0], target_yy.shape[0])
-            min_w = min(source_yy.shape[1], target_yy.shape[1])
-            
-            source_yy = source_yy[:min_h, :min_w]
-            source_xx = source_xx[:min_h, :min_w]
-            target_yy = target_yy[:min_h, :min_w]
-            target_xx = target_xx[:min_h, :min_w]
-            
-            # 인덱스를 버퍼로 저장
-            self.register_buffer(f"{conn_key}_source_y", source_yy)
-            self.register_buffer(f"{conn_key}_source_x", source_xx)
-            self.register_buffer(f"{conn_key}_target_y", target_yy)
-            self.register_buffer(f"{conn_key}_target_x", target_xx)
-            
-            # 가중치 생성 (학습 가능)
-            weights = torch.randn(min_h, min_w, device=self.device) * 0.3 + weight_scale
-            self.connection_weights[conn_key] = nn.Parameter(weights.abs())
+            # 가중치 초기화 (각 연결의 독립적인 가중치)
+            with torch.no_grad():
+                weights = (torch.randn(num_connections, device=self.device) * 0.3 + weight_scale).abs()
+                # Conv2d 가중치 shape: [out_ch, in_ch/groups, k, k] = [num_conn, 1, 1, 1]
+                self.conv_layers[conn_key].weight.copy_(weights.view(-1, 1, 1, 1))
     
     def forward(self, node_spikes: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """
-        벡터화된 축삭 신호 전파
+        Depthwise Conv를 이용한 축삭 신호 전파
         
         Args:
             node_spikes: {node_name: [B, H, W]} 노드별 스파이크
@@ -115,6 +97,7 @@ class AxonalConnections(nn.Module):
             
             source_spikes = node_spikes[source]
             conn_key = f"{source}_to_{target}"
+            stride = conn.get("stride", 4)
             
             # 배치 차원 정규화
             if source_spikes.dim() == 2:
@@ -123,21 +106,27 @@ class AxonalConnections(nn.Module):
             batch_size = source_spikes.shape[0]
             target_h, target_w = self._get_grid_size(target)
             
-            # 타겟 텐서 초기화
+            # 1. 샘플링: stride를 이용한 슬라이싱 (가장 빠름)
+            sampled_spikes = source_spikes[:, ::stride, ::stride]  # [B, h, w]
+            batch_size, h_sample, w_sample = sampled_spikes.shape
+            
+            # 2. 각 샘플링된 픽셀을 독립적인 채널로 변환
+            # [B, h, w] -> [B, h*w, 1, 1]
+            reshaped_spikes = sampled_spikes.contiguous().view(batch_size, h_sample * w_sample, 1, 1)
+            
+            # 3. Depthwise Conv 연산 (개별 가중치 적용)
+            conv_layer = self.conv_layers[conn_key]
+            weighted_spikes = conv_layer(reshaped_spikes)  # [B, h*w, 1, 1]
+            
+            # 4. 결과 텐서를 2D로 복원
+            weighted_spikes_2d = weighted_spikes.view(batch_size, h_sample, w_sample)
+            
+            # 5. 타겟 그리드에 배치
             if target not in axonal_inputs:
                 axonal_inputs[target] = torch.zeros(batch_size, target_h, target_w, device=self.device)
             
-            # 사전 계산된 인덱스 가져오기
-            source_y = getattr(self, f"{conn_key}_source_y")
-            source_x = getattr(self, f"{conn_key}_source_x")
-            target_y = getattr(self, f"{conn_key}_target_y")
-            target_x = getattr(self, f"{conn_key}_target_x")
-            weights = self.connection_weights[conn_key]
-            
-            # 벡터화 연산: 샘플링 → 가중치 적용 → 배치
-            sampled_spikes = source_spikes[:, source_y, source_x]  # [B, h, w]
-            weighted_spikes = sampled_spikes * weights  # [B, h, w]
-            axonal_inputs[target][:, target_y, target_x] += weighted_spikes
+            # 타겟 그리드의 좌상단에 배치
+            axonal_inputs[target][:, :h_sample, :w_sample] += weighted_spikes_2d
         
         return axonal_inputs
 

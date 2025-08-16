@@ -13,12 +13,13 @@ from .timing import TimingManager
 
 class AxonalConnections(nn.Module):
     """
-    Stride 기반 축삭 연결 - 간격을 두고 규칙적으로 연결
+    Stride 기반 축삭 연결 - 내부 sparse 구현으로 메모리 효율성 개선
     
     핵심 아이디어:
     - Source에서 stride만큼 띄워서 샘플링
     - Target도 동일한 개수가 되도록 stride 스케일링
     - 1:1 대응으로 깔끔하게 연결
+    - 내부적으로는 sparse 저장으로 메모리 절약
     """
     
     def __init__(
@@ -33,8 +34,9 @@ class AxonalConnections(nn.Module):
         self.node_grid_sizes = node_grid_sizes or {}
         self.device = device
         
-        # 인접행렬들을 저장할 ParameterDict
-        self.adjacency_matrices = nn.ParameterDict()
+        # Sparse 연결 정보 저장
+        self.connection_indices = {}  # {conn_key: (source_indices, target_indices)}
+        self.connection_weights = nn.ParameterDict()  # {conn_key: weights}
         
         self._initialize_stride_connections()
 
@@ -52,21 +54,22 @@ class AxonalConnections(nn.Module):
             
             conn_key = f"{source}_to_{target}"
             
-            adjacency_matrix = self._create_stride_adjacency(
+            source_indices, target_indices, weights = self._create_stride_connection(
                 source, target, stride, weight_scale
             )
             
-            self.adjacency_matrices[conn_key] = nn.Parameter(adjacency_matrix)
+            self.connection_indices[conn_key] = (source_indices, target_indices)
+            self.connection_weights[conn_key] = nn.Parameter(weights)
     
-    def _create_stride_adjacency(
+    def _create_stride_connection(
         self, 
         source: str, 
         target: str, 
         stride: int, 
         weight_scale: float
-    ) -> torch.Tensor:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Stride 기반 인접행렬 생성
+        Stride 기반 연결 생성 (sparse 형태로)
         
         Args:
             source: 소스 노드명
@@ -75,13 +78,12 @@ class AxonalConnections(nn.Module):
             weight_scale: 가중치 스케일
             
         Returns:
-            adjacency: [target_size, source_size] 인접행렬
+            source_indices: [num_connections] 소스 인덱스들
+            target_indices: [num_connections] 타겟 인덱스들
+            weights: [num_connections] 연결 가중치들
         """
         source_h, source_w = self._get_grid_size(source)
         target_h, target_w = self._get_grid_size(target)
-        
-        source_size = source_h * source_w
-        target_size = target_h * target_w
         
         # 소스 샘플링 개수 계산
         source_samples_h = source_h // stride
@@ -91,8 +93,10 @@ class AxonalConnections(nn.Module):
         target_stride_h = target_h // source_samples_h if source_samples_h > 0 else target_h
         target_stride_w = target_w // source_samples_w if source_samples_w > 0 else target_w
         
-        # 인접행렬 초기화
-        adjacency = torch.zeros(target_size, source_size, device=self.device)
+        # 연결 리스트 수집
+        source_indices = []
+        target_indices = []
+        weights = []
         
         # 1:1 대응 연결 생성
         for i in range(min(source_samples_h, target_h // target_stride_h)):
@@ -113,11 +117,18 @@ class AxonalConnections(nn.Module):
                     source_idx = source_i * source_w + source_j
                     target_idx = target_i * target_w + target_j
                     
+                    source_indices.append(source_idx)
+                    target_indices.append(target_idx)
+                    
                     # 가중치 설정 (가우시안 노이즈 + 스케일)
                     weight = torch.randn(1).item() * 0.3 + weight_scale
-                    adjacency[target_idx, source_idx] = abs(weight)
+                    weights.append(abs(weight))
         
-        return adjacency
+        return (
+            torch.tensor(source_indices, dtype=torch.long, device=self.device),
+            torch.tensor(target_indices, dtype=torch.long, device=self.device),
+            torch.tensor(weights, dtype=torch.float, device=self.device)
+        )
     
     def forward(self, node_spikes: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """
@@ -141,7 +152,7 @@ class AxonalConnections(nn.Module):
             source_spikes = node_spikes[source]
             conn_key = f"{source}_to_{target}"
             
-            if conn_key not in self.adjacency_matrices:
+            if conn_key not in self.connection_indices:
                 continue
             
             # 배치 차원 정규화
@@ -153,13 +164,12 @@ class AxonalConnections(nn.Module):
             # 2D → 1D 평탄화
             flat_spikes = source_spikes.view(batch_size, -1)
             
-            # 인접행렬 곱셈: [B, source_size] @ [source_size, target_size] = [B, target_size]
-            adjacency = self.adjacency_matrices[conn_key]
-            batch_output = flat_spikes @ adjacency.T
+            # Sparse 연결 적용
+            axonal_signal = self._sparse_forward(flat_spikes, conn_key)
             
             # 1D → 2D 복원
             target_h, target_w = self._get_grid_size(target)
-            axonal_signal = batch_output.view(batch_size, target_h, target_w)
+            axonal_signal = axonal_signal.view(batch_size, target_h, target_w)
             
             # 다중 소스 신호 누적
             if target not in axonal_inputs:
@@ -168,6 +178,52 @@ class AxonalConnections(nn.Module):
                 axonal_inputs[target] += axonal_signal
         
         return axonal_inputs
+    
+    def _sparse_forward(self, flat_spikes: torch.Tensor, conn_key: str) -> torch.Tensor:
+        """
+        벡터화된 sparse 연결을 통한 신호 전파
+        
+        Args:
+            flat_spikes: [B, source_size] 평탄화된 소스 스파이크
+            conn_key: 연결 키
+            
+        Returns:
+            output: [B, target_size] 타겟 신호
+        """
+        source_indices, target_indices = self.connection_indices[conn_key]
+        weights = self.connection_weights[conn_key]
+        
+        batch_size, source_size = flat_spikes.shape
+        target_size = max(target_indices) + 1
+        num_connections = len(source_indices)
+        
+        # 벡터화된 연산을 위한 인덱스 확장
+        # [B, num_connections] 형태로 배치별 소스 값들 추출
+        batch_indices = torch.arange(batch_size, device=self.device).unsqueeze(1)  # [B, 1]
+        source_indices_expanded = source_indices.unsqueeze(0).expand(batch_size, -1)  # [B, num_connections]
+        
+        # 모든 배치의 연결된 소스 값들을 한 번에 추출: [B, num_connections]
+        source_values = flat_spikes[batch_indices, source_indices_expanded]
+        
+        # 가중치 적용: [B, num_connections]
+        weighted_values = source_values * weights.unsqueeze(0)
+        
+        # 출력 텐서 초기화
+        output = torch.zeros(batch_size, target_size, device=self.device)
+        
+        # 벡터화된 scatter_add 연산
+        # 배치 차원과 타겟 인덱스를 결합한 플랫 인덱스 생성
+        batch_offsets = torch.arange(batch_size, device=self.device).unsqueeze(1) * target_size  # [B, 1]
+        target_indices_expanded = target_indices.unsqueeze(0).expand(batch_size, -1)  # [B, num_connections]
+        flat_target_indices = (batch_offsets + target_indices_expanded).view(-1)  # [B * num_connections]
+        
+        # 플랫 출력에 scatter_add
+        flat_output = output.view(-1)  # [B * target_size]
+        flat_weighted_values = weighted_values.view(-1)  # [B * num_connections]
+        
+        flat_output.scatter_add_(0, flat_target_indices, flat_weighted_values)
+        
+        return flat_output.view(batch_size, target_size)
     
     def get_connection_info(self) -> Dict[str, Dict]:
         """연결 정보 출력 (디버깅용)"""
@@ -190,8 +246,13 @@ class AxonalConnections(nn.Module):
             conn_key = f"{source}_to_{target}"
             
             # 실제 연결 개수 계산
-            adjacency = self.adjacency_matrices[conn_key]
-            num_connections = (adjacency > 0).sum().item()
+            if conn_key in self.connection_weights:
+                num_connections = len(self.connection_weights[conn_key])
+                total_possible = source_h * source_w * target_h * target_w
+                connection_density = num_connections / total_possible
+            else:
+                num_connections = 0
+                connection_density = 0.0
             
             info[conn_key] = {
                 "source_grid": (source_h, source_w),
@@ -200,7 +261,7 @@ class AxonalConnections(nn.Module):
                 "target_stride": (target_stride_h, target_stride_w),
                 "source_samples": (source_samples_h, source_samples_w),
                 "total_connections": num_connections,
-                "connection_density": num_connections / (source_h * source_w * target_h * target_w)
+                "connection_density": connection_density
             }
         
         return info

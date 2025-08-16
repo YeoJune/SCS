@@ -194,8 +194,19 @@ class AxonalConnections(nn.Module):
         weights = self.connection_weights[conn_key]
         
         batch_size, source_size = flat_spikes.shape
-        target_size = max(target_indices) + 1
-        num_connections = len(source_indices)
+        
+        # target_size를 연결 정보에서 가져오기 (전체 그리드 크기)
+        target_node = None
+        for conn in self.connections:
+            if f"{conn['source']}_to_{conn['target']}" == conn_key:
+                target_node = conn['target']
+                break
+        
+        if target_node is None:
+            raise ValueError(f"Connection key {conn_key} not found in connections")
+        
+        target_h, target_w = self._get_grid_size(target_node)
+        target_size = target_h * target_w
         
         # 벡터화된 연산을 위한 인덱스 확장
         # [B, num_connections] 형태로 배치별 소스 값들 추출

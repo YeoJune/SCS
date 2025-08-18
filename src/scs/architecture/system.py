@@ -283,7 +283,12 @@ class SCSSystem(nn.Module):
         
         # Phase 5: TimingManager 업데이트
         acc_spikes = current_spikes.get(self.acc_node, torch.zeros_like(current_spikes[self.input_node]))
-        self.timing_manager.step(clk, acc_spikes, training=is_training, input_seq_len=0, target_seq_len=0)
+        
+        # 입력 및 타겟 시퀀스 길이 계산
+        input_seq_len = input_schedule.shape[1] if input_schedule is not None else 0
+        target_seq_len = decoder_input_ids.shape[1] if decoder_input_ids is not None else 0
+        
+        self.timing_manager.step(clk, acc_spikes, training=is_training, input_seq_len=input_seq_len, target_seq_len=target_seq_len)
         
         # Phase 6: 토큰 생성 (필요한 경우)
         if decoder_input_ids is not None and self.timing_manager.output_started:

@@ -125,14 +125,3 @@ data:
 # === 평가 설정 ===
 evaluation:
   save_examples: 5
-
-# === 추가 실험 설정 ===
-tracking:
-  use_wandb: false
-  save_spike_patterns: true
-  analyze_connectivity: true
-
-# === 로깅 설정 ===
-logging:
-  log_metrics: ["loss", "accuracy", "f1"]
-  log_frequency: 10

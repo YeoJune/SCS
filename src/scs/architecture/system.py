@@ -191,6 +191,8 @@ class SCSSystem(nn.Module):
         self.eos_token_id = eos_token_id
         self.pad_token_id = output_interface.pad_token_id
 
+        self._cached_acc_activity = 0.0  # 캐시된 ACC 활성도
+
     def _get_external_input_at_clk(
         self,
         input_schedule: Optional[torch.Tensor],  # [B, seq_len] ONLY
@@ -251,15 +253,10 @@ class SCSSystem(nn.Module):
         clk: int,
         input_schedule: Optional[torch.Tensor] = None,
         decoder_input_ids: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        is_training: bool = False,
-        target_seq_len: Optional[int] = None
+        attention_mask: Optional[torch.Tensor] = None
     ) -> Optional[torch.Tensor]:
         """
-        순수한 단일 CLK 스텝 계산 (PyTorch 표준 준수)
-        
-        TimingManager의 상태를 전혀 알지 못하며, 
-        모든 샘플에 대해 로짓을 계산하고 반환만 함
+        순수한 단일 CLK 스텝 계산
         
         Args:
             clk: 현재 CLK 스텝
@@ -274,6 +271,8 @@ class SCSSystem(nn.Module):
         """
         # Phase 1: 현재 막전위 기준 스파이크 계산
         current_spikes = self._phase1_compute_spikes()
+
+        self._update_acc_activity_cache(current_spikes) # acc 활성도 저장
         
         # Phase 2: 외부 입력 처리
         external_input = self._get_external_input_at_clk(
@@ -287,19 +286,16 @@ class SCSSystem(nn.Module):
         output_spikes = current_spikes[self.output_node]
         self.output_interface.update_hidden_window(output_spikes)
         
-        # Phase 5: 토큰 생성 (decoder_input_ids가 제공된 경우에만)
+        # Phase 5: 토큰 생성
+        token_logits = None
         if decoder_input_ids is not None:
-            # 모든 샘플에 대해 로짓 계산
             all_output_logits = self.output_interface(decoder_input_ids)
-            
-            # 마지막 토큰의 로짓만 반환
-            token_logits = all_output_logits[:, -1, :]  # [B, vocab_size]
-            return token_logits
+            token_logits = all_output_logits[:, -1, :]
         
         # Phase 6: 스파이크 후처리
         self._phase3_post_spike_processing(current_spikes)
         
-        return None
+        return token_logits
 
     def _phase1_compute_spikes(self) -> Dict[str, torch.Tensor]:
         """Phase 1: 현재 막전위 기준 스파이크 계산"""
@@ -347,20 +343,27 @@ class SCSSystem(nn.Module):
             spikes = current_spikes[node_name]
             node.post_spike_update(spikes)
     
-    def _get_acc_activity(self, node_spikes: Dict[str, torch.Tensor]) -> float:
-        """ACC 활성도 계산"""
-        acc_nodes = [name for name in node_spikes.keys() if "ACC" in name]
-        if not acc_nodes:
-            return 0.0
-        
-        acc_activities = [node_spikes[name].mean().item() for name in acc_nodes]
-        return sum(acc_activities) / len(acc_activities)
+    def _update_acc_activity_cache(self, current_spikes: Dict[str, torch.Tensor]):
+        """ACC 활성도만 캐싱 (메모리 효율적)"""
+        acc_spikes = current_spikes.get(self.acc_node, None)
+        if acc_spikes is not None:
+            self._cached_acc_activity = torch.mean(acc_spikes, dim=[-2, -1])  # [B]
+        else:
+            # ACC 노드가 없는 경우 기본값
+            batch_size = next(iter(current_spikes.values())).shape[0]
+            self._cached_acc_activity = torch.zeros(batch_size, device=self.device)
+    
+    def get_current_acc_spikes(self) -> torch.Tensor:
+        """현재 캐싱된 ACC 활성도 반환 (TimingManager용)"""
+        return self._cached_acc_activity
     
     def reset_state(self, batch_size: int = 1):
         """전체 시스템 상태 초기화 (항상 배치)"""
         self.current_clk = 0
-        self.timing_manager.reset()
-        
+        self.timing_manager.reset(batch_size, self.device)
+
+        self._cached_acc_activity = torch.zeros(batch_size, device=self.device)
+
         # 스파이크율 누적 변수 초기화
         self.accumulated_spike_deviations = {}  # CLK별 편차 누적
         self.clk_count = 0

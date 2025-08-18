@@ -6,7 +6,7 @@ Pydantic 기반 설정 스키마 정의
 """
 
 from typing import Dict, List, Any, Optional, Union
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 import warnings
 
 
@@ -16,7 +16,8 @@ class BrainRegionConfig(BaseModel):
     decay_rate: float = Field(default=0.8, description="막전위 감쇠율")
     distance_tau: float = Field(default=1.0, description="거리 기반 연결 강도")
     
-    @validator('grid_size')
+    @field_validator('grid_size')
+    @classmethod
     def validate_grid_size(cls, v):
         if len(v) != 2:
             raise ValueError("grid_size는 [height, width] 형태여야 합니다")
@@ -67,12 +68,12 @@ class InputInterfaceConfig(BaseModel):
     embedding_dim: int = Field(default=512)
     window_size: int = Field(default=32)
     encoder_layers: int = Field(default=6)
-    encoder_heads: int = Field(default=8, alias="num_heads")  # 하위 호환성
+    encoder_heads: int = Field(default=8)
     encoder_dropout: float = Field(default=0.1)
     dim_feedforward: int = Field(default=2048)
     input_power: float = Field(default=0.5)
     softmax_temperature: float = Field(default=1.0)
-    use_positional_encoding: bool = Field(default=True, alias="positional_encoding")
+    use_positional_encoding: bool = Field(default=True)
     t5_model_name: str = Field(default="t5-base")
 
 
@@ -81,11 +82,11 @@ class OutputInterfaceConfig(BaseModel):
     vocab_size: Optional[int] = None  # 런타임에 설정됨
     embedding_dim: int = Field(default=512)
     window_size: int = Field(default=32)
-    decoder_layers: int = Field(default=6, alias="num_decoder_layers")  # 하위 호환성
-    decoder_heads: int = Field(default=8, alias="num_heads")  # 하위 호환성
+    decoder_layers: int = Field(default=6)
+    decoder_heads: int = Field(default=8)
     dim_feedforward: int = Field(default=2048)
     dropout: float = Field(default=0.1)
-    use_positional_encoding: bool = Field(default=True, alias="positional_encoding")
+    use_positional_encoding: bool = Field(default=True)
     t5_model_name: str = Field(default="t5-base")
     transplant_cross_attention: bool = Field(default=False)
 
@@ -118,20 +119,20 @@ class GradualUnfreezingConfig(BaseModel):
 class LearningConfig(BaseModel):
     """학습 설정"""
     epochs: int = Field(default=15)
-    learning_rate: float = Field(default=1e-3, alias="base_learning_rate")  # 하위 호환성
+    learning_rate: float = Field(default=1e-3)
     weight_decay: float = Field(default=1e-4)
-    gradient_clip_norm: float = Field(default=1.0, alias="max_grad_norm")  # 하위 호환성
-    eval_every: int = Field(default=3, alias="eval_every_n_epochs")  # 하위 호환성
-    save_every: int = Field(default=10, alias="save_every_n_epochs")  # 하위 호환성
+    gradient_clip_norm: float = Field(default=1.0)
+    eval_every: int = Field(default=3)
+    save_every: int = Field(default=10)
     early_stopping_patience: int = Field(default=20)
     max_clk_training: int = Field(default=250)
     optimizer: str = Field(default="adamw")
     
     # Scheduled Sampling
-    use_scheduled_sampling: bool = Field(default=False, alias="use_schedule_sampling")  # 하위 호환성
-    ss_start_prob: float = Field(default=1.0, alias="scheduled_sampling_start")  # 하위 호환성
-    ss_end_prob: float = Field(default=0.05, alias="scheduled_sampling_end")  # 하위 호환성
-    ss_decay_epochs: int = Field(default=10, alias="scheduled_sampling_decay")  # 하위 호환성
+    use_scheduled_sampling: bool = Field(default=False)
+    ss_start_prob: float = Field(default=1.0)
+    ss_end_prob: float = Field(default=0.05)
+    ss_decay_epochs: int = Field(default=10)
     eta_min: float = Field(default=0.0)
     
     # 커리큘럼 학습
@@ -156,27 +157,6 @@ class LearningConfig(BaseModel):
     
     # 점진적 해제
     gradual_unfreezing: GradualUnfreezingConfig = Field(default_factory=GradualUnfreezingConfig)
-
-
-class TrainingConfig(BaseModel):
-    """호환성을 위한 기존 TrainingConfig (별칭)"""
-    epochs: int = Field(default=15)
-    learning_rate: float = Field(default=1e-3)
-    weight_decay: float = Field(default=1e-4)
-    gradient_clip_norm: float = Field(default=1.0)
-    eval_every: int = Field(default=3)
-    save_every: int = Field(default=10)
-    early_stopping_patience: int = Field(default=20)
-    device: str = Field(default="cuda")
-    max_clk_training: int = Field(default=250)
-    pad_token_id: int = Field(default=0)
-    use_scheduled_sampling: bool = Field(default=False)
-    ss_start_prob: float = Field(default=1.0)
-    ss_end_prob: float = Field(default=0.05)
-    ss_decay_epochs: int = Field(default=10)
-    eta_min: float = Field(default=0.0)
-    use_curriculum_learning: bool = Field(default=False)
-    curriculum_schedule: Optional[Dict[int, int]] = Field(default=None)
 
 
 class TokenizerConfig(BaseModel):
@@ -236,14 +216,11 @@ class AppConfig(BaseModel):
     connectivity: ConnectivityConfig
     io_system: IOSystemConfig
     
-    # 타이밍 관련 (여러 별칭 지원)
-    timing_manager: Optional[TimingManagerConfig] = None
-    adaptive_output_timing: Optional[TimingManagerConfig] = None  # 하위 호환성
-    timing: Optional[TimingManagerConfig] = None  # 하위 호환성
+    # 타이밍 관련
+    timing_manager: TimingManagerConfig = Field(default_factory=TimingManagerConfig)
     
-    # 학습 관련 (여러 별칭 지원)
-    learning: Optional[LearningConfig] = None
-    training: Optional[LearningConfig] = None  # 하위 호환성
+    # 학습 관련
+    learning: LearningConfig = Field(default_factory=LearningConfig)
     
     # 데이터 관련
     data_loading: DataLoadingConfig = Field(default_factory=DataLoadingConfig)
@@ -257,32 +234,12 @@ class AppConfig(BaseModel):
     # 최상위 레벨 호환성 필드들
     dataset_name: Optional[str] = None  # task.dataset_name으로 이동
     
-    @validator('timing_manager', always=True)
-    def set_timing_manager(cls, v, values):
-        """timing_manager 우선순위 설정"""
-        if v is not None:
-            return v
-        if values.get('adaptive_output_timing') is not None:
-            return values['adaptive_output_timing']
-        if values.get('timing') is not None:
-            return values['timing']
-        return TimingManagerConfig()  # 기본값
-    
-    @validator('learning', always=True)
-    def set_learning_config(cls, v, values):
-        """learning 우선순위 설정"""
-        if v is not None:
-            return v
-        if values.get('training') is not None:
-            return values['training']
-        return LearningConfig()  # 기본값
-    
-    @validator('task', always=True)
-    def set_task_dataset_name(cls, v, values):
+    @model_validator(mode='after')
+    def validate_task_dataset_name(self):
         """최상위 dataset_name을 task.dataset_name으로 이동"""
-        if values.get('dataset_name') and not v.dataset_name:
-            v.dataset_name = values['dataset_name']
-        return v
+        if self.dataset_name and not self.task.dataset_name:
+            self.task.dataset_name = self.dataset_name
+        return self
     
     def validate_node_references(self):
         """노드 참조 무결성 검사"""

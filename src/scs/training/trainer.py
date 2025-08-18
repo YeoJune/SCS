@@ -14,10 +14,11 @@ from datetime import datetime
 
 from .loss import SCSLoss
 from ..evaluation.metrics import SCSMetrics
+from ..config.training_schemas import TrainerConfig
 
 @dataclass
 class TrainingConfig:
-    """학습 설정 - 모든 파라미터 포함"""
+    """레거시 호환성을 위한 TrainingConfig - 새 코드에서는 TrainerConfig 사용 권장"""
     epochs: int = 15
     learning_rate: float = 1e-3
     weight_decay: float = 1e-4

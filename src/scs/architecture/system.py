@@ -286,7 +286,7 @@ class SCSSystem(nn.Module):
         
         # Phase 5: 토큰 생성
         token_logits = None
-        if decoder_input_ids is not None:
+        if decoder_input_ids is not None and decoder_input_ids.shape[1] > 0:
             all_output_logits = self.output_interface(decoder_input_ids)
             token_logits = all_output_logits[:, -1, :]
         

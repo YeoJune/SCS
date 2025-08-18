@@ -329,7 +329,6 @@ class SCSTrainer:
             'loss': total_loss / num_batches,
             'accuracy': total_accuracy / num_batches
         }
-    
     def _train_batch(self, batch: Dict[str, torch.Tensor]) -> tuple:
         """배치 학습 - TimingManager 통합, Teacher Forcing"""
         # 1. 데이터 준비
@@ -352,9 +351,11 @@ class SCSTrainer:
             decoder_batch = None
             if sample_decoder_inputs:
                 max_len = max(len(tokens) for tokens in sample_decoder_inputs.values())
-                decoder_batch = torch.full((batch_size, max_len), self.model.pad_token_id, dtype=torch.long, device=self.device)
-                for sample_idx, tokens in sample_decoder_inputs.items():
-                    decoder_batch[sample_idx, :len(tokens)] = torch.tensor(tokens, device=self.device)
+                if max_len > 0:  # 길이가 0보다 클 때만 배치 생성
+                    decoder_batch = torch.full((batch_size, max_len), self.model.pad_token_id, dtype=torch.long, device=self.device)
+                    for sample_idx, tokens in sample_decoder_inputs.items():
+                        if len(tokens) > 0:
+                            decoder_batch[sample_idx, :len(tokens)] = torch.tensor(tokens, device=self.device)
             
             # 4-2. 모델 forward
             logits, acc_spikes = self.model.forward(
@@ -394,6 +395,7 @@ class SCSTrainer:
                     if current_pos < target_tokens.shape[1]:
                         for sample_idx in range(batch_size):
                             if active_mask[sample_idx]:
+                                # Scheduled Sampling 적용
                                 if torch.rand(1).item() < self.current_ss_prob:
                                     # Teacher Forcing
                                     next_token = target_tokens[sample_idx, current_pos].item()
@@ -467,9 +469,11 @@ class SCSTrainer:
                     decoder_batch = None
                     if sample_decoder_inputs:
                         max_len = max(len(tokens) for tokens in sample_decoder_inputs.values())
-                        decoder_batch = torch.full((batch_size, max_len), self.model.pad_token_id, dtype=torch.long, device=self.device)
-                        for sample_idx, tokens in sample_decoder_inputs.items():
-                            decoder_batch[sample_idx, :len(tokens)] = torch.tensor(tokens, device=self.device)
+                        if max_len > 0:  # 길이가 0보다 클 때만 배치 생성
+                            decoder_batch = torch.full((batch_size, max_len), self.model.pad_token_id, dtype=torch.long, device=self.device)
+                            for sample_idx, tokens in sample_decoder_inputs.items():
+                                if len(tokens) > 0:
+                                    decoder_batch[sample_idx, :len(tokens)] = torch.tensor(tokens, device=self.device)
                     
                     # 모델 forward
                     logits, acc_spikes = self.model.forward(
@@ -545,7 +549,7 @@ class SCSTrainer:
                 num_batches += 1
         
         return {'loss': total_loss / num_batches, 'accuracy': total_accuracy / num_batches}
-
+    
     def _should_early_stop(self, val_loss: float) -> bool:
         """조기 종료 판단"""
         if val_loss < self.best_loss:
@@ -611,9 +615,11 @@ class SCSTrainer:
             decoder_batch = None
             if sample_decoder_inputs:
                 max_len = max(len(tokens) for tokens in sample_decoder_inputs.values())
-                decoder_batch = torch.full((batch_size, max_len), self.model.pad_token_id, dtype=torch.long, device=self.device)
-                for sample_idx, tokens in sample_decoder_inputs.items():
-                    decoder_batch[sample_idx, :len(tokens)] = torch.tensor(tokens, device=self.device)
+                if max_len > 0:  # 길이가 0보다 클 때만 배치 생성
+                    decoder_batch = torch.full((batch_size, max_len), self.model.pad_token_id, dtype=torch.long, device=self.device)
+                    for sample_idx, tokens in sample_decoder_inputs.items():
+                        if len(tokens) > 0:
+                            decoder_batch[sample_idx, :len(tokens)] = torch.tensor(tokens, device=self.device)
             
             # 모델 forward
             logits, acc_spikes = self.model.forward(
@@ -672,7 +678,7 @@ class SCSTrainer:
             'tokens_generated': len(all_logits),
             'convergence_achieved': final_clk < self.config.max_clk_training - 1
         }
-
+    
     def _extract_sample_from_batch_result(
         self, 
         batch: Dict[str, torch.Tensor], 

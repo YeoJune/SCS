@@ -191,8 +191,6 @@ class SCSSystem(nn.Module):
         self.eos_token_id = eos_token_id
         self.pad_token_id = output_interface.pad_token_id
 
-        self._cached_acc_activity = 0.0  # 캐시된 ACC 활성도
-
     def _get_external_input_at_clk(
         self,
         input_schedule: Optional[torch.Tensor],  # [B, seq_len] ONLY
@@ -271,9 +269,9 @@ class SCSSystem(nn.Module):
         """
         # Phase 1: 현재 막전위 기준 스파이크 계산
         current_spikes = self._phase1_compute_spikes()
-
-        self._update_acc_activity_cache(current_spikes) # acc 활성도 저장
         
+        acc_spikes = current_spikes.get(self.acc_node, None)
+
         # Phase 2: 외부 입력 처리
         external_input = self._get_external_input_at_clk(
             input_schedule, clk, attention_mask
@@ -294,8 +292,8 @@ class SCSSystem(nn.Module):
         
         # Phase 6: 스파이크 후처리
         self._phase3_post_spike_processing(current_spikes)
-        
-        return token_logits
+
+        return token_logits, acc_spikes
 
     def _phase1_compute_spikes(self) -> Dict[str, torch.Tensor]:
         """Phase 1: 현재 막전위 기준 스파이크 계산"""
@@ -343,26 +341,10 @@ class SCSSystem(nn.Module):
             spikes = current_spikes[node_name]
             node.post_spike_update(spikes)
     
-    def _update_acc_activity_cache(self, current_spikes: Dict[str, torch.Tensor]):
-        """ACC 활성도만 캐싱 (메모리 효율적)"""
-        acc_spikes = current_spikes.get(self.acc_node, None)
-        if acc_spikes is not None:
-            self._cached_acc_activity = torch.mean(acc_spikes, dim=[-2, -1])  # [B]
-        else:
-            # ACC 노드가 없는 경우 기본값
-            batch_size = next(iter(current_spikes.values())).shape[0]
-            self._cached_acc_activity = torch.zeros(batch_size, device=self.device)
-    
-    def get_current_acc_spikes(self) -> torch.Tensor:
-        """현재 캐싱된 ACC 활성도 반환 (TimingManager용)"""
-        return self._cached_acc_activity
-    
     def reset_state(self, batch_size: int = 1):
         """전체 시스템 상태 초기화 (항상 배치)"""
         self.current_clk = 0
         self.timing_manager.reset(batch_size, self.device)
-
-        self._cached_acc_activity = torch.zeros(batch_size, device=self.device)
 
         # 스파이크율 누적 변수 초기화
         self.accumulated_spike_deviations = {}  # CLK별 편차 누적

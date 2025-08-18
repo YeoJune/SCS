@@ -343,21 +343,28 @@ class SCSTrainer:
         self.model.reset_state(batch_size)
         
         # 3. 샘플별 디코더 상태 추적
-        sample_decoder_inputs = {}  # {sample_idx: decoder_tokens}
+        sample_decoder_inputs = {}  # {sample_idx: [token_list]}
         all_logits = []
         
         # 4. CLK 루프
         for clk in range(self.config.max_clk_training):
-            # 4-1. 모델 forward (디코더 없이)
-            logits = self.model.forward(
+            # 4-1. 현재 활성화된 샘플들의 디코더 입력 준비
+            decoder_batch = None
+            if sample_decoder_inputs:
+                max_len = max(len(tokens) for tokens in sample_decoder_inputs.values())
+                decoder_batch = torch.full((batch_size, max_len), self.model.pad_token_id, dtype=torch.long, device=self.device)
+                for sample_idx, tokens in sample_decoder_inputs.items():
+                    decoder_batch[sample_idx, :len(tokens)] = torch.tensor(tokens, device=self.device)
+            
+            # 4-2. 모델 forward
+            logits, acc_spikes = self.model.forward(
                 clk=clk,
                 input_schedule=input_tokens,
-                decoder_input_ids=None,
+                decoder_input_ids=decoder_batch,
                 attention_mask=attention_mask
             )
             
-            # 4-2. TimingManager 업데이트
-            acc_spikes = self.model.get_current_acc_spikes()
+            # 4-3. TimingManager 업데이트
             self.model.timing_manager.step(
                 current_clk=clk,
                 acc_node_spikes=acc_spikes,
@@ -366,42 +373,36 @@ class SCSTrainer:
                 target_seq_len=target_tokens.shape[1]
             )
             
-            # 4-3. 활성화된 샘플만 처리
+            # 4-4. 활성화된 샘플 처리
             active_mask = self.model.timing_manager.get_active_mask()
             
             if active_mask.any():
-                # 새로 시작하는 샘플 초기화
+                # 새로 시작하는 샘플 초기화 (빈 리스트로 시작)
                 for sample_idx in range(batch_size):
                     if active_mask[sample_idx] and sample_idx not in sample_decoder_inputs:
-                        sample_decoder_inputs[sample_idx] = [self.model.output_interface.bos_token_id]
+                        sample_decoder_inputs[sample_idx] = []
                 
-                # 배치 디코더 입력 구성
-                max_len = max(len(tokens) for tokens in sample_decoder_inputs.values()) if sample_decoder_inputs else 1
-                decoder_batch = torch.full((batch_size, max_len), self.model.pad_token_id, dtype=torch.long, device=self.device)
-                
-                for sample_idx, tokens in sample_decoder_inputs.items():
-                    decoder_batch[sample_idx, :len(tokens)] = torch.tensor(tokens, device=self.device)
-                
-                # 토큰 생성
-                batch_logits = self.model.output_interface(decoder_batch)[:, -1, :]
-                
-                # 활성화된 샘플만 수집
-                masked_logits = batch_logits.clone()
-                masked_logits[~active_mask] = -float('inf')
-                all_logits.append(masked_logits)
-                
-                # 다음 토큰 결정 및 추가
-                current_pos = len(all_logits) - 1
-                if current_pos < target_tokens.shape[1]:
-                    for sample_idx in range(batch_size):
-                        if active_mask[sample_idx] and sample_idx in sample_decoder_inputs:
-                            if torch.rand(1).item() < self.current_ss_prob:
-                                next_token = target_tokens[sample_idx, current_pos].item()
-                            else:
-                                next_token = torch.argmax(batch_logits[sample_idx]).item()
-                            sample_decoder_inputs[sample_idx].append(next_token)
+                # 로짓이 있는 경우 토큰 생성
+                if logits is not None:
+                    # 활성화된 샘플만 마스킹
+                    masked_logits = logits.clone()
+                    masked_logits[~active_mask] = -float('inf')
+                    all_logits.append(masked_logits)
+                    
+                    # 다음 토큰 결정
+                    current_pos = len(all_logits) - 1
+                    if current_pos < target_tokens.shape[1]:
+                        for sample_idx in range(batch_size):
+                            if active_mask[sample_idx]:
+                                if torch.rand(1).item() < self.current_ss_prob:
+                                    # Teacher Forcing
+                                    next_token = target_tokens[sample_idx, current_pos].item()
+                                else:
+                                    # Student Forcing
+                                    next_token = torch.argmax(logits[sample_idx]).item()
+                                sample_decoder_inputs[sample_idx].append(next_token)
             
-            # 4-4. 조기 종료
+            # 4-5. 조기 종료
             if self.model.timing_manager.all_ended or len(all_logits) >= target_tokens.shape[1]:
                 break
         
@@ -440,6 +441,7 @@ class SCSTrainer:
                 
         return loss.item(), {'accuracy': accuracy}
 
+
     def _validate_epoch(self, val_loader: DataLoader) -> Dict[str, float]:
         """검증 - TimingManager 통합, Auto-regressive"""
         self.model.eval()
@@ -461,16 +463,23 @@ class SCSTrainer:
                 
                 # CLK 루프
                 for clk in range(self.config.max_clk_training):
+                    # 디코더 입력 준비
+                    decoder_batch = None
+                    if sample_decoder_inputs:
+                        max_len = max(len(tokens) for tokens in sample_decoder_inputs.values())
+                        decoder_batch = torch.full((batch_size, max_len), self.model.pad_token_id, dtype=torch.long, device=self.device)
+                        for sample_idx, tokens in sample_decoder_inputs.items():
+                            decoder_batch[sample_idx, :len(tokens)] = torch.tensor(tokens, device=self.device)
+                    
                     # 모델 forward
-                    logits = self.model.forward(
+                    logits, acc_spikes = self.model.forward(
                         clk=clk,
                         input_schedule=input_tokens,
-                        decoder_input_ids=None,
+                        decoder_input_ids=decoder_batch,
                         attention_mask=attention_mask
                     )
 
                     # TimingManager 업데이트
-                    acc_spikes = self.model.get_current_acc_spikes()
                     self.model.timing_manager.step(
                         current_clk=clk,
                         acc_node_spikes=acc_spikes,
@@ -486,32 +495,23 @@ class SCSTrainer:
                         # 새로 시작하는 샘플 초기화
                         for sample_idx in range(batch_size):
                             if active_mask[sample_idx] and sample_idx not in sample_decoder_inputs:
-                                sample_decoder_inputs[sample_idx] = [self.model.output_interface.bos_token_id]
+                                sample_decoder_inputs[sample_idx] = []
                         
-                        # 배치 디코더 입력 구성
-                        max_len = max(len(tokens) for tokens in sample_decoder_inputs.values()) if sample_decoder_inputs else 1
-                        decoder_batch = torch.full((batch_size, max_len), self.model.pad_token_id, dtype=torch.long, device=self.device)
-                        
-                        for sample_idx, tokens in sample_decoder_inputs.items():
-                            decoder_batch[sample_idx, :len(tokens)] = torch.tensor(tokens, device=self.device)
-                        
-                        # 토큰 생성
-                        batch_logits = self.model.output_interface(decoder_batch)[:, -1, :]
-                        
-                        # 활성화된 샘플만 수집
-                        masked_logits = batch_logits.clone()
-                        masked_logits[~active_mask] = -float('inf')
-                        all_logits.append(masked_logits)
-                        
-                        # Auto-regressive: 생성된 토큰 추가
-                        for sample_idx in range(batch_size):
-                            if active_mask[sample_idx] and sample_idx in sample_decoder_inputs:
-                                next_token = torch.argmax(batch_logits[sample_idx]).item()
-                                sample_decoder_inputs[sample_idx].append(next_token)
-                                
-                                # EOS 체크
-                                if next_token == self.model.eos_token_id:
-                                    continue
+                        # 로짓이 있는 경우 토큰 생성
+                        if logits is not None:
+                            masked_logits = logits.clone()
+                            masked_logits[~active_mask] = -float('inf')
+                            all_logits.append(masked_logits)
+                            
+                            # Auto-regressive: 생성된 토큰 추가
+                            for sample_idx in range(batch_size):
+                                if active_mask[sample_idx]:
+                                    next_token = torch.argmax(logits[sample_idx]).item()
+                                    sample_decoder_inputs[sample_idx].append(next_token)
+                                    
+                                    # EOS 체크 (개별 샘플별로)
+                                    if next_token == self.model.eos_token_id:
+                                        continue
                     
                     # 조기 종료
                     if self.model.timing_manager.all_ended or len(all_logits) >= target_tokens.shape[1]:
@@ -545,7 +545,7 @@ class SCSTrainer:
                 num_batches += 1
         
         return {'loss': total_loss / num_batches, 'accuracy': total_accuracy / num_batches}
-    
+
     def _should_early_stop(self, val_loss: float) -> bool:
         """조기 종료 판단"""
         if val_loss < self.best_loss:
@@ -607,16 +607,23 @@ class SCSTrainer:
         for clk in range(self.config.max_clk_training):
             final_clk = clk
             
+            # 디코더 입력 준비
+            decoder_batch = None
+            if sample_decoder_inputs:
+                max_len = max(len(tokens) for tokens in sample_decoder_inputs.values())
+                decoder_batch = torch.full((batch_size, max_len), self.model.pad_token_id, dtype=torch.long, device=self.device)
+                for sample_idx, tokens in sample_decoder_inputs.items():
+                    decoder_batch[sample_idx, :len(tokens)] = torch.tensor(tokens, device=self.device)
+            
             # 모델 forward
-            logits = self.model.forward(
+            logits, acc_spikes = self.model.forward(
                 clk=clk,
                 input_schedule=input_tokens,
-                decoder_input_ids=None,
+                decoder_input_ids=decoder_batch,
                 attention_mask=attention_mask
             )
 
             # TimingManager 업데이트
-            acc_spikes = self.model.get_current_acc_spikes()
             self.model.timing_manager.step(
                 current_clk=clk,
                 acc_node_spikes=acc_spikes,
@@ -632,28 +639,19 @@ class SCSTrainer:
                 # 새로 시작하는 샘플 초기화
                 for sample_idx in range(batch_size):
                     if active_mask[sample_idx] and sample_idx not in sample_decoder_inputs:
-                        sample_decoder_inputs[sample_idx] = [self.model.output_interface.bos_token_id]
+                        sample_decoder_inputs[sample_idx] = []
                 
-                # 배치 디코더 입력 구성
-                max_len = max(len(tokens) for tokens in sample_decoder_inputs.values()) if sample_decoder_inputs else 1
-                decoder_batch = torch.full((batch_size, max_len), self.model.pad_token_id, dtype=torch.long, device=self.device)
-                
-                for sample_idx, tokens in sample_decoder_inputs.items():
-                    decoder_batch[sample_idx, :len(tokens)] = torch.tensor(tokens, device=self.device)
-                
-                # 토큰 생성
-                batch_logits = self.model.output_interface(decoder_batch)[:, -1, :]
-                
-                # 활성화된 샘플만 수집
-                masked_logits = batch_logits.clone()
-                masked_logits[~active_mask] = -float('inf')
-                all_logits.append(masked_logits)
-                
-                # Auto-regressive: 생성된 토큰 추가
-                for sample_idx in range(batch_size):
-                    if active_mask[sample_idx] and sample_idx in sample_decoder_inputs:
-                        next_token = torch.argmax(batch_logits[sample_idx]).item()
-                        sample_decoder_inputs[sample_idx].append(next_token)
+                # 로짓이 있는 경우 토큰 생성
+                if logits is not None:
+                    masked_logits = logits.clone()
+                    masked_logits[~active_mask] = -float('inf')
+                    all_logits.append(masked_logits)
+                    
+                    # Auto-regressive: 생성된 토큰 추가
+                    for sample_idx in range(batch_size):
+                        if active_mask[sample_idx]:
+                            next_token = torch.argmax(logits[sample_idx]).item()
+                            sample_decoder_inputs[sample_idx].append(next_token)
             
             # 조기 종료
             if self.model.timing_manager.all_ended:

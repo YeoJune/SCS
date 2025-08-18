@@ -80,7 +80,10 @@ class TimingManager:
         self.current_clk = current_clk
         
         # 1. EMA 업데이트 (배치 처리)
-        instant_sync = torch.mean(acc_node_spikes, dim=[-2, -1])  # [B]
+        instant_sync = torch.zeros(self.batch_size, device=self.device)
+        if acc_node_spikes != None:
+            instant_sync = torch.mean(acc_node_spikes, dim=[-2, -1])  # [B]
+        
         self.stable_sync_index = (
             self.sync_ema_alpha * instant_sync + 
             (1 - self.sync_ema_alpha) * self.stable_sync_index

@@ -366,18 +366,27 @@ class SCSTrainer:
             
             # 로짓이 반환된 경우 수집
             if logits is not None:
-                all_logits.append(logits)  # [B, vocab_size]
+                all_logits.append(logits)
                 
-                # Teacher Forcing: 정답 토큰을 다음 디코더 입력으로 추가
                 current_pos = len(all_logits) - 1
                 if current_pos < target_tokens.shape[1]:
-                    next_teacher_token = target_tokens[:, current_pos].unsqueeze(-1)  # [B, 1]
-                    decoder_inputs = torch.cat([decoder_inputs, next_teacher_token], dim=1)
+                    
+                    # 다음 토큰 결정
+                    use_teacher = torch.rand(1).item() < self.current_ss_prob
+                    
+                    if use_teacher:
+                        # Teacher Forcing: 정답 토큰 사용
+                        next_token = target_tokens[:, current_pos].unsqueeze(-1)
+                    else:
+                        # Student Forcing: 모델의 이전 예측 사용 (greedy)
+                        next_token = torch.argmax(logits, dim=-1, keepdim=True)
+                    
+                    # 결정된 토큰을 다음 디코더 입력으로 추가
+                    decoder_inputs = torch.cat([decoder_inputs, next_token], dim=1)
                     
                     # 윈도우 크기 제한
                     if decoder_inputs.shape[1] > self.model.output_interface.window_size:
                         decoder_inputs = decoder_inputs[:, -self.model.output_interface.window_size:]
-                
                 # 조기 종료 조건 확인
                 if len(all_logits) >= target_tokens.shape[1]:
                     break

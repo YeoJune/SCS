@@ -7,7 +7,6 @@ SCS 학습 시스템
 
 from .trainer import (
     SCSTrainer,
-    TrainingConfig,
     GradualUnfreezingScheduler
 )
 
@@ -29,7 +28,6 @@ from ..evaluation.metrics import (
 __all__ = [
     # 메인 학습 시스템
     "SCSTrainer",
-    "TrainingConfig", 
     "GradualUnfreezingScheduler",
     
     # 손실 함수 시스템 (배치 처리 지원)

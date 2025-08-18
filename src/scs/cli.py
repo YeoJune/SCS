@@ -15,8 +15,8 @@ import torch
 
 # 프로젝트 모듈 Import (리팩토링된 경로)
 try:
-    from scs.config import load_and_validate_config, ModelBuilder, AppConfig
-    from scs.training import SCSTrainer, TrainingConfig, MultiObjectiveLoss, TimingLoss, OptimizerFactory
+    from scs.config import load_and_validate_config, ModelBuilder, AppConfig, LearningConfig
+    from scs.training import SCSTrainer, MultiObjectiveLoss, TimingLoss, OptimizerFactory
     from scs.evaluation import generate_visualizations, analyze_io_pipeline
     from scs.data import create_dataloader, SCSTokenizer
     from scs.utils import (
@@ -183,27 +183,10 @@ def train_mode(args: argparse.Namespace):
         # 5. 학습 시스템 구성
         logger.info("⚙️ 학습 시스템 구성 중...")
         
-        # Pydantic 모델을 기존 TrainingConfig 형태로 변환
+        # 학습 설정 준비
         learning_config = app_config.learning
-        training_config = TrainingConfig(
-            epochs=learning_config.epochs,
-            learning_rate=learning_config.learning_rate,
-            weight_decay=learning_config.weight_decay,
-            gradient_clip_norm=learning_config.gradient_clip_norm,
-            eval_every=learning_config.eval_every,
-            save_every=learning_config.save_every,
-            early_stopping_patience=learning_config.early_stopping_patience,
-            max_clk_training=learning_config.max_clk_training,
-            pad_token_id=app_config.data_loading.tokenizer.pad_token_id,
-            device=device,
-            use_scheduled_sampling=learning_config.use_scheduled_sampling,
-            ss_start_prob=learning_config.ss_start_prob,
-            ss_end_prob=learning_config.ss_end_prob,
-            ss_decay_epochs=learning_config.ss_decay_epochs,
-            eta_min=learning_config.eta_min,
-            use_curriculum_learning=learning_config.use_curriculum_learning,
-            curriculum_schedule=learning_config.curriculum_schedule
-        )
+        learning_config.device = device
+        learning_config.pad_token_id = app_config.data_loading.tokenizer.pad_token_id
         
         # 손실 함수 생성
         loss_fn = TimingLoss(
@@ -224,12 +207,12 @@ def train_mode(args: argparse.Namespace):
         optimizer = OptimizerFactory.create(
             optimizer_type=learning_config.optimizer, 
             model=model, 
-            config=training_config
+            config=learning_config
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, 
-            T_max=training_config.epochs,
-            eta_min=training_config.eta_min
+            T_max=learning_config.epochs,
+            eta_min=learning_config.eta_min
         )
         
         logger.info(f"✅ 학습 시스템 구성 완료 (옵티마이저: {learning_config.optimizer})")
@@ -242,7 +225,7 @@ def train_mode(args: argparse.Namespace):
         
         trainer = SCSTrainer(
             model=model, 
-            config=training_config, 
+            config=learning_config, 
             loss_fn=loss_fn, 
             optimizer=optimizer, 
             scheduler=scheduler, 
@@ -353,15 +336,10 @@ def evaluate_mode(args: argparse.Namespace):
         # 6. 평가 실행
         logger.info("📈 평가 실행 중...")
         learning_config = app_config.learning
-        training_config = TrainingConfig(
-            epochs=learning_config.epochs,
-            learning_rate=learning_config.learning_rate,
-            pad_token_id=app_config.data_loading.tokenizer.pad_token_id,
-            device=device,
-            max_clk_training=learning_config.max_clk_training
-        )
+        learning_config.device = device
+        learning_config.pad_token_id = app_config.data_loading.tokenizer.pad_token_id
         
-        trainer = SCSTrainer(model=model, config=training_config, tokenizer=tokenizer)
+        trainer = SCSTrainer(model=model, config=learning_config, tokenizer=tokenizer)
         results = trainer.evaluate(test_loader, save_examples=app_config.evaluation.save_examples)
         
         # 결과 저장

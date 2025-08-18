@@ -11,7 +11,7 @@ from .architecture import (
 
 # Training 모듈
 from .training import (
-    SCSTrainer, TrainingConfig, GradualUnfreezingScheduler,
+    SCSTrainer, GradualUnfreezingScheduler,
     SpikingLoss, NeuromodulationLoss, MultiObjectiveLoss, TimingLoss
 )
 
@@ -30,10 +30,11 @@ from .data import (
 
 # Config 모듈
 from .config import (
-    AppConfig, TrainingConfig, IOSystemConfig, InputInterfaceConfig, OutputInterfaceConfig,
+    AppConfig, IOSystemConfig, InputInterfaceConfig, OutputInterfaceConfig,
     BrainRegionConfig, SystemRolesConfig, TaskConfig, DataConfig, DataLoadingConfig,
-    TokenizerConfig, TimingManagerConfig, LearningConfig, GradualUnfreezingConfig,
+    DataLoaderConfig, TokenizerConfig, TimingManagerConfig, LearningConfig, GradualUnfreezingConfig,
     SpikeDynamicsConfig, ConnectivityConfig, AxonalConnectionsConfig, EvaluationConfig,
+    CheckpointConfig, LoggingConfig,
     load_and_validate_config, ModelBuilder
 )
 
@@ -53,7 +54,7 @@ __all__ = [
     "SCSSystem", "AxonalConnections", "TimingManager",
     
     # 학습 시스템
-    "SCSTrainer", "TrainingConfig", "GradualUnfreezingScheduler",
+    "SCSTrainer", "GradualUnfreezingScheduler",
     "SpikingLoss", "NeuromodulationLoss", "MultiObjectiveLoss", "TimingLoss",
     
     # 평가 및 메트릭 시스템
@@ -66,10 +67,11 @@ __all__ = [
     "create_dataset", "DataProcessor", "SCSDataLoader", "create_dataloader",
     
     # 설정 관리
-    "AppConfig", "TrainingConfig", "IOSystemConfig", "InputInterfaceConfig", "OutputInterfaceConfig",
+    "AppConfig", "IOSystemConfig", "InputInterfaceConfig", "OutputInterfaceConfig",
     "BrainRegionConfig", "SystemRolesConfig", "TaskConfig", "DataConfig", "DataLoadingConfig",
-    "TokenizerConfig", "TimingManagerConfig", "LearningConfig", "GradualUnfreezingConfig",
+    "DataLoaderConfig", "TokenizerConfig", "TimingManagerConfig", "LearningConfig", "GradualUnfreezingConfig",
     "SpikeDynamicsConfig", "ConnectivityConfig", "AxonalConnectionsConfig", "EvaluationConfig",
+    "CheckpointConfig", "LoggingConfig",
     "load_and_validate_config", "ModelBuilder",
     
     # 유틸리티

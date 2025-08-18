@@ -127,6 +127,8 @@ class LearningConfig(BaseModel):
     early_stopping_patience: int = Field(default=20)
     max_clk_training: int = Field(default=250)
     optimizer: str = Field(default="adamw")
+    device: str = Field(default="cuda")
+    pad_token_id: int = Field(default=0)
     
     # Scheduled Sampling
     use_scheduled_sampling: bool = Field(default=False)
@@ -157,6 +159,39 @@ class LearningConfig(BaseModel):
     
     # 점진적 해제
     gradual_unfreezing: GradualUnfreezingConfig = Field(default_factory=GradualUnfreezingConfig)
+
+
+class DataLoaderConfig(BaseModel):
+    """DataLoader 설정"""
+    batch_size: int = Field(default=8)
+    num_workers: int = Field(default=0)
+    pin_memory: bool = Field(default=True)
+    shuffle: bool = Field(default=True)
+    drop_last: bool = Field(default=False)
+
+
+class CheckpointConfig(BaseModel):
+    """체크포인트 저장 설정"""
+    save_dir: str = Field(default="./checkpoints")
+    save_best_only: bool = Field(default=True)
+    save_last: bool = Field(default=True)
+    monitor: str = Field(default="val_loss")
+    mode: str = Field(default="min")
+    compress: bool = Field(default=False)
+    max_checkpoints: Optional[int] = Field(default=5)
+
+
+class LoggingConfig(BaseModel):
+    """로깅 설정"""
+    log_level: str = Field(default="INFO")
+    log_dir: str = Field(default="./logs")
+    log_file: Optional[str] = Field(default=None)
+    log_every_n_steps: int = Field(default=10)
+    log_gradients: bool = Field(default=False)
+    log_weights: bool = Field(default=False)
+    use_tensorboard: bool = Field(default=False)
+    use_wandb: bool = Field(default=False)
+    wandb_project: Optional[str] = Field(default=None)
 
 
 class TokenizerConfig(BaseModel):
@@ -224,6 +259,11 @@ class AppConfig(BaseModel):
     
     # 데이터 관련
     data_loading: DataLoadingConfig = Field(default_factory=DataLoadingConfig)
+    dataloader: DataLoaderConfig = Field(default_factory=DataLoaderConfig)
+    
+    # 체크포인트 및 로깅
+    checkpoint: CheckpointConfig = Field(default_factory=CheckpointConfig)
+    logging: LoggingConfig = Field(default_factory=LoggingConfig)
     task: TaskConfig = Field(default_factory=TaskConfig)
     data: DataConfig = Field(default_factory=DataConfig)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)

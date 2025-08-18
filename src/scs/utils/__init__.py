@@ -9,7 +9,6 @@ from .file_utils import load_config, save_config, save_json, load_json
 from .logging_utils import setup_logging
 from .experiment_utils import create_experiment_summary, get_git_info
 from .general_utils import set_random_seed, get_device, format_time
-from .model_builder import ModelBuilder
 
 __all__ = [
     "load_config",
@@ -21,6 +20,5 @@ __all__ = [
     "get_git_info",
     "set_random_seed",
     "get_device",
-    "format_time",
-    "ModelBuilder"
+    "format_time"
 ]

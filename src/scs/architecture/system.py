@@ -245,168 +245,59 @@ class SCSSystem(nn.Module):
             return external_input
         
         return None
-
+    
     def forward(
         self,
-        input_schedule: Optional[torch.Tensor] = None,  # [B, seq_len] ONLY
-        max_clk: Optional[int] = None,
-        training: bool = False,
-        target_schedule: Optional[torch.Tensor] = None,  # [B, seq_len] ONLY
-        attention_mask: Optional[torch.Tensor] = None,   # [B, seq_len] ONLY
-        ss_prob: float = 1.0
-    ) -> Tuple[torch.Tensor, Dict[str, Any]]:
+        clk: int,
+        input_schedule: Optional[torch.Tensor] = None,
+        decoder_input_ids: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        is_training: bool = False,
+    ) -> Optional[torch.Tensor]:
         """
-        v6.0: OutputInterface 내부 히든 윈도우 관리
+        단일 CLK 스텝 실행 (PyTorch 표준 준수)
+        
+        Args:
+            clk: 현재 CLK 스텝
+            input_schedule: [B, seq_len] 입력 토큰 스케줄
+            decoder_input_ids: [B, decoder_len] 디코더 입력 토큰들
+            attention_mask: [B, seq_len] 어텐션 마스크
+            
+        Returns:
+            토큰 로짓 [B, vocab_size] 또는 None (출력이 없는 경우)
         """
-        if max_clk is None:
-            max_clk = self.timing_manager.max_processing_clk
+        # Phase 1: 현재 막전위 기준 스파이크 계산
+        current_spikes = self._phase1_compute_spikes()
         
-        # 입력 검증 및 초기화
-        if input_schedule is not None:
-            assert input_schedule.dim() == 2, f"input_schedule must be [B, seq_len], got {input_schedule.shape}"
-            batch_size = input_schedule.shape[0]
-            input_seq_len = input_schedule.shape[1]
-        else:
-            batch_size = 1
-            input_seq_len = 0
+        # Phase 2: 외부 입력 처리
+        external_input = self._get_external_input_at_clk(
+            input_schedule, clk, attention_mask
+        )
         
-        if target_schedule is not None:
-            assert target_schedule.dim() == 2, f"target_schedule must be [B, seq_len], got {target_schedule.shape}"
-            assert target_schedule.shape[0] == batch_size, "Batch size mismatch between input and target"
-            target_seq_len = target_schedule.shape[1]
-        else:
-            target_seq_len = 0
+        # Phase 3: 입력 통합 및 상태 업데이트
+        self._phase2_update_states(external_input, current_spikes)
         
-        if attention_mask is not None:
-            assert attention_mask.dim() == 2, f"attention_mask must be [B, seq_len], got {attention_mask.shape}"
-            assert attention_mask.shape[0] == batch_size, "Batch size mismatch for attention_mask"
+        # Phase 4: 출력 인터페이스 히든 윈도우 업데이트
+        output_spikes = current_spikes[self.output_node]
+        self.output_interface.update_hidden_window(output_spikes)
         
-        self.reset_state(batch_size)
+        # Phase 5: TimingManager 업데이트
+        acc_spikes = current_spikes.get(self.acc_node, torch.zeros_like(current_spikes[self.input_node]))
+        self.timing_manager.step(clk, acc_spikes, training=is_training, input_seq_len=0, target_seq_len=0)
         
-        # 상태 변수 초기화
-        all_logits = []
-        all_logits_with_clk = []
-        
-        # decoder_input_ids 전체 시퀀스 관리
-        decoder_input_ids = torch.ones(batch_size, 1, dtype=torch.long, device=self.device)  # BOS로 시작
-        
-        loss_timing_info = {'start_conditions': None, 'end_conditions': None}
-        last_token_id = None
-
-        for clk in range(max_clk):
-            self.current_clk = clk
+        # Phase 6: 토큰 생성 (필요한 경우)
+        if decoder_input_ids is not None and self.timing_manager.output_started:
+            # 내부 히든 윈도우를 사용하여 토큰 생성
+            all_output_logits = self.output_interface(decoder_input_ids)
             
-            # Phase 1: 현재 막전위 기준 스파이크 계산
-            current_spikes = self._phase1_compute_spikes()
-            
-            # 윈도우 기반 외부 입력
-            external_input = self._get_external_input_at_clk(
-                input_schedule, clk, attention_mask
-            )
-            
-            # Phase 2: 입력 통합 및 상태 업데이트
-            self._phase2_update_states(external_input, current_spikes)
-            
-            # v6.0: 매 CLK마다 OutputInterface 히든 윈도우 업데이트
-            output_spikes = current_spikes[self.output_node]
-            self.output_interface.update_hidden_window(output_spikes)
-            
-            # TimingManager 업데이트
-            acc_spikes = current_spikes.get(self.acc_node, torch.zeros_like(current_spikes[self.input_node]))
-            self.timing_manager.step(clk, acc_spikes, training, input_seq_len, target_seq_len)
-
-            # 출력 시작 결정
-            self.timing_manager.should_start_output(training, input_seq_len)
-            
-            # v6.0: 토큰 생성 (내부 히든 윈도우 사용)
-            if self.timing_manager.output_started:
-                current_pos = self.timing_manager.generated_length
-                
-                # v6.0: OutputInterface는 decoder_input_ids만 받음 (내부 히든 윈도우 사용)
-                all_output_logits = self.output_interface(decoder_input_ids)
-                
-                # 마지막 토큰의 로짓만 사용
-                token_logits = all_output_logits[:, -1, :]  # [B, vocab_size]
-                all_logits.append(token_logits)
-                all_logits_with_clk.append((token_logits, clk))
-                
-                # 다음 토큰 결정
-                if training and target_schedule is not None and current_pos < target_seq_len:
-                    # 학습 모드: scheduled sampling
-                    use_teacher = torch.rand(1).item() < ss_prob
-                    if use_teacher:
-                        # Teacher Forcing: 정답 토큰 사용
-                        next_token = target_schedule[:, current_pos].unsqueeze(-1)
-                    else:
-                        # Student Forcing: 예측 토큰 사용
-                        next_token = torch.argmax(token_logits, dim=-1, keepdim=True)
-                else:
-                    # 추론 모드 또는 타겟을 벗어난 경우
-                    next_token = torch.argmax(token_logits, dim=-1, keepdim=True)
-                
-                # decoder_input_ids 업데이트
-                decoder_input_ids = torch.cat([decoder_input_ids, next_token], dim=1)
-                
-                if decoder_input_ids.shape[1] > self.output_interface.window_size:
-                    decoder_input_ids = decoder_input_ids[:, -self.output_interface.window_size:]
-                    
-                last_token_id = next_token[0].item()
-                
-                # 종료 조건 체크
-                if self.timing_manager.should_end_output(
-                    training, 
-                    target_seq_len,
-                    last_generated_token_id=last_token_id,
-                    eos_token_id=self.eos_token_id
-                ):
-                    break
-            
-            # 손실 계산을 위한 정보 수집 (학습 시에만)
-            if training:
-                info = self.timing_manager.get_timing_info_for_loss()
-                if info:
-                    if info['type'] == 'start':
-                        loss_timing_info['start_conditions'] = info
-                    else:
-                        loss_timing_info['end_conditions'] = info
-            
-            # Phase 3: 스파이크 후처리
-            self._phase3_post_spike_processing(current_spikes)
-            
-            # 스파이크율 누적 (매 CLK마다)
-            self._accumulate_spike_rates(current_spikes)
-
-        # 최종 출력 및 processing_info 구성
-        if all_logits:
-            output_logits = torch.stack(all_logits, dim=1)
-        else:
-            output_logits = torch.zeros(batch_size, 0, self.output_interface.vocab_size, device=self.device)
+            # 마지막 토큰의 로짓만 반환
+            token_logits = all_output_logits[:, -1, :]  # [B, vocab_size]
+            return token_logits
         
-        # CLK 정보 추출 및 processing_info에 추가
-        if all_logits_with_clk:
-            output_logits_list, clk_list = zip(*all_logits_with_clk)
-            generation_clks = torch.tensor(clk_list, device=self.device)
-        else:
-            generation_clks = torch.empty(0, device=self.device)
+        # Phase 7: 스파이크 후처리
+        self._phase3_post_spike_processing(current_spikes)
         
-        # 개별 노드별 스파이크율 딕셔너리 반환
-        node_spike_rates = self._get_node_spike_rates()
-        
-        processing_info = {
-            "processing_clk": self.current_clk + 1,
-            "batch_size": batch_size,
-            "sequence_length": output_logits.shape[1],
-            "training_mode": training,
-            "timing_info": loss_timing_info,
-            "tokens_generated": len(all_logits),
-            "output_started": self.timing_manager.output_started,
-            "convergence_achieved": clk < max_clk - 1 if 'clk' in locals() else False,
-            "final_acc_activity": self.timing_manager.stable_sync_index.mean().item() if hasattr(self.timing_manager.stable_sync_index, 'mean') else 0.0,
-            "generation_clks": generation_clks,
-            "node_spike_rates": node_spike_rates
-        }
-        
-        return output_logits, processing_info
+        return None
 
     def _phase1_compute_spikes(self) -> Dict[str, torch.Tensor]:
         """Phase 1: 현재 막전위 기준 스파이크 계산"""

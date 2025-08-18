@@ -18,7 +18,7 @@ from .loss import (
     TimingLoss
 )
 
-from .metric import (
+from ..evaluation.metrics import (
     SCSMetrics,
     SCSOptimizer,
     KHopBackpropagation,

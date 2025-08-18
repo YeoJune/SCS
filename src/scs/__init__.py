@@ -12,20 +12,35 @@ from .architecture import (
 # Training 모듈
 from .training import (
     SCSTrainer, TrainingConfig, GradualUnfreezingScheduler,
-    SpikingLoss, NeuromodulationLoss, MultiObjectiveLoss, TimingLoss, SCSMetrics,
-    SCSOptimizer, KHopBackpropagation, AdaptiveLearningRateScheduler, OptimizerFactory
+    SpikingLoss, NeuromodulationLoss, MultiObjectiveLoss, TimingLoss
+)
+
+# Evaluation 모듈 (메트릭 및 최적화)
+from .evaluation import (
+    SCSMetrics, SCSOptimizer, KHopBackpropagation, 
+    AdaptiveLearningRateScheduler, OptimizerFactory,
+    generate_visualizations, analyze_io_pipeline
 )
 
 # Data 모듈
 from .data import (
-    SCSTokenizer, BaseDataset, LogiQADataset, MultiDataset, 
+    SCSTokenizer, BaseDataset, LogiQADataset, bAbIDataset, MultiDataset, 
     create_dataset, DataProcessor, SCSDataLoader, create_dataloader
 )
 
-# Utils 모듈 (ModelBuilder 포함)
+# Config 모듈
+from .config import (
+    AppConfig, TrainingConfig, IOSystemConfig, InputInterfaceConfig, OutputInterfaceConfig,
+    BrainRegionConfig, SystemRolesConfig, TaskConfig, DataConfig, DataLoadingConfig,
+    TokenizerConfig, TimingManagerConfig, LearningConfig, GradualUnfreezingConfig,
+    SpikeDynamicsConfig, ConnectivityConfig, AxonalConnectionsConfig, EvaluationConfig,
+    load_and_validate_config, ModelBuilder
+)
+
+# Utils 모듈
 from .utils import (
-    ModelBuilder, load_config, save_config, setup_logging,
-    set_random_seed, get_device, format_time
+    load_config, save_config, save_json, load_json, setup_logging,
+    create_experiment_summary, get_git_info, set_random_seed, get_device, format_time
 )
 
 __version__ = "0.1.0"
@@ -39,15 +54,25 @@ __all__ = [
     
     # 학습 시스템
     "SCSTrainer", "TrainingConfig", "GradualUnfreezingScheduler",
-    "SpikingLoss", "NeuromodulationLoss", "MultiObjectiveLoss", "TimingLoss", "SCSMetrics",
-    "SCSOptimizer", "KHopBackpropagation", "AdaptiveLearningRateScheduler", 
-    "OptimizerFactory",
+    "SpikingLoss", "NeuromodulationLoss", "MultiObjectiveLoss", "TimingLoss",
+    
+    # 평가 및 메트릭 시스템
+    "SCSMetrics", "SCSOptimizer", "KHopBackpropagation", 
+    "AdaptiveLearningRateScheduler", "OptimizerFactory",
+    "generate_visualizations", "analyze_io_pipeline",
     
     # 데이터 처리
-    "SCSTokenizer", "BaseDataset", "LogiQADataset", "MultiDataset", 
+    "SCSTokenizer", "BaseDataset", "LogiQADataset", "bAbIDataset", "MultiDataset", 
     "create_dataset", "DataProcessor", "SCSDataLoader", "create_dataloader",
     
-    # 유틸리티 (선언적 조립 지원)
-    "ModelBuilder", "load_config", "save_config", "setup_logging",
-    "set_random_seed", "get_device", "format_time"
+    # 설정 관리
+    "AppConfig", "TrainingConfig", "IOSystemConfig", "InputInterfaceConfig", "OutputInterfaceConfig",
+    "BrainRegionConfig", "SystemRolesConfig", "TaskConfig", "DataConfig", "DataLoadingConfig",
+    "TokenizerConfig", "TimingManagerConfig", "LearningConfig", "GradualUnfreezingConfig",
+    "SpikeDynamicsConfig", "ConnectivityConfig", "AxonalConnectionsConfig", "EvaluationConfig",
+    "load_and_validate_config", "ModelBuilder",
+    
+    # 유틸리티
+    "load_config", "save_config", "save_json", "load_json", "setup_logging",
+    "create_experiment_summary", "get_git_info", "set_random_seed", "get_device", "format_time"
 ]

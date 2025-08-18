@@ -329,101 +329,127 @@ class SCSTrainer:
             'loss': total_loss / num_batches,
             'accuracy': total_accuracy / num_batches
         }
+    
     def _train_batch(self, batch: Dict[str, torch.Tensor]) -> tuple:
-        """배치 학습 - TimingManager 통합, Teacher Forcing"""
+        """배치 학습 - 텐서 기반 상태 관리, Scheduled Sampling"""
         # 1. 데이터 준비
         input_tokens = batch['input_tokens'].to(self.device)
         target_tokens = batch['target_tokens'].to(self.device) 
         attention_mask = batch['attention_mask'].to(self.device)
         batch_size = input_tokens.shape[0]
+        target_seq_len = target_tokens.shape[1]
 
         # 2. 초기화
         self.optimizer.zero_grad()
         self.model.reset_state(batch_size)
         
-        # 3. 샘플별 디코더 상태 추적
-        sample_decoder_inputs = {}  # {sample_idx: [token_list]}
-        all_logits = []
+        # 3. 텐서 상태 초기화 - PAD 토큰으로 시작
+        # decoder_sequences: [B, target_seq_len + 1] - PAD + 생성될 토큰들
+        decoder_sequences = torch.full(
+            (batch_size, target_seq_len + 1), 
+            self.config.pad_token_id, 
+            dtype=torch.long, 
+            device=self.device
+        )
+        # 첫 번째 위치도 PAD 토큰으로 유지 (전체 PAD로 초기화됨)
+        
+        # all_logits_tensor: [B, target_seq_len, vocab_size] - 최종 로짓 저장
+        vocab_size = self.model.output_interface.vocab_size
+        all_logits_tensor = torch.zeros(
+            (batch_size, target_seq_len, vocab_size), 
+            dtype=torch.float32, 
+            device=self.device
+        )
         
         # 4. CLK 루프
+        final_clk = 0
         for clk in range(self.config.max_clk_training):
-            # 4-1. 현재 활성화된 샘플들의 디코더 입력 준비
-            decoder_batch = None
-            if sample_decoder_inputs:
-                max_len = max(len(tokens) for tokens in sample_decoder_inputs.values())
-                if max_len > 0:  # 길이가 0보다 클 때만 배치 생성
-                    decoder_batch = torch.full((batch_size, max_len), self.model.pad_token_id, dtype=torch.long, device=self.device)
-                    for sample_idx, tokens in sample_decoder_inputs.items():
-                        if len(tokens) > 0:
-                            decoder_batch[sample_idx, :len(tokens)] = torch.tensor(tokens, device=self.device)
+            final_clk = clk
             
-            # 4-2. 모델 forward
+            # 4-1. TimingManager 상태 먼저 업데이트 (acc_spikes 얻기 위해)
             logits, acc_spikes = self.model.forward(
                 clk=clk,
                 input_schedule=input_tokens,
-                decoder_input_ids=decoder_batch,
+                decoder_input_ids=None,  # 첫 번째 호출에서는 None
                 attention_mask=attention_mask
             )
             
-            # 4-3. TimingManager 업데이트
             self.model.timing_manager.step(
                 current_clk=clk,
                 acc_node_spikes=acc_spikes,
                 training=True,
                 input_seq_len=input_tokens.shape[1],
-                target_seq_len=target_tokens.shape[1]
+                target_seq_len=target_seq_len
             )
             
-            # 4-4. 활성화된 샘플 처리
-            active_mask = self.model.timing_manager.get_active_mask()
+            # 4-2. 현재 활성화된 샘플들과 생성 길이 가져오기
+            active_mask = self.model.timing_manager.get_active_mask()  # [B]
+            generated_length = self.model.timing_manager.generated_length  # [B]
             
-            if active_mask.any():
-                # 새로 시작하는 샘플 초기화 (빈 리스트로 시작)
-                for sample_idx in range(batch_size):
-                    if active_mask[sample_idx] and sample_idx not in sample_decoder_inputs:
-                        sample_decoder_inputs[sample_idx] = []
+            if not active_mask.any():
+                continue
                 
-                # 로짓이 있는 경우 토큰 생성
-                if logits is not None:
-                    # 활성화된 샘플만 마스킹
-                    masked_logits = logits.clone()
-                    masked_logits[~active_mask] = -float('inf')
-                    all_logits.append(masked_logits)
-                    
-                    # 다음 토큰 결정
-                    current_pos = len(all_logits) - 1
-                    if current_pos < target_tokens.shape[1]:
-                        for sample_idx in range(batch_size):
-                            if active_mask[sample_idx]:
-                                # Scheduled Sampling 적용
-                                if torch.rand(1).item() < self.current_ss_prob:
-                                    # Teacher Forcing
-                                    next_token = target_tokens[sample_idx, current_pos].item()
-                                else:
-                                    # Student Forcing
-                                    next_token = torch.argmax(logits[sample_idx]).item()
-                                sample_decoder_inputs[sample_idx].append(next_token)
+            # 4-3. 디코더 배치 준비 - 각 샘플의 현재 생성 길이에 맞춰
+            max_len_so_far = (generated_length + 1).max().item()  # +1은 BOS 포함
+            if max_len_so_far > 0:
+                decoder_batch = decoder_sequences[:, :max_len_so_far]  # [B, max_len_so_far]
+                
+                # OutputInterface 호출하여 로짓 생성
+                logits, _ = self.model.forward(
+                    clk=clk,
+                    input_schedule=input_tokens,
+                    decoder_input_ids=decoder_batch,
+                    attention_mask=attention_mask
+                )
+            
+            # 4-4. 활성 샘플들의 로짓 저장 및 다음 토큰 결정
+            if logits is not None:
+                for sample_idx in range(batch_size):
+                    if active_mask[sample_idx]:
+                        current_pos = generated_length[sample_idx].item()
+                        
+                        # 타겟 시퀀스 길이를 초과하지 않도록 체크
+                        if current_pos < target_seq_len:
+                            # 현재 위치의 로짓을 all_logits_tensor에 저장
+                            all_logits_tensor[sample_idx, current_pos] = logits[sample_idx]
+                            
+                            # Scheduled Sampling으로 다음 토큰 결정
+                            if torch.rand(1).item() < self.current_ss_prob:
+                                # Teacher Forcing
+                                next_token = target_tokens[sample_idx, current_pos].item()
+                            else:
+                                # Student Forcing
+                                next_token = torch.argmax(logits[sample_idx]).item()
+                            
+                            # decoder_sequences 업데이트
+                            next_pos = current_pos + 1  # BOS 다음 위치
+                            if next_pos < decoder_sequences.shape[1]:
+                                decoder_sequences[sample_idx, next_pos] = next_token
             
             # 4-5. 조기 종료
-            if self.model.timing_manager.all_ended or len(all_logits) >= target_tokens.shape[1]:
+            if self.model.timing_manager.all_ended:
                 break
         
         # 5. 손실 계산
-        if all_logits:
-            output_logits = torch.stack(all_logits, dim=1)
+        # all_logits_tensor에서 실제로 생성된 부분만 추출
+        max_generated = (self.model.timing_manager.generated_length).max().item()
+        if max_generated > 0:
+            output_logits = all_logits_tensor[:, :max_generated]  # [B, actual_len, vocab_size]
+            target_subset = target_tokens[:, :max_generated]  # [B, actual_len]
+            
             processing_info = {
-                "processing_clk": clk + 1,
+                "processing_clk": final_clk + 1,
                 "batch_size": batch_size,
                 "sequence_length": output_logits.shape[1],
                 "training_mode": True,
-                "tokens_generated": len(all_logits),
+                "tokens_generated": max_generated,
                 "output_started": True,
-                "convergence_achieved": clk < self.config.max_clk_training - 1,
+                "convergence_achieved": final_clk < self.config.max_clk_training - 1,
                 "final_acc_activity": acc_spikes.mean().item() if acc_spikes is not None else 0.0,
-                "generation_clks": torch.arange(len(all_logits), device=self.device),
+                "generation_clks": torch.arange(max_generated, device=self.device),
                 "node_spike_rates": {}
             }
-            loss = self.loss_fn(output_logits, target_tokens, processing_info)
+            loss = self.loss_fn(output_logits, target_subset, processing_info)
         else:
             loss = torch.tensor(0.0, device=self.device, requires_grad=True)
         
@@ -435,9 +461,9 @@ class SCSTrainer:
         
         # 7. 메트릭
         with torch.no_grad():
-            if all_logits:
+            if max_generated > 0:
                 from ..evaluation.metrics import SCSMetrics
-                accuracy = SCSMetrics.accuracy(output_logits, target_tokens, pad_token_id=self.config.pad_token_id)
+                accuracy = SCSMetrics.accuracy(output_logits, target_subset, pad_token_id=self.config.pad_token_id)
             else:
                 accuracy = 0.0
                 
@@ -445,7 +471,7 @@ class SCSTrainer:
 
 
     def _validate_epoch(self, val_loader: DataLoader) -> Dict[str, float]:
-        """검증 - TimingManager 통합, Auto-regressive"""
+        """검증 - 텐서 기반 상태 관리, Auto-regressive"""
         self.model.eval()
         total_loss = 0.0
         total_accuracy = 0.0
@@ -457,89 +483,116 @@ class SCSTrainer:
                 target_tokens = batch['target_tokens'].to(self.device)
                 attention_mask = batch['attention_mask'].to(self.device)
                 batch_size = input_tokens.shape[0]
+                target_seq_len = target_tokens.shape[1]
 
                 # 초기화
                 self.model.reset_state(batch_size)
-                sample_decoder_inputs = {}
-                all_logits = []
+                
+                # 텐서 상태 초기화 - PAD 토큰으로 시작
+                decoder_sequences = torch.full(
+                    (batch_size, target_seq_len + 1), 
+                    self.config.pad_token_id, 
+                    dtype=torch.long, 
+                    device=self.device
+                )
+                # 전체 PAD로 초기화됨
+                
+                vocab_size = self.model.output_interface.vocab_size
+                all_logits_tensor = torch.zeros(
+                    (batch_size, target_seq_len, vocab_size), 
+                    dtype=torch.float32, 
+                    device=self.device
+                )
                 
                 # CLK 루프
+                final_clk = 0
                 for clk in range(self.config.max_clk_training):
-                    # 디코더 입력 준비
-                    decoder_batch = None
-                    if sample_decoder_inputs:
-                        max_len = max(len(tokens) for tokens in sample_decoder_inputs.values())
-                        if max_len > 0:  # 길이가 0보다 클 때만 배치 생성
-                            decoder_batch = torch.full((batch_size, max_len), self.model.pad_token_id, dtype=torch.long, device=self.device)
-                            for sample_idx, tokens in sample_decoder_inputs.items():
-                                if len(tokens) > 0:
-                                    decoder_batch[sample_idx, :len(tokens)] = torch.tensor(tokens, device=self.device)
+                    final_clk = clk
                     
-                    # 모델 forward
+                    # TimingManager 상태 업데이트
                     logits, acc_spikes = self.model.forward(
                         clk=clk,
                         input_schedule=input_tokens,
-                        decoder_input_ids=decoder_batch,
+                        decoder_input_ids=None,
                         attention_mask=attention_mask
                     )
-
-                    # TimingManager 업데이트
+                    
                     self.model.timing_manager.step(
                         current_clk=clk,
                         acc_node_spikes=acc_spikes,
                         training=False,
                         input_seq_len=input_tokens.shape[1],
-                        target_seq_len=target_tokens.shape[1]
+                        target_seq_len=target_seq_len
                     )
                     
-                    # 활성화된 샘플 처리
+                    # 활성화된 샘플들과 생성 길이 가져오기
                     active_mask = self.model.timing_manager.get_active_mask()
+                    generated_length = self.model.timing_manager.generated_length
                     
-                    if active_mask.any():
-                        # 새로 시작하는 샘플 초기화
-                        for sample_idx in range(batch_size):
-                            if active_mask[sample_idx] and sample_idx not in sample_decoder_inputs:
-                                sample_decoder_inputs[sample_idx] = []
+                    if not active_mask.any():
+                        continue
+                    
+                    # 디코더 배치 준비
+                    max_len_so_far = (generated_length + 1).max().item()
+                    if max_len_so_far > 0:
+                        decoder_batch = decoder_sequences[:, :max_len_so_far]
                         
-                        # 로짓이 있는 경우 토큰 생성
-                        if logits is not None:
-                            masked_logits = logits.clone()
-                            masked_logits[~active_mask] = -float('inf')
-                            all_logits.append(masked_logits)
-                            
-                            # Auto-regressive: 생성된 토큰 추가
-                            for sample_idx in range(batch_size):
-                                if active_mask[sample_idx]:
-                                    next_token = torch.argmax(logits[sample_idx]).item()
-                                    sample_decoder_inputs[sample_idx].append(next_token)
+                        logits, _ = self.model.forward(
+                            clk=clk,
+                            input_schedule=input_tokens,
+                            decoder_input_ids=decoder_batch,
+                            attention_mask=attention_mask
+                        )
+                    
+                    # Auto-regressive: 생성된 토큰으로 다음 토큰 결정
+                    if logits is not None:
+                        for sample_idx in range(batch_size):
+                            if active_mask[sample_idx]:
+                                current_pos = generated_length[sample_idx].item()
+                                
+                                if current_pos < target_seq_len:
+                                    # 로짓 저장
+                                    all_logits_tensor[sample_idx, current_pos] = logits[sample_idx]
                                     
-                                    # EOS 체크 (개별 샘플별로)
-                                    if next_token == self.model.eos_token_id:
+                                    # Auto-regressive: 생성된 토큰 사용
+                                    next_token = torch.argmax(logits[sample_idx]).item()
+                                    
+                                    # EOS 체크
+                                    eos_token_id = getattr(self.model, 'eos_token_id', 1)
+                                    if next_token == eos_token_id:
                                         continue
+                                    
+                                    # decoder_sequences 업데이트
+                                    next_pos = current_pos + 1
+                                    if next_pos < decoder_sequences.shape[1]:
+                                        decoder_sequences[sample_idx, next_pos] = next_token
                     
                     # 조기 종료
-                    if self.model.timing_manager.all_ended or len(all_logits) >= target_tokens.shape[1]:
+                    if self.model.timing_manager.all_ended:
                         break
                 
                 # 손실 및 정확도 계산
-                if all_logits:
-                    output_logits = torch.stack(all_logits, dim=1)
+                max_generated = (self.model.timing_manager.generated_length).max().item()
+                if max_generated > 0:
+                    output_logits = all_logits_tensor[:, :max_generated]
+                    target_subset = target_tokens[:, :max_generated]
+                    
                     processing_info = {
-                        "processing_clk": clk + 1,
+                        "processing_clk": final_clk + 1,
                         "batch_size": batch_size,
                         "sequence_length": output_logits.shape[1],
                         "training_mode": False,
-                        "tokens_generated": len(all_logits),
+                        "tokens_generated": max_generated,
                         "output_started": True,
-                        "convergence_achieved": clk < self.config.max_clk_training - 1,
+                        "convergence_achieved": final_clk < self.config.max_clk_training - 1,
                         "final_acc_activity": acc_spikes.mean().item() if acc_spikes is not None else 0.0,
-                        "generation_clks": torch.arange(len(all_logits), device=self.device),
+                        "generation_clks": torch.arange(max_generated, device=self.device),
                         "node_spike_rates": {}
                     }
-                    batch_loss = self.loss_fn(output_logits, target_tokens, processing_info)
+                    batch_loss = self.loss_fn(output_logits, target_subset, processing_info)
                     
                     from ..evaluation.metrics import SCSMetrics
-                    batch_accuracy = SCSMetrics.accuracy(output_logits, target_tokens, pad_token_id=self.config.pad_token_id)
+                    batch_accuracy = SCSMetrics.accuracy(output_logits, target_subset, pad_token_id=self.config.pad_token_id)
                 else:
                     batch_loss = torch.tensor(float('inf'))
                     batch_accuracy = 0.0
@@ -592,7 +645,7 @@ class SCSTrainer:
         return self._aggregate_evaluation_results(all_sample_results, saved_examples, total_samples)
 
     def _evaluate_batch(self, batch: Dict[str, torch.Tensor]) -> Dict[str, Any]:
-        """배치 단위 Auto-regressive 추론 - TimingManager 통합"""
+        """배치 단위 Auto-regressive 추론 - 텐서 기반 상태 관리"""
         input_tokens = batch['input_tokens'].to(self.device)
         target_tokens = batch['target_tokens'].to(self.device)
         attention_mask = batch.get('attention_mask')
@@ -600,82 +653,103 @@ class SCSTrainer:
             attention_mask = attention_mask.to(self.device)
         
         batch_size = input_tokens.shape[0]
+        target_seq_len = target_tokens.shape[1]
         
         # 초기화
         self.model.reset_state(batch_size)
-        sample_decoder_inputs = {}
-        all_logits = []
-        final_clk = 0
+        
+        # 텐서 상태 초기화 - PAD 토큰으로 시작
+        decoder_sequences = torch.full(
+            (batch_size, target_seq_len + 1), 
+            self.config.pad_token_id, 
+            dtype=torch.long, 
+            device=self.device
+        )
+        # 전체 PAD로 초기화됨
+        
+        vocab_size = self.model.output_interface.vocab_size
+        all_logits_tensor = torch.zeros(
+            (batch_size, target_seq_len, vocab_size), 
+            dtype=torch.float32, 
+            device=self.device
+        )
         
         # CLK 루프
+        final_clk = 0
         for clk in range(self.config.max_clk_training):
             final_clk = clk
             
-            # 디코더 입력 준비
-            decoder_batch = None
-            if sample_decoder_inputs:
-                max_len = max(len(tokens) for tokens in sample_decoder_inputs.values())
-                if max_len > 0:  # 길이가 0보다 클 때만 배치 생성
-                    decoder_batch = torch.full((batch_size, max_len), self.model.pad_token_id, dtype=torch.long, device=self.device)
-                    for sample_idx, tokens in sample_decoder_inputs.items():
-                        if len(tokens) > 0:
-                            decoder_batch[sample_idx, :len(tokens)] = torch.tensor(tokens, device=self.device)
-            
-            # 모델 forward
+            # TimingManager 상태 업데이트
             logits, acc_spikes = self.model.forward(
                 clk=clk,
                 input_schedule=input_tokens,
-                decoder_input_ids=decoder_batch,
+                decoder_input_ids=None,
                 attention_mask=attention_mask
             )
 
-            # TimingManager 업데이트
             self.model.timing_manager.step(
                 current_clk=clk,
                 acc_node_spikes=acc_spikes,
                 training=False,
                 input_seq_len=input_tokens.shape[1],
-                target_seq_len=target_tokens.shape[1]
+                target_seq_len=target_seq_len
             )
             
-            # 활성화된 샘플 처리
+            # 활성화된 샘플들과 생성 길이 가져오기
             active_mask = self.model.timing_manager.get_active_mask()
+            generated_length = self.model.timing_manager.generated_length
             
-            if active_mask.any():
-                # 새로 시작하는 샘플 초기화
-                for sample_idx in range(batch_size):
-                    if active_mask[sample_idx] and sample_idx not in sample_decoder_inputs:
-                        sample_decoder_inputs[sample_idx] = []
+            if not active_mask.any():
+                continue
+            
+            # 디코더 배치 준비
+            max_len_so_far = (generated_length + 1).max().item()
+            if max_len_so_far > 0:
+                decoder_batch = decoder_sequences[:, :max_len_so_far]
                 
-                # 로짓이 있는 경우 토큰 생성
-                if logits is not None:
-                    masked_logits = logits.clone()
-                    masked_logits[~active_mask] = -float('inf')
-                    all_logits.append(masked_logits)
-                    
-                    # Auto-regressive: 생성된 토큰 추가
-                    for sample_idx in range(batch_size):
-                        if active_mask[sample_idx]:
+                logits, _ = self.model.forward(
+                    clk=clk,
+                    input_schedule=input_tokens,
+                    decoder_input_ids=decoder_batch,
+                    attention_mask=attention_mask
+                )
+            
+            # Auto-regressive: 생성된 토큰으로 다음 토큰 결정
+            if logits is not None:
+                for sample_idx in range(batch_size):
+                    if active_mask[sample_idx]:
+                        current_pos = generated_length[sample_idx].item()
+                        
+                        if current_pos < target_seq_len:
+                            # 로짓 저장
+                            all_logits_tensor[sample_idx, current_pos] = logits[sample_idx]
+                            
+                            # Auto-regressive: 생성된 토큰 사용
                             next_token = torch.argmax(logits[sample_idx]).item()
-                            sample_decoder_inputs[sample_idx].append(next_token)
+                            
+                            # decoder_sequences 업데이트
+                            next_pos = current_pos + 1
+                            if next_pos < decoder_sequences.shape[1]:
+                                decoder_sequences[sample_idx, next_pos] = next_token
             
             # 조기 종료
             if self.model.timing_manager.all_ended:
                 break
         
         # 결과 구성
-        if all_logits:
-            output_logits = torch.stack(all_logits, dim=1)
+        max_generated = (self.model.timing_manager.generated_length).max().item()
+        if max_generated > 0:
+            output_logits = all_logits_tensor[:, :max_generated]
             generated_tokens = output_logits.argmax(dim=-1)
         else:
-            output_logits = torch.zeros(batch_size, 0, self.model.output_interface.vocab_size, device=self.device)
+            output_logits = torch.zeros(batch_size, 0, vocab_size, device=self.device)
             generated_tokens = torch.zeros(batch_size, 0, dtype=torch.long, device=self.device)
         
         return {
             'output_logits': output_logits,
             'generated_tokens': generated_tokens,
             'processing_clk': final_clk + 1,
-            'tokens_generated': len(all_logits),
+            'tokens_generated': max_generated,
             'convergence_achieved': final_clk < self.config.max_clk_training - 1
         }
     

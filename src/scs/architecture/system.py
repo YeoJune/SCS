@@ -289,6 +289,7 @@ class SCSSystem(nn.Module):
         input_seq_len = input_schedule.shape[1] if input_schedule is not None else 0
         
         self.timing_manager.step(clk, acc_spikes, training=is_training, input_seq_len=input_seq_len, target_seq_len=target_seq_len)
+        self.timing_manager.should_start_output(training=is_training, input_seq_len=input_seq_len)
         
         # Phase 6: 토큰 생성 (필요한 경우)
         if decoder_input_ids is not None and self.timing_manager.output_started:

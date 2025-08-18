@@ -238,7 +238,7 @@ class InputInterface(nn.Module):
         
         # 위치 임베딩 추가
         if self.use_positional_encoding:
-            positions = torch.arange(seq_len + 1, device=self.device).unsqueeze(0).expand(batch_size, -1)
+            positions = torch.arange(seq_len, device=self.device).unsqueeze(0).expand(batch_size, -1)
             position_embeds = self.position_embedding(positions)
             windowed_input = windowed_input + position_embeds
         

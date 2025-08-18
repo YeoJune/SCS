@@ -256,16 +256,21 @@ class SCSSystem(nn.Module):
         target_seq_len: Optional[int] = None
     ) -> Optional[torch.Tensor]:
         """
-        단일 CLK 스텝 실행 (PyTorch 표준 준수)
+        순수한 단일 CLK 스텝 계산 (PyTorch 표준 준수)
+        
+        TimingManager의 상태를 전혀 알지 못하며, 
+        모든 샘플에 대해 로짓을 계산하고 반환만 함
         
         Args:
             clk: 현재 CLK 스텝
             input_schedule: [B, seq_len] 입력 토큰 스케줄
             decoder_input_ids: [B, decoder_len] 디코더 입력 토큰들
             attention_mask: [B, seq_len] 어텐션 마스크
+            is_training: 학습 모드 여부 (사용하지 않음, 호환성만)
+            target_seq_len: 타겟 시퀀스 길이 (사용하지 않음, 호환성만)
             
         Returns:
-            토큰 로짓 [B, vocab_size] 또는 None (출력이 없는 경우)
+            토큰 로짓 [B, vocab_size] 또는 None (decoder_input_ids가 없는 경우)
         """
         # Phase 1: 현재 막전위 기준 스파이크 계산
         current_spikes = self._phase1_compute_spikes()
@@ -282,25 +287,16 @@ class SCSSystem(nn.Module):
         output_spikes = current_spikes[self.output_node]
         self.output_interface.update_hidden_window(output_spikes)
         
-        # Phase 5: TimingManager 업데이트
-        acc_spikes = current_spikes.get(self.acc_node, torch.zeros_like(current_spikes[self.input_node]))
-        
-        # 입력 및 타겟 시퀀스 길이 계산
-        input_seq_len = input_schedule.shape[1] if input_schedule is not None else 0
-        
-        self.timing_manager.step(clk, acc_spikes, training=is_training, input_seq_len=input_seq_len, target_seq_len=target_seq_len)
-        self.timing_manager.should_start_output(training=is_training, input_seq_len=input_seq_len)
-        
-        # Phase 6: 토큰 생성 (필요한 경우)
-        if decoder_input_ids is not None and self.timing_manager.output_started:
-            # 내부 히든 윈도우를 사용하여 토큰 생성
+        # Phase 5: 토큰 생성 (decoder_input_ids가 제공된 경우에만)
+        if decoder_input_ids is not None:
+            # 모든 샘플에 대해 로짓 계산
             all_output_logits = self.output_interface(decoder_input_ids)
             
             # 마지막 토큰의 로짓만 반환
             token_logits = all_output_logits[:, -1, :]  # [B, vocab_size]
             return token_logits
         
-        # Phase 7: 스파이크 후처리
+        # Phase 6: 스파이크 후처리
         self._phase3_post_spike_processing(current_spikes)
         
         return None

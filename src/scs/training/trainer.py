@@ -336,7 +336,9 @@ class SCSTrainer:
         input_tokens = batch['input_tokens'].to(self.device)
         target_tokens = batch['target_tokens'].to(self.device) 
         attention_mask = batch['attention_mask'].to(self.device)
-        
+
+        target_seq_len = target_tokens.shape[1]
+
         # 2. 그래디언트 초기화
         self.optimizer.zero_grad()
         
@@ -358,7 +360,8 @@ class SCSTrainer:
                 input_schedule=input_tokens,
                 decoder_input_ids=decoder_inputs,
                 attention_mask=attention_mask,
-                is_training=True
+                is_training=True,
+                target_seq_len=target_seq_len
             )
             
             # 로짓이 반환된 경우 수집
@@ -444,7 +447,9 @@ class SCSTrainer:
                 input_tokens = batch['input_tokens'].to(self.device)
                 target_tokens = batch['target_tokens'].to(self.device)
                 attention_mask = batch['attention_mask'].to(self.device)
-                
+
+                target_seq_len = target_tokens.shape[1]
+
                 # 모델 상태 초기화 (배치 단위)
                 batch_size = input_tokens.shape[0]
                 self.model.reset_state(batch_size)
@@ -463,7 +468,8 @@ class SCSTrainer:
                         input_schedule=input_tokens,
                         decoder_input_ids=decoder_inputs,
                         attention_mask=attention_mask,
-                        is_training=False
+                        is_training=False,
+                        target_seq_len=target_seq_len
                     )
                     
                     if logits is not None:
@@ -573,7 +579,9 @@ class SCSTrainer:
         attention_mask = batch.get('attention_mask')
         if attention_mask is not None:
             attention_mask = attention_mask.to(self.device)
-        
+
+        target_seq_len = target_tokens.shape[1] if target_tokens is not None else 0
+
         # 모델 상태 초기화 (배치 단위)
         batch_size = input_tokens.shape[0]
         self.model.reset_state(batch_size)
@@ -592,7 +600,8 @@ class SCSTrainer:
                 input_schedule=input_tokens,
                 decoder_input_ids=decoder_inputs,
                 attention_mask=attention_mask,
-                is_training=False
+                is_training=False,
+                target_seq_len=target_seq_len
             )
             
             if logits is not None:

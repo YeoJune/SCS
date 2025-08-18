@@ -253,6 +253,7 @@ class SCSSystem(nn.Module):
         decoder_input_ids: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         is_training: bool = False,
+        target_seq_len: Optional[int] = None
     ) -> Optional[torch.Tensor]:
         """
         단일 CLK 스텝 실행 (PyTorch 표준 준수)
@@ -286,7 +287,6 @@ class SCSSystem(nn.Module):
         
         # 입력 및 타겟 시퀀스 길이 계산
         input_seq_len = input_schedule.shape[1] if input_schedule is not None else 0
-        target_seq_len = decoder_input_ids.shape[1] if decoder_input_ids is not None else 0
         
         self.timing_manager.step(clk, acc_spikes, training=is_training, input_seq_len=input_seq_len, target_seq_len=target_seq_len)
         

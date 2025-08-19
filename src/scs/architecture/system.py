@@ -187,7 +187,7 @@ class SCSSystem(nn.Module):
 
         # 스파이크율 누적 변수
         self.accumulated_spike_deviations = {}
-        self.clk_count = 0
+        self.total_samples_processed = 0
 
         self.pad_token_id = output_interface.pad_token_id
         self.decoder_window_size = output_interface.window_size
@@ -489,7 +489,7 @@ class SCSSystem(nn.Module):
 
         # 스파이크율 누적 변수 초기화
         self.accumulated_spike_deviations = {}  # CLK별 편차 누적
-        self.clk_count = 0
+        self.total_samples_processed = 0
         
         for node in self.nodes.values():
             node.reset_state(batch_size)
@@ -507,27 +507,39 @@ class SCSSystem(nn.Module):
         self._last_tokens = None
     
     def _accumulate_spike_rates(self, current_spikes: Dict[str, torch.Tensor]):
-        """매 CLK마다 개별 노드의 스파이크율 편차를 누적 (설정된 노드만)"""
+        """매 CLK마다 개별 노드의 스파이크율 편차를 누적 (배치별로 계산)"""
+        if not current_spikes:
+            return
+        
+        # 배치 크기 추출
+        first_node_spikes = next(iter(current_spikes.values()))
+        batch_size = first_node_spikes.shape[0]
+        
         for node_name, spikes in current_spikes.items():
             # 해당 노드의 target_spike_rate가 설정되어 있는지 확인
             if node_name not in self.node_target_spike_rates:
-                continue  # 설정되지 않은 노드는 정규화하지 않음
+                continue
             
-            # 최적화: inplace mean 계산으로 메모리 할당 최소화
-            current_spike_rate = torch.mean(spikes).item()
-            
-            # 해당 노드의 target_spike_rate 가져오기
             target_rate = self.node_target_spike_rates[node_name]
             
-            # CLK별 편차 계산
-            clk_deviation = (current_spike_rate - target_rate) ** 2
+            # 각 샘플별 스파이크율 계산 [B, H, W] → [B]
+            # spikes: [B, H, W]
+            sample_spike_rates = torch.mean(spikes.view(batch_size, -1), dim=1)  # [B]
             
+            # 각 샘플별 편차 계산
+            sample_deviations = (sample_spike_rates - target_rate) ** 2  # [B]
+            
+            # 배치 내 모든 샘플의 편차 합계
+            batch_total_deviation = torch.sum(sample_deviations).item()
+            
+            # 누적
             if node_name not in self.accumulated_spike_deviations:
                 self.accumulated_spike_deviations[node_name] = 0.0
             
-            self.accumulated_spike_deviations[node_name] += clk_deviation
+            self.accumulated_spike_deviations[node_name] += batch_total_deviation
         
-        self.clk_count += 1
+        # 전체 처리된 샘플 수 업데이트 (CLK마다 배치 크기만큼 증가)
+        self.total_samples_processed += batch_size
     
     def _get_node_spike_rates(self) -> Dict[str, float]:
         """개별 노드별 평균 스파이크율 편차를 딕셔너리로 반환"""
@@ -537,7 +549,7 @@ class SCSSystem(nn.Module):
         # 각 노드의 평균 편차 계산
         node_avg_deviations = {}
         for node_name, total_deviation in self.accumulated_spike_deviations.items():
-            node_avg_deviations[node_name] = total_deviation / self.clk_count
+            node_avg_deviations[node_name] = total_deviation / self.total_samples_processed
         
         return node_avg_deviations
 

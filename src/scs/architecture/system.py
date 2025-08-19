@@ -341,8 +341,8 @@ class SCSSystem(nn.Module):
         active_mask = self.timing_manager.get_active_mask()
         if active_mask.any():
             generated_length = self.timing_manager.generated_length
-            max_len_so_far = (generated_length + 1).max().item()
-            
+            max_len_so_far = generated_length.max().item()
+
             if max_len_so_far > 0:
                 max_len_so_far = min(max_len_so_far, self.decoder_window_size)
                 decoder_batch = decoder_sequences[:, :max_len_so_far]
@@ -379,7 +379,7 @@ class SCSSystem(nn.Module):
             if not active_mask[sample_idx]:
                 continue
                 
-            current_pos = generated_length[sample_idx].item()
+            current_pos = generated_length[sample_idx].item() - 1
             
             # 시퀀스 길이 체크
             if current_pos >= all_logits.shape[1]:

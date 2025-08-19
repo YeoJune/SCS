@@ -190,6 +190,7 @@ class SCSSystem(nn.Module):
         self.clk_count = 0
 
         self.pad_token_id = output_interface.pad_token_id
+        self.decoder_window_size = output_interface.window_size
 
     def forward(
         self,
@@ -237,14 +238,6 @@ class SCSSystem(nn.Module):
             device=self.device
         )
         
-        # 디코더 시퀀스 초기화 (PAD 토큰으로 시작)
-        decoder_sequences = torch.full(
-            (batch_size, target_seq_len + 1), 
-            self.pad_token_id, 
-            dtype=torch.long, 
-            device=self.device
-        )
-        
         # CLK 루프 - 시스템 내부에서 완전히 관리
         final_clk = 0
         final_acc_spikes = None
@@ -257,7 +250,7 @@ class SCSSystem(nn.Module):
                 clk=clk,
                 input_tokens=input_tokens,
                 attention_mask=attention_mask,
-                decoder_sequences=decoder_sequences
+                decoder_sequences=self.decoder_sequences
             )
             
             final_acc_spikes = step_result['acc_spikes']
@@ -277,7 +270,7 @@ class SCSSystem(nn.Module):
                 self._update_outputs_and_decoder(
                     step_result['logits'],
                     all_logits,
-                    decoder_sequences,
+                    self.decoder_sequences,
                     target_tokens,
                     training,
                     scheduled_sampling_prob
@@ -318,7 +311,7 @@ class SCSSystem(nn.Module):
             'output_logits': output_logits,
             'generated_tokens': generated_tokens,
             'processing_info': processing_info,
-            'decoder_sequences': decoder_sequences  # 디버깅용
+            'decoder_sequences': self.decoder_sequences  # 디버깅용
         }
     
     def _process_single_clk(
@@ -351,6 +344,7 @@ class SCSSystem(nn.Module):
             max_len_so_far = (generated_length + 1).max().item()
             
             if max_len_so_far > 0:
+                max_len_so_far = min(max_len_so_far, self.decoder_window_size)
                 decoder_batch = decoder_sequences[:, :max_len_so_far]
                 logits = self._generate_logits(decoder_batch)
                 
@@ -411,9 +405,15 @@ class SCSSystem(nn.Module):
                 next_token = torch.argmax(logits[sample_idx]).item()
             
             # 디코더 시퀀스 업데이트
-            next_pos = current_pos + 1
-            if next_pos < decoder_sequences.shape[1]:
-                decoder_sequences[sample_idx, next_pos] = next_token
+            if current_pos >= self.decoder_window_size - 1:
+                # 왼쪽으로 한 칸 이동 (in-place)
+                decoder_sequences[sample_idx, :-1] = decoder_sequences[sample_idx, 1:].clone()
+                decoder_sequences[sample_idx, -1] = next_token
+            else:
+                # 윈도우가 아직 안 찬 경우 그냥 추가
+                next_pos = current_pos + 1
+                if next_pos < decoder_sequences.shape[1]:
+                    decoder_sequences[sample_idx, next_pos] = next_token
     
     def _get_external_input_at_clk(
         self,
@@ -451,7 +451,7 @@ class SCSSystem(nn.Module):
             if actual_len < window_size:
                 # 앞쪽을 PAD 토큰(0)으로 패딩
                 pad_size = window_size - actual_len
-                padding = torch.zeros(batch_size, pad_size, dtype=torch.long, device=current_window.device)
+                padding = torch.full((batch_size, pad_size), self.pad_token_id, dtype=torch.long, device=current_window.device)
                 current_window = torch.cat([padding, current_window], dim=1)
             
             # 어텐션 마스크 적용 (있는 경우)
@@ -534,6 +534,13 @@ class SCSSystem(nn.Module):
             node.reset_state(batch_size)
 
         self.output_interface.reset_state(batch_size)
+
+        self.decoder_sequences = torch.full(
+            (batch_size, self.decoder_window_size + 1), 
+            self.pad_token_id, 
+            dtype=torch.long, 
+            device=self.device
+        )
     
     def _accumulate_spike_rates(self, current_spikes: Dict[str, torch.Tensor]):
         """매 CLK마다 개별 노드의 스파이크율 편차를 누적 (설정된 노드만)"""

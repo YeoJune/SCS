@@ -238,47 +238,56 @@ class SCSSystem(nn.Module):
             device=self.device
         )
         
-        # CLK 루프 - 시스템 내부에서 완전히 관리
+        # CLK 루프 - 순서 수정
         final_clk = 0
         final_acc_spikes = None
         
         for clk in range(self.max_clk):
             final_clk = clk
             
-            # 단일 CLK 스텝 처리
-            step_result = self._process_single_clk(
-                clk=clk,
-                input_tokens=input_tokens,
-                attention_mask=attention_mask,
-                decoder_sequences=self.decoder_sequences
+            # Phase 1: 스파이크 계산 및 상태 업데이트
+            current_spikes = self._compute_spikes()
+            external_input = self._get_external_input_at_clk(
+                input_tokens, clk, attention_mask
             )
+            self._update_states(external_input, current_spikes)
+            final_acc_spikes = current_spikes.get(self.acc_node)
             
-            final_acc_spikes = step_result['acc_spikes']
-            
-            # TimingManager 업데이트
+            # Phase 2: TimingManager 업데이트 (generated_length 증가)
             self.timing_manager.step(
                 current_clk=clk,
                 acc_node_spikes=final_acc_spikes,
                 training=training,
                 input_seq_len=input_seq_len,
                 target_seq_len=target_seq_len,
-                last_token_ids=step_result.get('last_tokens')
+                last_token_ids=getattr(self, '_last_tokens', None)
             )
             
-            # 로짓 저장 및 다음 토큰 업데이트
-            if step_result['logits'] is not None:
-                self._update_outputs_and_decoder(
-                    step_result['logits'],
-                    all_logits,
-                    self.decoder_sequences,
-                    target_tokens,
-                    training,
-                    scheduled_sampling_prob
-                )
+            # Phase 3: 출력 생성 및 저장 (TimingManager 업데이트 후)
+            active_mask = self.timing_manager.get_active_mask()
+            if active_mask.any():
+                # 현재 generated_length를 기준으로 로짓 생성
+                current_generated_length = self.timing_manager.generated_length
+                max_len_for_decoder = current_generated_length.max().item()
+                
+                if max_len_for_decoder > 0:
+                    max_len_for_decoder = min(max_len_for_decoder, self.decoder_window_size)
+                    decoder_batch = self.decoder_sequences[:, :max_len_for_decoder]
+                    logits = self._generate_logits(decoder_batch)
+                    
+                    # 로짓 저장 및 디코더 업데이트
+                    self._update_outputs_and_decoder(
+                        logits, all_logits, self.decoder_sequences,
+                        target_tokens, training, scheduled_sampling_prob
+                    )
+                    
+                    # EOS 체크를 위한 last_tokens 저장
+                    if decoder_batch.shape[1] > 0:
+                        self._last_tokens = decoder_batch[:, -1]
             
-            # 스파이크율 누적 (설정된 노드만)
-            if step_result['current_spikes']:
-                self._accumulate_spike_rates(step_result['current_spikes'])
+            # 스파이크율 누적
+            if current_spikes:
+                self._accumulate_spike_rates(current_spikes)
             
             # 조기 종료 조건
             if self.timing_manager.all_ended:
@@ -314,52 +323,6 @@ class SCSSystem(nn.Module):
             'decoder_sequences': self.decoder_sequences  # 디버깅용
         }
     
-    def _process_single_clk(
-        self,
-        clk: int,
-        input_tokens: torch.Tensor,
-        attention_mask: Optional[torch.Tensor],
-        decoder_sequences: torch.Tensor
-    ) -> Dict[str, Any]:
-        """단일 CLK 스텝 처리"""
-        
-        # Phase 1: 스파이크 계산
-        current_spikes = self._compute_spikes()
-        
-        # Phase 2: 외부 입력 처리
-        external_input = self._get_external_input_at_clk(
-            input_tokens, clk, attention_mask
-        )
-        
-        # Phase 3: 상태 업데이트
-        self._update_states(external_input, current_spikes)
-        
-        # Phase 4: 출력 생성 (활성 샘플들만)
-        logits = None
-        last_tokens = None
-        
-        active_mask = self.timing_manager.get_active_mask()
-        if active_mask.any():
-            generated_length = self.timing_manager.generated_length
-            max_len_so_far = generated_length.max().item()
-
-            if max_len_so_far > 0:
-                max_len_so_far = min(max_len_so_far, self.decoder_window_size)
-                decoder_batch = decoder_sequences[:, :max_len_so_far]
-                logits = self._generate_logits(decoder_batch)
-                
-                # 마지막 토큰들 추출 (EOS 체크용)
-                if decoder_batch.shape[1] > 1:
-                    last_tokens = decoder_batch[:, -1]
-        
-        return {
-            'logits': logits,
-            'acc_spikes': current_spikes.get(self.acc_node),
-            'last_tokens': last_tokens,
-            'active_mask': active_mask,
-            'current_spikes': current_spikes
-        }
-    
     def _update_outputs_and_decoder(
         self,
         logits: torch.Tensor,
@@ -369,20 +332,22 @@ class SCSSystem(nn.Module):
         training: bool,
         scheduled_sampling_prob: float
     ):
-        """출력 저장 및 디코더 시퀀스 업데이트"""
+        """출력 저장 및 디코더 시퀀스 업데이트 - 명확한 인덱싱"""
         
         batch_size = logits.shape[0]
         active_mask = self.timing_manager.get_active_mask()
-        generated_length = self.timing_manager.generated_length
+        current_generated_length = self.timing_manager.generated_length
         
         for sample_idx in range(batch_size):
             if not active_mask[sample_idx]:
                 continue
-                
-            current_pos = generated_length[sample_idx].item() - 1
+            
+            # *** 핵심: current_generated_length는 이미 증가된 상태 ***
+            # 저장할 위치는 generated_length - 1 (0부터 시작하는 인덱스)
+            current_pos = current_generated_length[sample_idx].item() - 1
             
             # 시퀀스 길이 체크
-            if current_pos >= all_logits.shape[1]:
+            if current_pos < 0 or current_pos >= all_logits.shape[1]:
                 continue
             
             # 로짓 저장
@@ -390,30 +355,26 @@ class SCSSystem(nn.Module):
             
             # 다음 토큰 결정
             if training and target_tokens is not None:
-                # Scheduled Sampling
                 if torch.rand(1).item() < scheduled_sampling_prob:
-                    # Teacher Forcing
                     if current_pos < target_tokens.shape[1]:
                         next_token = target_tokens[sample_idx, current_pos].item()
                     else:
                         next_token = self.eos_token_id
                 else:
-                    # Student Forcing
                     next_token = torch.argmax(logits[sample_idx]).item()
             else:
-                # 추론 모드: Auto-regressive
                 next_token = torch.argmax(logits[sample_idx]).item()
             
             # 디코더 시퀀스 업데이트
-            if current_pos >= self.decoder_window_size - 1:
-                # 왼쪽으로 한 칸 이동 (in-place)
+            decoder_pos = current_generated_length[sample_idx].item()  # 다음에 저장할 디코더 위치
+            if decoder_pos >= self.decoder_window_size:
+                # 윈도우 시프트
                 decoder_sequences[sample_idx, :-1] = decoder_sequences[sample_idx, 1:].clone()
                 decoder_sequences[sample_idx, -1] = next_token
             else:
-                # 윈도우가 아직 안 찬 경우 그냥 추가
-                next_pos = current_pos + 1
-                if next_pos < decoder_sequences.shape[1]:
-                    decoder_sequences[sample_idx, next_pos] = next_token
+                # 윈도우 내에 추가
+                if decoder_pos < decoder_sequences.shape[1]:
+                    decoder_sequences[sample_idx, decoder_pos] = next_token
     
     def _get_external_input_at_clk(
         self,
@@ -523,7 +484,7 @@ class SCSSystem(nn.Module):
         return all_output_logits[:, -1, :]  # 마지막 위치의 로짓만 반환
     
     def reset_state(self, batch_size: int = 1):
-        """전체 시스템 상태 초기화 (항상 배치)"""
+        """전체 시스템 상태 초기화"""
         self.timing_manager.reset(batch_size, self.device)
 
         # 스파이크율 누적 변수 초기화
@@ -541,6 +502,9 @@ class SCSSystem(nn.Module):
             dtype=torch.long, 
             device=self.device
         )
+        
+        # last_tokens 초기화
+        self._last_tokens = None
     
     def _accumulate_spike_rates(self, current_spikes: Dict[str, torch.Tensor]):
         """매 CLK마다 개별 노드의 스파이크율 편차를 누적 (설정된 노드만)"""

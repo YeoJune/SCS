@@ -27,7 +27,7 @@ spike_dynamics:
   refractory_damping_factor: 0.2
   spike_threshold: 1.0
   refractory_base: 1
-  refractory_adaptive_factor: 5.0
+  refractory_adaptive_factor: 10.0
   surrogate_beta: 3.0
   ema_alpha: 0.1
 

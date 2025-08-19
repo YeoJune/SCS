@@ -257,11 +257,7 @@ class SCSSystem(nn.Module):
                 clk=clk,
                 input_tokens=input_tokens,
                 attention_mask=attention_mask,
-                decoder_sequences=decoder_sequences,
-                target_tokens=target_tokens,
-                training=training,
-                scheduled_sampling_prob=scheduled_sampling_prob,
-                target_seq_len=target_seq_len
+                decoder_sequences=decoder_sequences
             )
             
             final_acc_spikes = step_result['acc_spikes']
@@ -330,11 +326,7 @@ class SCSSystem(nn.Module):
         clk: int,
         input_tokens: torch.Tensor,
         attention_mask: Optional[torch.Tensor],
-        decoder_sequences: torch.Tensor,
-        target_tokens: Optional[torch.Tensor],
-        training: bool,
-        scheduled_sampling_prob: float,
-        target_seq_len: int
+        decoder_sequences: torch.Tensor
     ) -> Dict[str, Any]:
         """단일 CLK 스텝 처리"""
         

@@ -307,6 +307,7 @@ class OutputInterface(nn.Module):
         
         # 히든 윈도우 내부 관리
         self.hidden_window = None  # [B, window_size, embedding_dim]
+        self.window_ptr = 0
         
         # T5 임베딩 로드 및 초기화
         if t5_model_name is not None:
@@ -399,6 +400,7 @@ class OutputInterface(nn.Module):
             self.embedding_dim,
             device=self.device
         )
+        self.window_ptr = 0
     
     def _create_hidden_vector(self, grid_spikes: torch.Tensor) -> torch.Tensor:
         """
@@ -429,18 +431,18 @@ class OutputInterface(nn.Module):
     
     def update_hidden_window(self, grid_spikes: torch.Tensor):
         """
-        매 CLK마다 호출 - 히든 윈도우 슬라이딩 업데이트
+        매 CLK마다 호출 - 순환 버퍼로 히든 윈도우 업데이트 (최적화)
         
         Args:
             grid_spikes: [B, H, W] 현재 CLK의 스파이크 그리드
         """
         current_hidden = self._create_hidden_vector(grid_spikes)
         
-        # 슬라이딩 윈도우 업데이트
-        self.hidden_window = torch.cat([
-            self.hidden_window[:, 1:, :],    # 맨 앞 제거
-            current_hidden.unsqueeze(1)      # 맨 뒤 추가
-        ], dim=1)
+        # torch.cat 대신 in-place 업데이트
+        self.hidden_window[:, self.window_ptr, :] = current_hidden
+        
+        # 포인터 순환 업데이트
+        self.window_ptr = (self.window_ptr + 1) % self.window_size
     
     def forward(self, decoder_input_ids: torch.Tensor) -> torch.Tensor:
         """
@@ -464,13 +466,16 @@ class OutputInterface(nn.Module):
         # Causal mask 생성
         tgt_mask = self._generate_causal_mask(seq_len)
         
-        # Transformer 디코더 실행 (내부 히든 윈도우 사용)
+        # 순환 버퍼를 시간 순서로 재정렬
+        rolled_window = torch.roll(self.hidden_window, shifts=-self.window_ptr, dims=1)
+
+        # Transformer 디코더 실행 (재정렬된 윈도우 사용)
         decoder_output = self.transformer_decoder(
             tgt=target_embeds,
-            memory=self.hidden_window,  # 내부 히든 윈도우 사용
+            memory=rolled_window,
             tgt_mask=tgt_mask
         )
-        
+
         # 최종 로짓 계산
         output_logits = self.final_projection(decoder_output)
         

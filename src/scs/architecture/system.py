@@ -543,7 +543,7 @@ class SCSSystem(nn.Module):
     
     def _get_node_spike_rates(self) -> Dict[str, float]:
         """개별 노드별 평균 스파이크율 편차를 딕셔너리로 반환"""
-        if self.clk_count == 0 or not self.accumulated_spike_deviations:
+        if self.total_samples_processed == 0 or not self.accumulated_spike_deviations:
             return {}
         
         # 각 노드의 평균 편차 계산

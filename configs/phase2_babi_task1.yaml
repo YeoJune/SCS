@@ -58,7 +58,7 @@ axonal_connections:
       target: "MEM1"
       patch_size: 2
       patch_weight_scale: 1.0
-      inner_weight_scale: 1.0
+      inner_weight_scale: 0.5
     - source: "MEM2"
       target: "OUT"
       patch_size: 1

@@ -40,6 +40,14 @@ brain_regions:
     grid_size: [64, 64]
     decay_rate: 0.8
     distance_tau: 1.0
+  PATH1:
+    grid_size: [64, 64]
+    decay_rate: 0.8
+    distance_tau: 1.0
+  PATH2:
+    grid_size: [64, 64]
+    decay_rate: 0.8
+    distance_tau: 1.0
 
 # === 축삭 연결 ===
 axonal_connections:
@@ -60,6 +68,21 @@ axonal_connections:
       patch_weight_scale: 1.0
       inner_weight_scale: 1.0
     - source: "MEM2"
+      target: "OUT"
+      patch_size: 1
+      patch_weight_scale: 1.0
+      inner_weight_scale: 1.0
+    - source: "IN"
+      target: "PATH1"
+      patch_size: 1
+      patch_weight_scale: 1.0
+      inner_weight_scale: 1.0
+    - source: "PATH1"
+      target: "PATH2"
+      patch_size: 1
+      patch_weight_scale: 1.0
+      inner_weight_scale: 1.0
+    - source: "PATH2"
       target: "OUT"
       patch_size: 1
       patch_weight_scale: 1.0

@@ -87,6 +87,7 @@ learning:
   # 점진적 커리큘럼 학습
   use_curriculum_learning: true
   curriculum_schedule:
+    0: 64
     50: 128
 
 timing_manager:

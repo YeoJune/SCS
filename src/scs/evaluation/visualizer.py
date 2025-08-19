@@ -97,16 +97,15 @@ def _collect_spike_patterns(
     
     for clk in range(max_clk):
         try:
-            # 단일 CLK 스텝 처리 (내부 메서드 직접 호출)
-            step_result = model._process_single_clk(
-                clk=clk,
-                input_tokens=input_tokens,
-                attention_mask=attention_mask,
-                decoder_sequences=model.decoder_sequences
+            # Phase 1: 스파이크 계산 및 상태 업데이트
+            current_spikes = model._compute_spikes()
+            external_input = model._get_external_input_at_clk(
+                input_tokens, clk, attention_mask
             )
+            model._update_states(external_input, current_spikes)
+            final_acc_spikes = current_spikes.get(model.acc_node)
             
             # 현재 스파이크 패턴 저장
-            current_spikes = step_result.get('current_spikes', {})
             if current_spikes:
                 spike_pattern = {}
                 for node_name, spikes in current_spikes.items():
@@ -114,14 +113,14 @@ def _collect_spike_patterns(
                         spike_pattern[node_name] = spikes[0].cpu().numpy()  # [H, W]
                 all_spike_patterns.append(spike_pattern)
             
-            # TimingManager 업데이트
+            # Phase 2: TimingManager 업데이트
             model.timing_manager.step(
                 current_clk=clk,
-                acc_node_spikes=step_result.get('acc_spikes'),
+                acc_node_spikes=final_acc_spikes,
                 training=False,
                 input_seq_len=input_tokens.shape[1],
                 target_seq_len=input_tokens.shape[1],  # 추론 모드
-                last_token_ids=step_result.get('last_tokens')
+                last_token_ids=getattr(model, '_last_tokens', None)
             )
             
             # 조기 종료 조건

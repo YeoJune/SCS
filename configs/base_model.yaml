@@ -27,7 +27,7 @@ spike_dynamics:
   refractory_damping_factor: 0.2
   spike_threshold: 1.0
   refractory_base: 1
-  refractory_adaptive_factor: 5.0
+  refractory_adaptive_factor: 10.0
   surrogate_beta: 3.0
   ema_alpha: 0.1
 
@@ -99,7 +99,7 @@ learning:
   ss_end_prob: 0.0
   ss_decay_epochs: 0
 
-  spike_reg_weight: 10.0 # 스파이크 정규화 가중치
+  spike_reg_weight: 0.0 # 스파이크 정규화 가중치
   node_target_spike_rates: # 이 노드들만 정규화됨
     IN: 0.1
     OUT: 0.1

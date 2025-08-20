@@ -31,7 +31,8 @@ class BaseDataset(Dataset):
         self.split = split
         self.max_length = max_length
         self.num_samples = num_samples  # 변경
-        
+        self.guide_sep_token = guide_sep_token
+
         logger.info(f"📦 Loading {dataset_name} ({split})...")
         self.data = self._load_and_process_data()
         logger.info(f"✅ Loaded {len(self.data)} examples")
@@ -163,7 +164,7 @@ class bAbIDataset(BaseDataset):
     """
     bAbI 전용 데이터셋 ('Muennighoff/babi' 버전 사용)
     """
-    def __init__(self, tokenizer: SCSTokenizer, task_id: int = 1, split: str = "train", num_samples: int = -1):
+    def __init__(self, tokenizer: SCSTokenizer, task_id: int = 1, split: str = "train", num_samples: int = -1, guide_sep_token: str = "<extra_id_42>"):
         assert 1 <= task_id <= 20, "task_id는 1과 20 사이여야 합니다."
         self.task_id = task_id
         
@@ -172,7 +173,8 @@ class bAbIDataset(BaseDataset):
             tokenizer=tokenizer, 
             split=split, 
             max_length=256,
-            num_samples=num_samples
+            num_samples=num_samples,
+            guide_sep_token=guide_sep_token
         )
 
     def _load_and_process_data(self) -> List[Dict[str, Any]]:
@@ -226,7 +228,7 @@ class bAbIDataset(BaseDataset):
             
             return {
                 'input_text': input_text,
-                'target_text': f"{input_text} Answer: {answer_text}",
+                'target_text': f"{input_text} {self.guide_sep_token} {answer_text}",
                 'metadata': {
                     'index': idx, 
                     'task': item.get('task', self.task_id),
@@ -357,7 +359,6 @@ class GLUEDataset(BaseDataset):
             guide_sep_token: 가이드 분리 토큰
         """
         self.task_name = task_name.lower()
-        self.guide_sep_token = guide_sep_token
         
         # 유효한 태스크 체크
         valid_tasks = ['cola', 'sst2', 'mrpc', 'qqp', 'stsb', 'mnli', 'qnli', 'rte', 'wnli']
@@ -376,7 +377,8 @@ class GLUEDataset(BaseDataset):
             tokenizer=tokenizer,
             split=split,
             max_length=512,  # GLUE는 긴 텍스트가 있을 수 있음
-            num_samples=num_samples
+            num_samples=num_samples,
+            guide_sep_token=guide_sep_token
         )
     
     def _load_and_process_data(self) -> List[Dict[str, Any]]:

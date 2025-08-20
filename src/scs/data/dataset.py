@@ -139,10 +139,6 @@ class LogiQADataset(BaseDataset):
                 input_parts.append(f"Context: {context}")
             input_parts.append(f"Question: {question}")
             
-            # 선택지 추가
-            # options_text = " ".join([f"{chr(65+i)}) {opt.strip()}" 
-            #                        for i, opt in enumerate(options)])
-            # input_parts.append(f"Options: {options_text}")
             target_text = options[answer].strip()  # 실제 답 텍스트
             
             return {
@@ -161,6 +157,7 @@ class LogiQADataset(BaseDataset):
         except Exception as e:
             logger.warning(f"Failed to process LogiQA item {idx}: {e}")
             return None
+
 
 class bAbIDataset(BaseDataset):
     """
@@ -311,6 +308,306 @@ class SQuADDataset(BaseDataset):
             return None
 
 
+class GLUEDataset(BaseDataset):
+    """
+    GLUE (General Language Understanding Evaluation) 전용 데이터셋
+    9개 태스크 모두 지원: CoLA, SST-2, MRPC, STS-B, QQP, MNLI, QNLI, RTE, WNLI
+    """
+    
+    # 각 태스크별 라벨 매핑 정의
+    LABEL_MAPPINGS = {
+        'cola': {0: 'unacceptable', 1: 'acceptable'},
+        'sst2': {0: 'negative', 1: 'positive'},
+        'mrpc': {0: 'not equivalent', 1: 'equivalent'}, 
+        'qqp': {0: 'not duplicate', 1: 'duplicate'},
+        'rte': {0: 'not entailment', 1: 'entailment'},
+        'wnli': {0: 'not entailment', 1: 'entailment'},
+        'mnli': {0: 'entailment', 1: 'neutral', 2: 'contradiction'},
+        'qnli': {0: 'entailment', 1: 'not entailment'},
+        # STS-B는 회귀 태스크이므로 별도 처리
+    }
+    
+    # 각 태스크별 프롬프트 템플릿
+    TASK_PROMPTS = {
+        'cola': "Judge if this sentence is grammatically acceptable:",
+        'sst2': "Classify the sentiment of this sentence:",
+        'mrpc': "Determine if these two sentences are semantically equivalent:",
+        'qqp': "Determine if these two questions are duplicates:",
+        'rte': "Determine if the premise entails the hypothesis:",
+        'wnli': "Determine if the premise entails the hypothesis:",
+        'mnli': "Determine the relationship between premise and hypothesis:",
+        'qnli': "Does the sentence contain the answer to the question?",
+        'stsb': "Rate the semantic similarity of these sentences from 0 to 5:"
+    }
+    
+    def __init__(
+        self, 
+        task_name: str,
+        tokenizer: SCSTokenizer, 
+        split: str = "train", 
+        num_samples: int = -1,
+        guide_sep_token: str = "<extra_id_42>"
+    ):
+        """
+        Args:
+            task_name: GLUE 태스크 이름 (cola, sst2, mrpc, qqp, stsb, mnli, qnli, rte, wnli)
+            tokenizer: SCS 토크나이저
+            split: 데이터 스플릿 (train/validation/test)
+            num_samples: 사용할 샘플 수 (-1이면 전체)
+            guide_sep_token: 가이드 분리 토큰
+        """
+        self.task_name = task_name.lower()
+        self.guide_sep_token = guide_sep_token
+        
+        # 유효한 태스크 체크
+        valid_tasks = ['cola', 'sst2', 'mrpc', 'qqp', 'stsb', 'mnli', 'qnli', 'rte', 'wnli']
+        if self.task_name not in valid_tasks:
+            raise ValueError(f"Invalid task_name '{task_name}'. Must be one of {valid_tasks}")
+        
+        # MNLI의 경우 matched/mismatched 처리
+        if self.task_name == 'mnli':
+            if split == 'validation':
+                split = 'validation_matched'  # 기본적으로 matched 사용
+            elif split == 'test':
+                split = 'test_matched'
+        
+        super().__init__(
+            dataset_name="nyu-mll/glue",
+            tokenizer=tokenizer,
+            split=split,
+            max_length=512,  # GLUE는 긴 텍스트가 있을 수 있음
+            num_samples=num_samples
+        )
+    
+    def _load_and_process_data(self) -> List[Dict[str, Any]]:
+        """GLUE 데이터 로딩 및 전처리"""
+        try:
+            # HuggingFace에서 특정 태스크 로딩
+            raw_dataset = load_dataset("nyu-mll/glue", self.task_name, split=self.split)
+            
+            # 샘플 수 제한
+            if self.num_samples > 0 and len(raw_dataset) > self.num_samples:
+                raw_dataset = raw_dataset.select(range(self.num_samples))
+                logger.info(f"GLUE {self.task_name} dataset truncated to {self.num_samples} samples")
+            else:
+                logger.info(f"Using full GLUE {self.task_name} dataset: {len(raw_dataset)} samples")
+            
+            # 각 아이템 처리
+            processed_data = []
+            for idx, item in enumerate(raw_dataset):
+                try:
+                    processed_item = self._process_item(item, idx)
+                    if processed_item:
+                        processed_data.append(processed_item)
+                except Exception as e:
+                    logger.warning(f"Failed to process GLUE {self.task_name} item {idx}: {e}")
+                    continue
+            
+            return processed_data
+            
+        except Exception as e:
+            logger.error(f"Failed to load GLUE {self.task_name} dataset: {e}")
+            return []
+    
+    def _process_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
+        """태스크별 아이템 처리"""
+        try:
+            # 태스크별 처리 함수 호출
+            if self.task_name == 'cola':
+                return self._process_cola_item(item, idx)
+            elif self.task_name == 'sst2':
+                return self._process_sst2_item(item, idx)
+            elif self.task_name in ['mrpc', 'qqp', 'rte', 'wnli']:
+                return self._process_sentence_pair_item(item, idx)
+            elif self.task_name == 'stsb':
+                return self._process_stsb_item(item, idx)
+            elif self.task_name == 'mnli':
+                return self._process_mnli_item(item, idx)
+            elif self.task_name == 'qnli':
+                return self._process_qnli_item(item, idx)
+            else:
+                logger.warning(f"Unknown task: {self.task_name}")
+                return None
+                
+        except Exception as e:
+            logger.warning(f"Failed to process {self.task_name} item {idx}: {e}")
+            return None
+    
+    def _process_cola_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
+        """CoLA (Corpus of Linguistic Acceptability) 처리"""
+        sentence = item.get('sentence', '').strip()
+        label = item.get('label', -1)
+        
+        if not sentence or label == -1:
+            return None
+        
+        prompt = self.TASK_PROMPTS['cola']
+        input_text = f"{prompt} {sentence}"
+        
+        # 라벨을 텍스트로 변환
+        label_text = self.LABEL_MAPPINGS['cola'].get(label, 'unknown')
+        target_text = f"{input_text} {self.guide_sep_token} {label_text}"
+        
+        return {
+            'input_text': input_text,
+            'target_text': target_text,
+            'metadata': {
+                'task': 'cola',
+                'task_type': 'grammatical_acceptability',
+                'original_label': label,
+                'label_text': label_text,
+                'index': idx
+            }
+        }
+    
+    def _process_sst2_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
+        """SST-2 (Stanford Sentiment Treebank) 처리"""
+        sentence = item.get('sentence', '').strip()
+        label = item.get('label', -1)
+        
+        if not sentence or label == -1:
+            return None
+        
+        prompt = self.TASK_PROMPTS['sst2']
+        input_text = f"{prompt} {sentence}"
+        
+        # 라벨을 텍스트로 변환
+        label_text = self.LABEL_MAPPINGS['sst2'].get(label, 'unknown')
+        target_text = f"{input_text} {self.guide_sep_token} {label_text}"
+        
+        return {
+            'input_text': input_text,
+            'target_text': target_text,
+            'metadata': {
+                'task': 'sst2',
+                'task_type': 'sentiment_analysis',
+                'original_label': label,
+                'label_text': label_text,
+                'index': idx
+            }
+        }
+    
+    def _process_sentence_pair_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
+        """문장 쌍 태스크 처리 (MRPC, QQP, RTE, WNLI)"""
+        sentence1 = item.get('sentence1', '').strip()
+        sentence2 = item.get('sentence2', '').strip()
+        label = item.get('label', -1)
+        
+        if not sentence1 or not sentence2 or label == -1:
+            return None
+        
+        prompt = self.TASK_PROMPTS[self.task_name]
+        input_text = f"{prompt} Sentence 1: {sentence1} Sentence 2: {sentence2}"
+        
+        # 라벨을 텍스트로 변환
+        label_text = self.LABEL_MAPPINGS[self.task_name].get(label, 'unknown')
+        target_text = f"{input_text} {self.guide_sep_token} {label_text}"
+        
+        return {
+            'input_text': input_text,
+            'target_text': target_text,
+            'metadata': {
+                'task': self.task_name,
+                'task_type': 'sentence_pair_classification',
+                'original_label': label,
+                'label_text': label_text,
+                'sentence1': sentence1,
+                'sentence2': sentence2,
+                'index': idx
+            }
+        }
+    
+    def _process_stsb_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
+        """STS-B (Semantic Textual Similarity Benchmark) 처리"""
+        sentence1 = item.get('sentence1', '').strip()
+        sentence2 = item.get('sentence2', '').strip()
+        label = item.get('label', -1.0)
+        
+        if not sentence1 or not sentence2 or label < 0:
+            return None
+        
+        prompt = self.TASK_PROMPTS['stsb']
+        input_text = f"{prompt} Sentence 1: {sentence1} Sentence 2: {sentence2}"
+        
+        # 회귀 값을 텍스트로 변환 (소수점 1자리까지)
+        label_text = f"{label:.1f}"
+        target_text = f"{input_text} {self.guide_sep_token} {label_text}"
+        
+        return {
+            'input_text': input_text,
+            'target_text': target_text,
+            'metadata': {
+                'task': 'stsb',
+                'task_type': 'semantic_similarity_regression',
+                'original_label': label,
+                'label_text': label_text,
+                'sentence1': sentence1,
+                'sentence2': sentence2,
+                'index': idx
+            }
+        }
+    
+    def _process_mnli_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
+        """MNLI (Multi-Genre Natural Language Inference) 처리"""
+        premise = item.get('premise', '').strip()
+        hypothesis = item.get('hypothesis', '').strip()
+        label = item.get('label', -1)
+        
+        if not premise or not hypothesis or label == -1:
+            return None
+        
+        prompt = self.TASK_PROMPTS['mnli']
+        input_text = f"{prompt} Premise: {premise} Hypothesis: {hypothesis}"
+        
+        # 라벨을 텍스트로 변환
+        label_text = self.LABEL_MAPPINGS['mnli'].get(label, 'unknown')
+        target_text = f"{input_text} {self.guide_sep_token} {label_text}"
+        
+        return {
+            'input_text': input_text,
+            'target_text': target_text,
+            'metadata': {
+                'task': 'mnli',
+                'task_type': 'natural_language_inference',
+                'original_label': label,
+                'label_text': label_text,
+                'premise': premise,
+                'hypothesis': hypothesis,
+                'index': idx
+            }
+        }
+    
+    def _process_qnli_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
+        """QNLI (Question Natural Language Inference) 처리"""
+        question = item.get('question', '').strip()
+        sentence = item.get('sentence', '').strip()
+        label = item.get('label', -1)
+        
+        if not question or not sentence or label == -1:
+            return None
+        
+        prompt = self.TASK_PROMPTS['qnli']
+        input_text = f"{prompt} Question: {question} Sentence: {sentence}"
+        
+        # 라벨을 텍스트로 변환
+        label_text = self.LABEL_MAPPINGS['qnli'].get(label, 'unknown')
+        target_text = f"{input_text} {self.guide_sep_token} {label_text}"
+        
+        return {
+            'input_text': input_text,
+            'target_text': target_text,
+            'metadata': {
+                'task': 'qnli',
+                'task_type': 'question_answering_nli',
+                'original_label': label,
+                'label_text': label_text,
+                'question': question,
+                'sentence': sentence,
+                'index': idx
+            }
+        }
+
+
 class MultiDataset(BaseDataset):
     """다중 태스크 지원 데이터셋"""
     
@@ -372,10 +669,6 @@ class MultiDataset(BaseDataset):
             input_parts.append(f"Question: {question}")
             
             if options:
-                # options_text = " ".join([f"{chr(65+i)}) {opt}" 
-                #                        for i, opt in enumerate(options)])
-                # input_parts.append(f"Options: {options_text}")
-                
                 # 정답 처리
                 if isinstance(answer, int) and 0 <= answer < len(options):
                     target_text = options[answer].strip()  # 실제 답 텍스트
@@ -471,13 +764,24 @@ def create_dataset(
     split: str = "train",
     num_samples: int = -1,
     task_id: int = 1,
-    learning_style: str = "generative",  # 새로 추가된 파라미터
-    bert_config: Optional[Dict[str, Any]] = None  # 새로 추가된 파라미터
+    learning_style: str = "generative",
+    bert_config: Optional[Dict[str, Any]] = None,
+    task_name: Optional[str] = None  # GLUE용 추가 파라미터
 ) -> BaseDataset:
-    """데이터셋 생성 팩토리 함수 - BERT 스타일 지원 추가"""
+    """데이터셋 생성 팩토리 함수 - GLUE 지원 추가"""
     
     # 1단계: 기존 방식으로 베이스 데이터셋 생성
-    if "babi" in dataset_name.lower():
+    if "glue" in dataset_name.lower():
+        if not task_name:
+            raise ValueError("GLUE 데이터셋을 사용할 때는 task_name 파라미터가 필요합니다. "
+                           "예: task_name='cola', 'sst2', 'mrpc', etc.")
+        base_dataset = GLUEDataset(
+            task_name=task_name,
+            tokenizer=tokenizer,
+            split=split,
+            num_samples=num_samples
+        )
+    elif "babi" in dataset_name.lower():
         base_dataset = bAbIDataset(tokenizer, task_id=task_id, split=split, num_samples=num_samples)
     elif "logiqa" in dataset_name.lower():
         base_dataset = LogiQADataset(tokenizer, split, num_samples=num_samples)

@@ -294,10 +294,6 @@ class SCSTrainer:
 
                 transform_param = self.model.axonal_connections.patch_transforms[first_conn_key]
                 transform_param.register_hook(save_grad('patch_transforms_grad'))
-            
-            # InputInterface의 mapper 그래디언트도 확인
-            if hasattr(self.model.input_interface, 'pattern_mapper'):
-                self.model.input_interface.pattern_mapper.weight.register_hook(save_grad('input_mapper_grad'))
         # --- 디버깅 끝 ---
 
         # 역전파

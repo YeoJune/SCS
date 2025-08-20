@@ -198,7 +198,9 @@ def train_mode(args: argparse.Namespace):
             final_temporal_weight=learning_config.final_temporal_weight,
             timing_weight=learning_config.timing_weight,
             sync_target_start=learning_config.sync_target_start,
-            sync_target_end=learning_config.sync_target_end
+            sync_target_end=learning_config.sync_target_end,
+            gate_pruning_weight=learning_config.gate_pruning_weight,
+            inner_pruning_weight=learning_config.inner_pruning_weight
         )
         
         # 옵티마이저 생성

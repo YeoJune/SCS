@@ -136,7 +136,10 @@ class LearningConfig(BaseModel):
     ss_end_prob: float = Field(default=0.05)
     ss_decay_epochs: int = Field(default=10)
     eta_min: float = Field(default=0.0)
-    
+
+    gate_pruning_weight: float = Field(default=0.0)
+    inner_pruning_weight: float = Field(default=0.0)
+
     # 커리큘럼 학습
     use_curriculum_learning: bool = Field(default=False)
     curriculum_schedule: Optional[Dict[int, int]] = Field(default=None)

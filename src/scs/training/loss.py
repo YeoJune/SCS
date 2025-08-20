@@ -14,7 +14,6 @@ class SCSLoss(nn.Module):
         self, 
         pad_token_id: int,
         max_clk: int = 512,
-        # Axon pruning 하이퍼파라미터들을 모두 Loss에서 관리
         gate_pruning_weight: float = 0.0,
         inner_pruning_weight: float = 0.0,
         length_penalty_weight: float = 0.0,

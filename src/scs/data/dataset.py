@@ -765,18 +765,18 @@ def create_dataset(
     num_samples: int = -1,
     task_id: int = 1,
     learning_style: str = "generative",
-    bert_config: Optional[Dict[str, Any]] = None,
-    task_name: Optional[str] = None  # GLUE용 추가 파라미터
+    bert_config: Optional[Dict[str, Any]] = None
 ) -> BaseDataset:
-    """데이터셋 생성 팩토리 함수 - GLUE 지원 추가"""
+    """데이터셋 생성 팩토리 함수 - GLUE 지원 추가 (dataset_name 기반)"""
+    
+    # GLUE 태스크 목록
+    glue_tasks = ['cola', 'sst2', 'mrpc', 'qqp', 'stsb', 'mnli', 'qnli', 'rte', 'wnli']
     
     # 1단계: 기존 방식으로 베이스 데이터셋 생성
-    if "glue" in dataset_name.lower():
-        if not task_name:
-            raise ValueError("GLUE 데이터셋을 사용할 때는 task_name 파라미터가 필요합니다. "
-                           "예: task_name='cola', 'sst2', 'mrpc', etc.")
+    if dataset_name in glue_tasks:
+        # GLUE 태스크는 dataset_name을 task_name으로 사용
         base_dataset = GLUEDataset(
-            task_name=task_name,
+            task_name=dataset_name,
             tokenizer=tokenizer,
             split=split,
             num_samples=num_samples

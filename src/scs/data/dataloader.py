@@ -70,7 +70,7 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
 
 
 class SCSDataLoader:
-    """SCS용 배치 데이터 로더 (PyTorch DataLoader 래퍼) - BERT 스타일 지원 추가"""
+    """SCS용 배치 데이터 로더 (PyTorch DataLoader 래퍼) - BERT 스타일 및 GLUE 지원"""
     def __init__(
         self,
         dataset_name: str,
@@ -83,8 +83,8 @@ class SCSDataLoader:
         tokenizer=None,
         num_samples: int = -1,
         task_id: int = 1,
-        learning_style: str = "generative",  # 새로 추가된 파라미터
-        bert_config: Optional[Dict[str, Any]] = None  # 새로 추가된 파라미터
+        learning_style: str = "generative",
+        bert_config: Optional[Dict[str, Any]] = None
     ):
         # 토크나이저 생성
         if tokenizer is None:
@@ -94,7 +94,7 @@ class SCSDataLoader:
         if processor is None:
             processor = DataProcessor()
         
-        # 데이터셋 생성 (새 파라미터 전달)
+        # 데이터셋 생성 (task_name 제거)
         self.dataset = processor.create_dataset(
             dataset_name=dataset_name,
             split=split,
@@ -102,11 +102,11 @@ class SCSDataLoader:
             max_length=max_length,
             num_samples=num_samples,
             task_id=task_id,
-            learning_style=learning_style,  # 새로 추가된 파라미터 전달
-            bert_config=bert_config  # 새로 추가된 파라미터 전달
+            learning_style=learning_style,
+            bert_config=bert_config
         )
         
-        # PyTorch DataLoader 생성 (기존과 동일)
+        # PyTorch DataLoader 생성
         self.dataloader = DataLoader(
             dataset=self.dataset,
             batch_size=batch_size,
@@ -117,7 +117,7 @@ class SCSDataLoader:
         )
         
     def __iter__(self) -> Iterator[Dict[str, torch.Tensor]]:
-        """배치 데이터 순회 - 기존과 동일"""
+        """배치 데이터 순회"""
         return iter(self.dataloader)
     
     def __len__(self) -> int:
@@ -126,6 +126,7 @@ class SCSDataLoader:
     @property
     def batch_size(self) -> int:
         return self.dataloader.batch_size
+
 
 def create_dataloader(
     dataset_name: str,
@@ -138,10 +139,10 @@ def create_dataloader(
     tokenizer=None,
     num_samples: int = -1,
     task_id: int = 1,
-    learning_style: str = "generative",  # 새로 추가된 파라미터
-    bert_config: Optional[Dict[str, Any]] = None  # 새로 추가된 파라미터
+    learning_style: str = "generative",
+    bert_config: Optional[Dict[str, Any]] = None
 ) -> SCSDataLoader:
-    """SCS 배치 데이터 로더 생성 - BERT 스타일 지원 추가"""
+    """SCS 배치 데이터 로더 생성 - BERT 스타일 및 GLUE 지원"""
     
     if shuffle is None:
         shuffle = (split == "train")
@@ -157,6 +158,6 @@ def create_dataloader(
         tokenizer=tokenizer,
         num_samples=num_samples,
         task_id=task_id,
-        learning_style=learning_style,  # 새로 추가된 파라미터 전달
-        bert_config=bert_config  # 새로 추가된 파라미터 전달
+        learning_style=learning_style,
+        bert_config=bert_config
     )

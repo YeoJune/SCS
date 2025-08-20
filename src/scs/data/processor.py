@@ -26,10 +26,10 @@ class DataProcessor:
         max_length: int = 256,
         num_samples: int = -1,
         task_id: int = 1,
-        learning_style: str = "generative",  # 새로 추가된 파라미터
-        bert_config: Optional[Dict[str, Any]] = None  # 새로 추가된 파라미터
+        learning_style: str = "generative",
+        bert_config: Optional[Dict[str, Any]] = None
     ):
-        """데이터셋 생성 - BERT 스타일 지원 추가"""
+        """데이터셋 생성 - BERT 스타일 및 GLUE 지원 (dataset_name 기반)"""
         effective_tokenizer = tokenizer or self.tokenizer
         
         logger.info(f"Creating dataset: {dataset_name} ({split}) with learning_style='{learning_style}'")
@@ -45,8 +45,8 @@ class DataProcessor:
                 split=split,
                 num_samples=num_samples,
                 task_id=task_id,
-                learning_style=learning_style,  # 새로 추가된 파라미터 전달
-                bert_config=bert_config  # 새로 추가된 파라미터 전달
+                learning_style=learning_style,
+                bert_config=bert_config
             )
             
             logger.info(f"✅ Successfully created dataset with {len(dataset)} examples")
@@ -66,19 +66,42 @@ class DataProcessor:
             raise
         
     def get_supported_datasets(self) -> List[str]:
-        """지원되는 데이터셋 목록"""
+        """지원되는 데이터셋 목록 - GLUE 태스크들 추가"""
         return [
             "datatune/LogiQA2.0",
             "Muennighoff/babi",
             "rajpurkar/squad",
+            # GLUE 태스크들
+            "cola", "sst2", "mrpc", "qqp", "stsb", 
+            "mnli", "qnli", "rte", "wnli"
+        ]
+    
+    def get_glue_tasks(self) -> List[str]:
+        """GLUE 태스크 목록"""
+        return [
+            "cola", "sst2", "mrpc", "qqp", "stsb", 
+            "mnli", "qnli", "rte", "wnli"
         ]
     
     def validate_dataset_config(self, dataset_name: str, split: str) -> bool:
-        """데이터셋 설정 유효성 검증"""
+        """데이터셋 설정 유효성 검증 - GLUE 지원"""
         try:
             # 기본 검증
             if not dataset_name or not split:
                 return False
+            
+            # GLUE 태스크 검증
+            if dataset_name in self.get_glue_tasks():
+                logger.info(f"✅ Valid GLUE task: {dataset_name}")
+                
+                # MNLI의 특별한 split 처리
+                if dataset_name == "mnli":
+                    valid_mnli_splits = [
+                        "train", "validation_matched", "validation_mismatched", 
+                        "test_matched", "test_mismatched", "validation", "test"
+                    ]
+                    if split not in valid_mnli_splits:
+                        logger.warning(f"MNLI에서 권장되지 않는 split: {split}")
             
             # split 유효성
             valid_splits = ["train", "validation", "test", "dev"]

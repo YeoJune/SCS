@@ -155,7 +155,7 @@ def _generate_spike_pattern_images(
         for i, node_name in enumerate(node_names):
             if node_name in spike_pattern:
                 spikes = spike_pattern[node_name]
-                im = axes[i].imshow(spikes, cmap='hot', vmin=0, vmax=1)
+                im = axes[i].imshow(spikes, cmap='gray', vmin=0, vmax=1)
                 axes[i].set_title(f'{node_name}\nCLK {clk}')
                 axes[i].set_xlabel('Width')
                 axes[i].set_ylabel('Height')
@@ -196,7 +196,7 @@ def _generate_spike_animation(
             else:
                 initial_data = np.zeros((64, 64))  # 기본 크기
             
-            im = axes[i].imshow(initial_data, cmap='hot', vmin=0, vmax=1)
+            im = axes[i].imshow(initial_data, cmap='gray', vmin=0, vmax=1)
             axes[i].set_title(f'{node_name}\nCLK 0')
             axes[i].set_xlabel('Width')
             axes[i].set_ylabel('Height')
@@ -306,7 +306,7 @@ def _visualize_axonal_connections(axonal_connections, weight_dir: Path):
                         padded[:len(weights)] = weights
                         weights = padded.reshape(pad_size, pad_size)
                 
-                im = axes[i].imshow(weights, cmap='hot', aspect='auto')
+                im = axes[i].imshow(weights, cmap='gray', aspect='auto')
                 axes[i].set_title(f'{conn_name}\nPatch Gates')
                 axes[i].set_xlabel('Patch Index (reshaped)')
                 axes[i].set_ylabel('Patch Index (reshaped)')

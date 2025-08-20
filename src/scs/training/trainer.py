@@ -269,7 +269,7 @@ class SCSTrainer:
         with torch.no_grad():
             if output_logits.shape[1] > 0:
                 target_subset = target_tokens[:, :output_logits.shape[1]]
-                accuracy = SCSMetrics.accuracy(output_logits, target_subset, pad_token_id=self.config.pad_token_id)
+                accuracy = SCSMetrics.accuracy(output_logits, target_subset, pad_token_id=self.config.pad_token_id, guide_sep_token_id=self.config.guide_sep_token_id)
             else:
                 accuracy = 0.0
                 
@@ -304,7 +304,7 @@ class SCSTrainer:
                 if output_logits.shape[1] > 0:
                     target_subset = target_tokens[:, :output_logits.shape[1]]
                     batch_loss = self.loss_fn(output_logits, target_subset, processing_info)
-                    batch_accuracy = SCSMetrics.accuracy(output_logits, target_subset, pad_token_id=self.config.pad_token_id)
+                    batch_accuracy = SCSMetrics.accuracy(output_logits, target_subset, pad_token_id=self.config.pad_token_id, guide_sep_token_id=self.config.guide_sep_token_id)
                 else:
                     batch_loss = torch.tensor(float('inf'))
                     batch_accuracy = 0.0
@@ -382,7 +382,8 @@ class SCSTrainer:
                 accuracy = SCSMetrics.accuracy(
                     output_logits,
                     target_tokens[:, :output_logits.shape[1]],
-                    pad_token_id=self.config.pad_token_id
+                    pad_token_id=self.config.pad_token_id,
+                    guide_sep_token_id=self.config.guide_sep_token_id
                 )
             else:
                 accuracy = 0.0

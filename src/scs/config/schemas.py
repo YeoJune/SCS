@@ -152,6 +152,7 @@ class LearningConfig(BaseModel):
     initial_temporal_weight: float = Field(default=2.0)
     final_temporal_weight: float = Field(default=1.0)
 
+    guide_sep_token_id: int = Field(default=32141)
     guide_weight: float = Field(default=0.3)
 
     # 타이밍 손실

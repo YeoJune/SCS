@@ -1,6 +1,6 @@
 # src/scs/training/metric.py
 """
-SCS 평가 메트릭
+SCS 평가 메트릭 - Guide-aware accuracy 지원
 """
 
 import torch
@@ -8,11 +8,11 @@ from typing import Dict, Any
 
 
 class SCSMetrics:
-    """SCS 배치 처리 지원 평가 메트릭"""
+    """SCS 배치 처리 지원 평가 메트릭 - Guide-aware accuracy"""
     
     @staticmethod
-    def accuracy(outputs: torch.Tensor, targets: torch.Tensor, pad_token_id: int = None) -> float:
-        """정확도 계산 (배치 처리 지원, 길이 불일치 처리)"""
+    def accuracy(outputs: torch.Tensor, targets: torch.Tensor, pad_token_id: int = None, guide_sep_token_id: int = None) -> float:
+        """정확도 계산 (배치 처리 지원, 길이 불일치 처리, guide 영역 제외)"""
         if outputs.dim() == 3:  # [B, seq_len, vocab_size]
             batch_size, output_seq_len, vocab_size = outputs.shape
             batch_size_t, target_seq_len = targets.shape
@@ -28,20 +28,27 @@ class SCSMetrics:
             
             preds = outputs.argmax(dim=-1)  # [B, min_len]
             
+            # 기본 마스크 생성 (패딩 토큰 제외)
             if pad_token_id is not None:
-                # 패딩 토큰 제외하고 정확도 계산
                 mask = (targets != pad_token_id)
-                correct = (preds == targets) & mask
-                total_valid = mask.sum()
-                if total_valid > 0:
-                    return (correct.sum().float() / total_valid.float()).item()
-                else:
-                    return 0.0
             else:
-                correct = (preds == targets).float()
-                return correct.mean().item()
+                mask = torch.ones_like(targets, dtype=torch.bool)
+            
+            # guide_sep_token 이후 부분만 정확도 계산
+            if guide_sep_token_id is not None:
+                answer_mask = SCSMetrics._create_answer_mask(targets, guide_sep_token_id)
+                mask = mask & answer_mask
+            
+            correct = (preds == targets) & mask
+            total_valid = mask.sum()
+            
+            if total_valid > 0:
+                return (correct.sum().float() / total_valid.float()).item()
+            else:
+                return 0.0
+                
         else:
-            # 나머지 코드 동일...
+            # 1D 또는 2D 텐서 처리 (기존 로직 유지)
             if outputs.dim() == 1:
                 pred = outputs.argmax().item()
                 target = targets.item()
@@ -50,6 +57,99 @@ class SCSMetrics:
                 preds = outputs.argmax(dim=-1)
                 correct = (preds == targets).float()
                 return correct.mean().item()
+    
+    @staticmethod
+    def _create_answer_mask(targets: torch.Tensor, guide_sep_token_id: int) -> torch.Tensor:
+        """guide_sep_token 이후 부분만 True인 마스크 생성"""
+        batch_size, seq_len = targets.shape
+        answer_mask = torch.zeros_like(targets, dtype=torch.bool)
+        
+        # 각 배치별로 guide_sep_token 위치 찾기
+        for batch_idx in range(batch_size):
+            sep_positions = (targets[batch_idx] == guide_sep_token_id).nonzero(as_tuple=False)
+            
+            if len(sep_positions) > 0:
+                # 첫 번째 guide_sep_token 이후 부분만 True
+                first_sep_pos = sep_positions[0].item()
+                answer_mask[batch_idx, first_sep_pos + 1:] = True
+            else:
+                # guide_sep_token이 없으면 전체 시퀀스를 답변으로 간주
+                answer_mask[batch_idx, :] = True
+        
+        return answer_mask
+    
+    @staticmethod
+    def guide_accuracy(outputs: torch.Tensor, targets: torch.Tensor, pad_token_id: int = None, guide_sep_token_id: int = None) -> float:
+        """Guide 부분만의 정확도 계산 (디버깅용)"""
+        if outputs.dim() != 3 or guide_sep_token_id is None:
+            return 0.0
+        
+        batch_size, output_seq_len, vocab_size = outputs.shape
+        batch_size_t, target_seq_len = targets.shape
+        
+        # 배치 크기 일치 확인
+        assert batch_size == batch_size_t, f"Batch size mismatch: {batch_size} vs {batch_size_t}"
+        
+        # 길이 불일치 처리
+        if output_seq_len != target_seq_len:
+            min_len = min(output_seq_len, target_seq_len)
+            outputs = outputs[:, :min_len, :]
+            targets = targets[:, :min_len]
+        
+        preds = outputs.argmax(dim=-1)  # [B, min_len]
+        
+        # 기본 마스크 생성 (패딩 토큰 제외)
+        if pad_token_id is not None:
+            mask = (targets != pad_token_id)
+        else:
+            mask = torch.ones_like(targets, dtype=torch.bool)
+        
+        # guide 부분만 마스크 생성
+        guide_mask = SCSMetrics._create_guide_mask(targets, guide_sep_token_id)
+        mask = mask & guide_mask
+        
+        correct = (preds == targets) & mask
+        total_valid = mask.sum()
+        
+        if total_valid > 0:
+            return (correct.sum().float() / total_valid.float()).item()
+        else:
+            return 0.0
+    
+    @staticmethod
+    def _create_guide_mask(targets: torch.Tensor, guide_sep_token_id: int) -> torch.Tensor:
+        """guide_sep_token 이전 부분만 True인 마스크 생성"""
+        batch_size, seq_len = targets.shape
+        guide_mask = torch.ones_like(targets, dtype=torch.bool)
+        
+        # 각 배치별로 guide_sep_token 위치 찾기
+        for batch_idx in range(batch_size):
+            sep_positions = (targets[batch_idx] == guide_sep_token_id).nonzero(as_tuple=False)
+            
+            if len(sep_positions) > 0:
+                # 첫 번째 guide_sep_token 이전 부분만 True
+                first_sep_pos = sep_positions[0].item()
+                guide_mask[batch_idx, first_sep_pos:] = False
+        
+        return guide_mask
+    
+    @staticmethod
+    def answer_only_accuracy(outputs: torch.Tensor, targets: torch.Tensor, pad_token_id: int = None, guide_sep_token_id: int = None) -> Dict[str, float]:
+        """답변 부분만의 정확도 + 전체 정확도 반환"""
+        # 답변 부분만 정확도 (기본 accuracy 메서드)
+        answer_acc = SCSMetrics.accuracy(outputs, targets, pad_token_id, guide_sep_token_id)
+        
+        # 전체 정확도 (guide 포함)
+        full_acc = SCSMetrics.accuracy(outputs, targets, pad_token_id, guide_sep_token_id=None)
+        
+        # Guide 부분만 정확도
+        guide_acc = SCSMetrics.guide_accuracy(outputs, targets, pad_token_id, guide_sep_token_id)
+        
+        return {
+            'answer_accuracy': answer_acc,      # 답변 부분만 (주요 지표)
+            'full_accuracy': full_acc,          # 전체 시퀀스
+            'guide_accuracy': guide_acc         # Guide 부분만 (참고용)
+        }
     
     @staticmethod
     def convergence_rate(processing_info: Dict[str, Any]) -> float:

@@ -1,4 +1,9 @@
-# SCS: Spike-based Cognitive System
+### Learning & Training
+
+- **Guide-aware learning**: 가이드와 답변 구분을 통한 효율적 학습
+- **Scheduled sampling**: Teacher forcing에서 auto-regressive로의 점진적 전환
+- **Multi-objective optimization**: 스파이킹 특성과 의미론적 정확성의 동시 최적화
+- **Curriculum learning**: 동적 max_clk 조정을 통한 점진적 복잡도 증가# SCS: Spike-based Cognitive System
 
 ### _A Bio-Inspired Dynamic Computing Architecture for Semantic Reasoning_
 
@@ -18,37 +23,32 @@ SCS는 정적인 가중치 행렬에 의존하는 트랜스포머와 달리, 시
 
 ## Key Features
 
-### Architecture
+### Core Architecture
 
-- **Modular brain regions**: 사용자 정의 가능한 뇌 영역들과 기능적 특화
-- **2D grid structure**: 각 영역의 뉴런들이 2차원 격자로 배치되어 공간적 정보 처리
+- **Modular brain regions**: 기능적 특화된 뇌 영역들의 사용자 정의 가능한 구성
+- **2D spiking grids**: 각 영역의 뉴런들이 2차원 격자로 배치되어 공간적 정보 처리
+- **CLK-synchronized processing**: 동기화 클럭 기반 이산 시간 동역학
+- **T5 integration**: Transformer 임베딩과 스파이킹 동역학의 하이브리드 설계
+
+### Connectivity & Dynamics
+
+- **Patch-based axonal connections**: 뇌 영역 간 효율적이고 유연한 패치 단위 통신
+- **Distance-based local connectivity**: 거리 기반 지역 연결을 통한 안정적인 표상 형성
+- **Adaptive refractory periods**: EMA 기반 뉴런 활동도 적응형 휴지기 조절
+- **Surrogate gradient learning**: 미분 불가능한 스파이크 함수의 역전파 학습
+
+### Configuration & Development
+
 - **Pydantic-based configuration**: 타입 안전한 설정 스키마와 자동 검증
-- **Declarative model building**: YAML 설정 파일을 통한 유연한 모델 구성 및 동적 생성
+- **YAML-driven model building**: 선언적 모델 구성 및 동적 생성
+- **Comprehensive evaluation**: 스파이크 시각화, IO 파이프라인 분석, 멀티 메트릭 평가
+- **TensorBoard integration**: 실시간 모니터링 및 실험 비교
 
-### Connectivity
+### Data Processing & Learning Styles
 
-- **Patch-based axonal connections**: 패치 단위 축삭 연결로 효율적이고 유연한 뇌 영역 간 통신
-- **Local connectivity**: 거리 기반 지역 연결을 통한 안정적인 표상 형성
-- **Multi-scale integration**: 다양한 공간적 스케일에서의 정보 통합
-
-### Dynamics
-
-- **CLK-synchronized processing**: 동기화 클럭 기반 이산 시간 처리
-- **Adaptive refractory periods**: 뉴런 활동도에 따른 동적 휴지기 조절
-- **Surrogate gradient learning**: 미분 불가능한 spike 함수의 역전파 학습 지원
-
-### Learning & Training
-
-- **PyTorch Standard Compliance**: `forward` 메서드가 단일 CLK 스텝만 처리하는 표준 준수 설계
-- **Trainer-controlled CLK loops**: 학습/추론 전략을 Trainer가 완전히 제어
-- **Teacher Forcing vs Auto-regressive**: 학습 시 Teacher Forcing, 검증/평가 시 Auto-regressive
-- **Multi-objective optimization**: 스파이킹 특성과 의미론적 정확성의 동시 최적화
-- **Gradual unfreezing**: 점진적 파라미터 해제를 통한 안정적 학습
-
-### Data Processing
-
-- **Multi-dataset support**: LogiQA, bAbI, SQuAD 등 다양한 데이터셋 지원
-- **BERT-style learning**: Masked Language Modeling 지원
+- **Multi-dataset support**: LogiQA, bAbI, SQuAD, GLUE (9 tasks) 등 다양한 데이터셋 지원
+- **BERT-style learning**: Masked Language Modeling으로 사전 학습 지원
+- **Guide-aware processing**: 가이드와 답변 구분을 통한 효율적 학습
 - **Flexible tokenization**: T5 기반 토크나이저와 사용자 정의 토크나이저 지원
 
 ## Installation
@@ -56,14 +56,12 @@ SCS는 정적인 가중치 행렬에 의존하는 트랜스포머와 달리, 시
 ### Requirements
 
 - Python 3.8+
-- PyTorch 1.9+
+- PyTorch 1.12+
 - Transformers (Hugging Face)
-- Pydantic 2.0+
-- CUDA (recommended for GPU acceleration)
+- Pydantic 1.10+
+- TensorBoard 2.8+
 
 ### Quick Start
-
-Clone the repository and install in editable mode:
 
 ```bash
 git clone https://github.com/YeoJune/SCS.git
@@ -71,7 +69,7 @@ cd SCS
 pip install -e .
 ```
 
-For development with additional tools:
+개발 도구 포함 설치:
 
 ```bash
 pip install -e ".[dev,analysis]"
@@ -81,106 +79,119 @@ pip install -e ".[dev,analysis]"
 
 ### Command Line Interface
 
-The project provides a unified CLI with three execution modes:
+세 가지 실행 모드를 제공하는 통합 CLI:
 
 ```bash
-# Validate configuration file structure
+# 설정 파일 검증
 scs --mode validate --config configs/base_model.yaml
 
-# Train model with LogiQA dataset
-scs --mode train --config configs/phase2_babi_task1.yaml
+# 학습 (기본)
+scs --mode train --config configs/phase2_logiqa_small.yaml
 
-# Evaluate trained model
-scs --mode evaluate --experiment_dir experiments/phase2_babi_task1_20241201_1430
+# TensorBoard와 함께 학습
+scs --mode train --config configs/phase2_logiqa_small.yaml --tensorboard --tb-launch
+
+# 학습된 모델 평가
+scs --mode evaluate --experiment_dir experiments/phase2_logiqa_20241201_1430 --tensorboard
 ```
+
+### TensorBoard Monitoring
+
+실시간 모니터링으로 다음을 확인할 수 있습니다:
+
+- **Training metrics**: 손실, 정확도, 학습률 변화
+- **Loss components**: 기본 손실, axon pruning, length penalty 분해
+- **Spike patterns**: 각 뇌 영역별 실시간 스파이크 활동
+- **Processing info**: CLK 수, 수렴율, 토큰 생성 상황
+- **Model internals**: 가중치 분포, 그래디언트 플로우
 
 ### Configuration System
 
-SCS uses Pydantic-based configuration management with automatic validation and type checking:
+Pydantic 기반 타입 안전 설정 관리:
 
 ```yaml
-# Base configuration with inheritance support
+# 기본 설정 상속 지원
 defaults:
   - base_model
 
-# System roles definition
+# 시스템 역할 정의
 system_roles:
-  input_node: "IN"
-  output_node: "OUT"
+  input_node: "PFC"
+  output_node: "PFC"
   acc_node: "ACC"
 
-# Brain regions with 2D grid structure
+# 뇌 영역 구성
 brain_regions:
-  IN:
+  PFC:
     grid_size: [64, 64]
     decay_rate: 0.8
     distance_tau: 1.0
-  OUT:
-    grid_size: [64, 64]
-    decay_rate: 0.8
-    distance_tau: 1.0
+  ACC:
+    grid_size: [32, 32]
+    decay_rate: 0.9
+    distance_tau: 2.0
 
-# Patch-based axonal connections
-axonal_connections:
-  connections:
-    - source: "IN"
-      target: "OUT"
-      patch_size: 2
-      patch_weight_scale: 1.0
-      inner_weight_scale: 1.0
-
-# IO system with T5 integration
-io_system:
-  input_interface:
-    embedding_dim: 512
-    window_size: 16
-    encoder_layers: 1
-    t5_model_name: "t5-small"
-  output_interface:
-    embedding_dim: 512
-    window_size: 16
-    decoder_layers: 1
-    t5_model_name: "t5-small"
-
-# Learning configuration
-learning:
-  epochs: 15
-  learning_rate: 2e-4
-  max_clk_training: 128
-  use_scheduled_sampling: true
-  gradual_unfreezing:
-    enabled: true
-    initial_frozen_patterns:
-      - "input_interface.token_embedding"
-      - "output_interface.final_projection"
-```
-
-### Patch-based Axonal Connections
-
-SCS uses patch-based connections for flexible and efficient inter-region communication:
-
-```yaml
-# Example: Different grid sizes with patch-based mapping
-brain_regions:
-  PFC: { grid_size: [32, 32] } # Source: 32x32 grid
-  ACC: { grid_size: [16, 16] } # Target: 16x16 grid
-
+# 패치 기반 축삭 연결
 axonal_connections:
   connections:
     - source: "PFC"
       target: "ACC"
-      patch_size: 4 # 4x4 patches from source
-      patch_weight_scale: 1.0 # Gate weights for patches
-      inner_weight_scale: 1.0 # Internal transformation weights
+      patch_size: 4
+      patch_weight_scale: 1.0
+      inner_weight_scale: 1.0
+
+# T5 통합 IO 시스템
+io_system:
+  input_interface:
+    embedding_dim: 512
+    window_size: 32
+    encoder_layers: 6
+    t5_model_name: "t5-base"
+  output_interface:
+    embedding_dim: 512
+    window_size: 32
+    decoder_layers: 6
+    t5_model_name: "t5-base"
+
+# 데이터 처리 설정
+data_loading:
+  batch_size: 8
+  tokenizer:
+    name: "t5-base"
+    max_length: 128
+
+# 태스크 설정 (다양한 데이터셋 지원)
+task:
+  dataset_name: "datatune/LogiQA2.0" # 또는 "cola", "sst2", "Muennighoff/babi" 등
+  task_id: 1 # bAbI 태스크 번호
+  learning_style: "generative" # 또는 "bert" (MLM 사전학습)
+  bert_config: # BERT 스타일 학습 시 설정
+    mask_probability: 0.15
+    random_token_prob: 0.1
+    unchanged_prob: 0.1
+
+# 학습 설정
+learning:
+  epochs: 15
+  learning_rate: 1e-3
+  max_clk_training: 250
+  use_scheduled_sampling: true
+  use_temporal_weighting: true
+  guide_weight: 0.3
+
+# TensorBoard 설정
+logging:
+  tensorboard:
+    enabled: true
+    auto_launch: true
+    port: 6006
+    log_interval:
+      scalars: 1
+      spikes: 50
+      histograms: 100
 ```
 
-The system automatically handles dimension mapping:
-
-- Source (32×32) → 64 patches of 4×4 each
-- Target patches are sized to maintain 64 total patches
-- Each patch has independent gate weights and transformation matrices
-
-**Best practice:** Always validate your configuration:
+**모범 사례**: 항상 설정을 검증하세요:
 
 ```bash
 scs --mode validate --config your_config.yaml
@@ -190,157 +201,145 @@ scs --mode validate --config your_config.yaml
 
 ```
 SCS/
-├── configs/              # Experiment configuration files
-│   ├── base_model.yaml   # Base configuration template
-│   └── phase2_*.yaml     # Specific experiment configs
-├── experiments/          # Training results and logs
-├── src/scs/              # Core implementation
-│   ├── config/           # Configuration management (NEW)
-│   │   ├── schemas.py    # Pydantic schemas
-│   │   ├── manager.py    # Config loading/validation
-│   │   └── builder.py    # Model building from config
-│   ├── architecture/     # Core model architecture
-│   │   ├── node.py       # SpikeNode and LocalConnectivity
-│   │   ├── io.py         # Input/Output interfaces with T5
-│   │   ├── system.py     # SCSSystem (single CLK step)
-│   │   └── timing.py     # TimingManager
-│   ├── data/             # Data processing
-│   │   ├── dataset.py    # Multi-dataset support
-│   │   ├── bert_dataset.py # BERT-style masking
-│   │   └── tokenizer.py  # Tokenization utilities
-│   ├── training/         # Training system
-│   │   ├── trainer.py    # SCSTrainer (CLK loop control)
-│   │   └── loss.py       # Loss functions
-│   ├── evaluation/       # Evaluation and analysis (NEW)
-│   │   ├── metrics.py    # Performance metrics
-│   │   ├── visualizer.py # Spike pattern visualization
-│   │   └── analyzer.py   # IO pipeline analysis
-│   ├── utils/            # General utilities
-│   └── cli.py            # Command line interface
-├── tests/                # Unit tests
-└── docs/                 # Documentation
+├── configs/                   # 실험 설정 파일들
+│   ├── base_model.yaml        # 기본 설정 템플릿
+│   └── phase2_*.yaml          # 특정 실험 설정들
+├── experiments/               # 학습 결과 및 로그
+├── src/scs/
+│   ├── config/                # 설정 관리 시스템
+│   │   ├── schemas.py         # Pydantic 스키마
+│   │   ├── manager.py         # 설정 로딩/검증
+│   │   └── builder.py         # 설정 기반 모델 생성
+│   ├── architecture/          # 핵심 모델 아키텍처
+│   │   ├── node.py            # SpikeNode & LocalConnectivity
+│   │   ├── io.py              # T5 통합 입출력 인터페이스
+│   │   ├── system.py          # SCSSystem (완전한 시퀀스 처리)
+│   │   └── timing.py          # TimingManager (출력 타이밍 제어)
+│   ├── training/              # 학습 시스템
+│   │   ├── trainer.py         # SCSTrainer (간소화된 학습)
+│   │   ├── loss.py            # 다목적 손실 함수들
+│   │   └── metric.py          # Guide-aware 평가 메트릭
+│   ├── evaluation/            # 평가 및 분석 도구
+│   │   ├── visualizer.py      # 스파이크 패턴 시각화
+│   │   └── analyzer.py        # IO 파이프라인 분석
+│   ├── utils/                 # 유틸리티 함수들
+│   │   └── tensorboard_logger.py # 실시간 모니터링
+│   ├── data/                  # 데이터 처리
+│   └── cli.py                 # 통합 명령줄 인터페이스
+└── docs/                      # 문서
 ```
 
 ## Architecture Highlights
 
-### 1. PyTorch Standard Compliance
+### 1. 완전한 시퀀스 처리 시스템
 
-SCS follows PyTorch best practices with a clean separation of concerns:
-
-```python
-# SCSSystem.forward - Pure single CLK step
-def forward(self, clk: int, input_schedule: Tensor,
-           decoder_input_ids: Tensor, is_training: bool = False) -> Tensor:
-    # Process exactly ONE CLK step
-    # Return logits or None
-
-# SCSTrainer - Controls the CLK loop
-def _train_batch(self, batch):
-    for clk in range(max_clk):
-        logits = model.forward(clk, ...)  # Teacher forcing
-
-def _validate_epoch(self, val_loader):
-    for clk in range(max_clk):
-        logits = model.forward(clk, ...)  # Auto-regressive
-```
-
-### 2. Configuration-Driven Development
-
-Everything is configurable through YAML with automatic validation:
-
-- **Type safety**: Pydantic ensures configuration correctness
-- **Backward compatibility**: Alias support for legacy field names
-- **Inheritance**: Base configurations with overrides
-- **Dynamic validation**: Node reference integrity and dimension checking
-
-### 3. Modular Evaluation System
-
-Comprehensive analysis and visualization tools:
+SCS는 CLK 루프를 내부에서 완전히 관리합니다:
 
 ```python
-from scs.evaluation import generate_visualizations, analyze_io_pipeline
+# 사용자 관점: 단순한 forward 호출
+result = model(
+    input_tokens=input_tokens,
+    target_tokens=target_tokens,
+    training=True
+)
 
-# Generate spike pattern animations and weight heatmaps
-generate_visualizations(model, test_loader, output_dir)
-
-# Analyze IO pipeline intermediate values
-analyze_io_pipeline(model, test_loader, output_dir, device)
+# 내부적으로: 완전한 CLK 루프 + 타이밍 관리 + 출력 생성
 ```
+
+### 2. TensorBoard 실시간 모니터링
+
+모든 중요한 메트릭을 실시간으로 추적:
+
+- **스파이크 패턴**: 각 뇌 영역의 실시간 활동
+- **손실 분해**: base loss, axon pruning, timing loss 등
+- **처리 효율성**: CLK 수, 수렴율, 토큰 생성 속도
+- **하이퍼파라미터 추적**: 실험간 자동 비교
+
+### 3. Guide-Aware Learning
+
+가이드와 답변을 구분하여 효율적 학습:
+
+```yaml
+data:
+  guide_sep_token: "<extra_id_42>" # 가이드와 답변 구분자
+
+learning:
+  guide_weight: 0.3 # 가이드 부분 가중치 (답변 부분은 1.0)
+```
+
+### 4. 설정 기반 개발
+
+모든 것이 YAML로 설정 가능:
+
+- **타입 안전성**: Pydantic이 설정 정확성 보장
+- **상속 지원**: 기본 설정에서 특화된 오버라이드
+- **동적 검증**: 노드 참조 무결성 및 차원 검사
 
 ## Current Research Status
 
 ### Phase 2: Multi-Task Reasoning Evaluation
 
-Currently validating reasoning capabilities across multiple datasets:
+다양한 데이터셋에서 추론 능력 검증 중:
 
 ```bash
 # bAbI Task 1: Single Supporting Fact
-scs --mode train --config configs/phase2_babi_task1.yaml
+scs --mode train --config configs/phase2_babi_task1.yaml --tensorboard --tb-launch
 
-# LogiQA logical reasoning
-scs --mode train --config configs/phase2_logiqa_small.yaml
+# LogiQA 논리적 추론
+scs --mode train --config configs/phase2_logiqa_small.yaml --tensorboard --tb-launch
+
+# GLUE 태스크 (CoLA 예시)
+scs --mode train --config configs/glue_cola.yaml --tensorboard --tb-launch
+
+# BERT 스타일 사전 학습
+scs --mode train --config configs/bert_pretraining.yaml --tensorboard --tb-launch
 ```
 
-All experiments include:
+모든 실험에 포함된 기능:
 
-- Comprehensive logging and checkpointing
-- Automatic spike pattern visualization
-- IO pipeline analysis and intermediate value tracking
-- Multi-objective loss optimization
+- 포괄적 로깅 및 체크포인트
+- 자동 스파이크 패턴 시각화
+- IO 파이프라인 분석 및 중간값 추적
+- 다목적 손실 최적화
+- TensorBoard 실시간 모니터링
 
 ## Technical Contributions
 
-### 1. Pydantic-Based Configuration System
+### 1. Pydantic 기반 설정 시스템
 
-Traditional neural architectures require code changes for structural modifications. SCS introduces a comprehensive configuration system with:
+- **타입 안전성**: 모든 파라미터의 자동 검증
+- **상속 지원**: 기본 설정과 특화된 오버라이드
+- **동적 검증**: 노드 참조 무결성 및 차원 검사
 
-- **Type safety**: Automatic validation of all parameters
-- **Inheritance**: Base configurations with specialized overrides
-- **Backward compatibility**: Legacy field name support through aliases
-- **Dynamic validation**: Node reference integrity and dimension checking
+### 2. 패치 기반 축삭 연결
 
-### 2. Patch-Based Axonal Connections
+- **확장성**: 서로 다른 그리드 크기 간 자동 차원 매핑
+- **효율성**: 패치 게이트와 변환을 통한 벡터화 연산
+- **유연성**: 패치별 독립적인 가중치 행렬
 
-Previous approaches used rigid connection patterns. SCS implements flexible patch-based connections:
+### 3. 시스템 중심 처리
 
-- **Scalable**: Automatic dimension mapping between different grid sizes
-- **Efficient**: Vectorized operations with patch gates and transformations
-- **Flexible**: Independent weight matrices per patch for specialized processing
+- **아키텍처 순수성**: 완전한 시퀀스 처리를 시스템에서 담당
+- **학습 유연성**: Teacher forcing vs Auto-regressive 자동 전환
+- **PyTorch 준수**: 표준 모델 인터페이스
 
-### 3. Trainer-Controlled Processing
+### 4. 포괄적 평가 프레임워크
 
-Unlike models with embedded training logic, SCS maintains clean separation:
-
-- **Architecture purity**: `SCSSystem.forward` handles only single CLK steps
-- **Training flexibility**: `SCSTrainer` controls learning strategies (Teacher Forcing vs Auto-regressive)
-- **PyTorch compliance**: Standard model interface for easy integration and testing
-
-### 4. Comprehensive Evaluation Framework
-
-Built-in analysis tools for understanding model behavior:
-
-- **Spike visualization**: Animated patterns and weight heatmaps
-- **Pipeline analysis**: Intermediate value tracking through IO interfaces
-- **Multi-metric evaluation**: Accuracy, convergence, processing efficiency
+- **실시간 모니터링**: TensorBoard 통합으로 즉시 피드백
+- **스파이크 시각화**: 애니메이션 패턴 및 가중치 히트맵
+- **파이프라인 분석**: IO 인터페이스를 통한 중간값 추적
 
 ## Related Work
 
-This research addresses limitations identified in several key areas:
+이 연구는 여러 핵심 영역에서 식별된 한계점들을 다룹니다:
 
-- **Transformer limitations**: Static weight matrices and token-level processing (Dziri et al., 2023)
-- **Spiking neural networks**: Limited architectural flexibility and single-scale connectivity
-- **Neurosymbolic systems**: Restricted to symbolic reasoning without end-to-end learning capability (Arora et al., 2023)
-
-### References
-
-- [Faith and Fate: Limits of Transformers on Compositionality (Dziri et al., 2023)](https://arxiv.org/abs/2305.18654)
-- [LINC: A Neurosymbolic Approach for Logical Reasoning (Arora et al., 2023)](https://arxiv.org/abs/2310.15164)
-- [Spikformer: When Spiking Neural Network Meets Transformer (Zhou et al., 2023)](https://arxiv.org/abs/2209.15425)
-- [Neural Theorem Proving at Scale (Jiang et al., 2022)](https://arxiv.org/abs/2205.11491)
+- **Transformer limitations**: 정적 가중치 행렬과 토큰 레벨 처리 (Dziri et al., 2023)
+- **Spiking neural networks**: 제한된 아키텍처 유연성과 단일 스케일 연결성
+- **Neurosymbolic systems**: 종단간 학습 없는 기호적 추론 제한 (Arora et al., 2023)
 
 ## Contributing
 
-We welcome contributions to the SCS project. For development setup:
+SCS 프로젝트에 기여를 환영합니다. 개발 환경 설정:
 
 ```bash
 pip install -e ".[dev,analysis]"
@@ -349,17 +348,15 @@ isort src/ tests/
 mypy src/
 ```
 
-To add new brain regions or connection patterns, modify the configuration files and validate with:
+새로운 뇌 영역이나 연결 패턴을 추가하려면 설정 파일을 수정하고 검증하세요:
 
 ```bash
 scs --mode validate --config your_config.yaml
 ```
 
-For new datasets or learning styles, extend the `data` package and update the configuration schemas.
-
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+이 프로젝트는 MIT 라이센스 하에 있습니다. 자세한 내용은 [LICENSE](LICENSE)를 참조하세요.
 
 ## Contact
 
@@ -369,4 +366,4 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE) for detai
 
 ---
 
-_This research aims to bridge the gap between biological neural processing and artificial intelligence through principled computational modeling of cognitive dynamics._
+_이 연구는 생물학적 신경 처리와 인공지능 사이의 격차를 원리적인 인지 동역학 계산 모델링을 통해 연결하는 것을 목표로 합니다._

@@ -14,6 +14,7 @@ from datetime import datetime
 from .loss import SCSLoss
 from ..evaluation.metrics import SCSMetrics
 from ..config.schemas import LearningConfig
+from ..utils import SCSTensorBoardLogger
 
 class SCSTrainer:
     """SCS 간소화된 학습 시스템"""
@@ -26,7 +27,9 @@ class SCSTrainer:
         optimizer: Optional[torch.optim.Optimizer] = None,
         scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
         tokenizer: Optional[Any] = None,
-        unfreezing_config: Optional[Dict] = None
+        unfreezing_config: Optional[Dict] = None,
+        tensorboard_config: Optional[Dict] = None,
+        experiment_dir: Optional[Path] = None
     ):
         self.model = model
         self.config = config
@@ -68,6 +71,13 @@ class SCSTrainer:
         self.patience_counter = 0
         self.best_model_path = None
         self.current_ss_prob = self.config.ss_start_prob
+        
+        # 텐서보드 로그 초기화
+        self.tb_logger = None
+        if tensorboard_config and tensorboard_config.get('enabled', False):
+            tb_log_dir = experiment_dir / tensorboard_config.get('log_dir', 'tensorboard_logs') if experiment_dir else Path('tensorboard_logs')
+            self.tb_logger = SCSTensorBoardLogger(tb_log_dir, tensorboard_config)
+
     
     def _update_scheduled_sampling_prob(self):
         """스케줄 샘플링 확률 업데이트"""
@@ -131,8 +141,21 @@ class SCSTrainer:
             save_dir = Path(save_path)
             save_dir.mkdir(parents=True, exist_ok=True)
         
+        # 하이퍼파라미터 로깅 (학습 시작 시 한 번)
+        if self.tb_logger:
+            try:
+                hparams = self.config.model_dump()
+                initial_metrics = {"initial_loss": float('inf'), "initial_accuracy": 0.0}
+                self.tb_logger.log_hyperparameters(hparams, initial_metrics)
+            except Exception as e:
+                self.logger.warning(f"하이퍼파라미터 로깅 실패: {e}")
+        
         for epoch in range(self.config.epochs):
             self.current_epoch = epoch
+            
+            # TensorBoard 에포크 설정
+            if self.tb_logger:
+                self.tb_logger.set_epoch(epoch)
             
             # 커리큘럼 학습
             if self.config.use_curriculum_learning and self.config.curriculum_schedule:
@@ -162,6 +185,21 @@ class SCSTrainer:
             train_metrics = self._train_epoch(train_loader)
             history['train_loss'].append(train_metrics['loss'])
             history['train_accuracy'].append(train_metrics['accuracy'])
+            
+            # 모델 가중치 로깅 (주기적)
+            if self.tb_logger and epoch % self.tb_logger.histogram_freq == 0:
+                try:
+                    self.tb_logger.log_model_weights(self.model)
+                except Exception as e:
+                    self.logger.warning(f"가중치 로깅 실패: {e}")
+            
+            # 학습률 로깅
+            if self.tb_logger and self.scheduler:
+                try:
+                    current_lr = self.scheduler.get_last_lr()[0] if hasattr(self.scheduler, 'get_last_lr') else self.config.learning_rate
+                    self.tb_logger.log_learning_rate(current_lr)
+                except Exception as e:
+                    self.logger.warning(f"학습률 로깅 실패: {e}")
             
             # 스케줄러 스텝
             if self.scheduler:
@@ -193,12 +231,16 @@ class SCSTrainer:
             
             # 로깅
             self._log_progress(epoch, train_metrics, 
-                             val_metrics if val_loader and epoch % self.config.eval_every == 0 else None)
+                            val_metrics if val_loader and epoch % self.config.eval_every == 0 else None)
         
         # 최종 모델 저장
         if save_path and self.best_model_path is None:
             self.best_model_path = self._save_best_model(save_path, self.current_epoch, self.best_loss)
             self.logger.info(f"최종 모델을 최고 모델로 저장: {self.best_model_path}")
+        
+        # 학습 완료 시 TensorBoard 로거 종료
+        if self.tb_logger:
+            self.tb_logger.close()
         
         return history
     
@@ -245,7 +287,8 @@ class SCSTrainer:
             target_tokens=target_tokens,
             attention_mask=attention_mask,
             training=True,
-            scheduled_sampling_prob=self.current_ss_prob
+            scheduled_sampling_prob=self.current_ss_prob,
+            tensorboard_logger=self.tb_logger  # TensorBoard 로거 전달
         )
         
         # 손실 계산
@@ -255,6 +298,11 @@ class SCSTrainer:
         if output_logits.shape[1] > 0:
             # 타겟과 같은 길이로 맞춤
             target_subset = target_tokens[:, :output_logits.shape[1]]
+            
+            # 손실 함수에 tb_logger 설정
+            if self.tb_logger:
+                self.loss_fn._tb_logger = self.tb_logger
+                
             loss = self.loss_fn(output_logits, target_subset, processing_info)
         else:
             loss = torch.tensor(0.0, device=self.device, requires_grad=True)
@@ -272,8 +320,15 @@ class SCSTrainer:
                 accuracy = SCSMetrics.accuracy(output_logits, target_subset, pad_token_id=self.config.pad_token_id, guide_sep_token_id=self.config.guide_sep_token_id)
             else:
                 accuracy = 0.0
-                
-        return loss.item(), {'accuracy': accuracy}
+        
+        # 배치 메트릭 구성
+        batch_metrics = {'accuracy': accuracy}
+        
+        # TensorBoard 로깅
+        if self.tb_logger:
+            self.tb_logger.log_training_step(batch_metrics, loss.item())
+        
+        return loss.item(), batch_metrics
 
     def _validate_epoch(self, val_loader: DataLoader) -> Dict[str, float]:
         """검증 - 간소화됨"""
@@ -294,7 +349,8 @@ class SCSTrainer:
                     target_tokens=target_tokens,  # 길이 참조용
                     attention_mask=attention_mask,
                     training=False,
-                    scheduled_sampling_prob=0.0  # 완전 auto-regressive
+                    scheduled_sampling_prob=0.0,  # 완전 auto-regressive
+                    tensorboard_logger=self.tb_logger  # TensorBoard 로거 전달
                 )
                 
                 # 손실 및 정확도 계산
@@ -303,6 +359,11 @@ class SCSTrainer:
                 
                 if output_logits.shape[1] > 0:
                     target_subset = target_tokens[:, :output_logits.shape[1]]
+                    
+                    # 손실 함수에 tb_logger 설정
+                    if self.tb_logger:
+                        self.loss_fn._tb_logger = self.tb_logger
+                        
                     batch_loss = self.loss_fn(output_logits, target_subset, processing_info)
                     batch_accuracy = SCSMetrics.accuracy(output_logits, target_subset, pad_token_id=self.config.pad_token_id, guide_sep_token_id=self.config.guide_sep_token_id)
                 else:
@@ -313,7 +374,15 @@ class SCSTrainer:
                 total_accuracy += batch_accuracy
                 num_batches += 1
         
-        return {'loss': total_loss / num_batches, 'accuracy': total_accuracy / num_batches}
+        # 평균 메트릭 계산
+        avg_loss = total_loss / num_batches
+        avg_accuracy = total_accuracy / num_batches
+        
+        # TensorBoard 로깅
+        if self.tb_logger:
+            self.tb_logger.log_validation_step({'loss': avg_loss, 'accuracy': avg_accuracy})
+        
+        return {'loss': avg_loss, 'accuracy': avg_accuracy}
     
     def evaluate(self, test_loader: DataLoader, save_examples: int = 10) -> Dict[str, Any]:
         """평가 - 대폭 간소화됨"""

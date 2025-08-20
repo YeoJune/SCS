@@ -191,7 +191,8 @@ class SCSSystem(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,  # [B, input_seq_len]
         training: bool = True,
         scheduled_sampling_prob: float = 1.0,  # Teacher forcing 확률
-        max_output_length: Optional[int] = None
+        max_output_length: Optional[int] = None,
+        tensorboard_logger: Optional[Any] = None
     ) -> Dict[str, Any]:
         """
         완전한 시퀀스 처리: CLK 루프를 내부에서 관리
@@ -203,6 +204,7 @@ class SCSSystem(nn.Module):
             training: 학습 모드 여부
             scheduled_sampling_prob: Teacher forcing 확률 (1.0 = 항상 teacher forcing)
             max_output_length: 최대 출력 길이 (추론시)
+            tensorboard_logger: TensorBoard 로거 (선택적)
             
         Returns:
             Dict containing:
@@ -244,6 +246,17 @@ class SCSSystem(nn.Module):
             )
             self._update_states(external_input, current_spikes)
             final_acc_spikes = current_spikes.get(self.acc_node)
+            
+            # TensorBoard 스파이크 패턴 로깅 (새로 추가)
+            if (tensorboard_logger and 
+                clk > 0 and 
+                hasattr(tensorboard_logger, 'should_log') and
+                tensorboard_logger.should_log("spikes")):
+                try:
+                    tensorboard_logger.log_spike_patterns(current_spikes, clk)
+                except Exception as e:
+                    # 로깅 실패는 무시하고 계속 진행
+                    pass
             
             # Phase 2: TimingManager 업데이트 (generated_length 증가)
             self.timing_manager.step(
@@ -303,6 +316,14 @@ class SCSSystem(nn.Module):
             "generation_clks": torch.arange(max_generated, device=self.device),
             "axonal_parameters": self._get_axonal_parameters()
         }
+        
+        # 처리 정보 로깅 (새로 추가)
+        if tensorboard_logger and hasattr(tensorboard_logger, 'log_processing_info'):
+            try:
+                tensorboard_logger.log_processing_info(processing_info)
+            except Exception as e:
+                # 로깅 실패는 무시
+                pass
         
         return {
             'output_logits': output_logits,

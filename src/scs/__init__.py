@@ -41,7 +41,8 @@ from .config import (
 # Utils 모듈
 from .utils import (
     load_config, save_config, save_json, load_json, setup_logging,
-    create_experiment_summary, get_git_info, set_random_seed, get_device, format_time
+    create_experiment_summary, get_git_info, set_random_seed, get_device, format_time,
+    SCSTensorBoardLogger
 )
 
 __version__ = "0.1.0"
@@ -76,5 +77,6 @@ __all__ = [
     
     # 유틸리티
     "load_config", "save_config", "save_json", "load_json", "setup_logging",
-    "create_experiment_summary", "get_git_info", "set_random_seed", "get_device", "format_time"
+    "create_experiment_summary", "get_git_info", "set_random_seed", "get_device", "format_time",
+    "SCSTensorBoardLogger"
 ]

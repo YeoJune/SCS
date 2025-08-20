@@ -107,17 +107,34 @@ class SCSLoss(nn.Module):
         outputs, targets = self._handle_length_mismatch(outputs, targets, vocab_size)
         
         # 기본 분류 손실 계산 (guide weight 포함)
-        total_loss = self._compute_base_loss(outputs, targets, processing_info, vocab_size)
+        base_loss = self._compute_base_loss(outputs, targets, processing_info, vocab_size)
+        total_loss = base_loss
         
         # Axon Pruning 손실 - Loss에서 직접 계산 (표준적 접근법)
+        pruning_loss = torch.tensor(0.0, device=outputs.device)
         if self.gate_pruning_weight > 0.0 or self.inner_pruning_weight > 0.0:
             pruning_loss = self._compute_axon_pruning_loss(processing_info, outputs.device)
             total_loss += pruning_loss
         
         # 길이 패널티
+        length_penalty = torch.tensor(0.0, device=outputs.device)
         if self.length_penalty_weight > 0.0:
             length_penalty = self._length_penalty(original_output_len, original_target_len, outputs.device)
             total_loss += self.length_penalty_weight * length_penalty
+        
+        # TensorBoard 로깅 (새로 추가)
+        if hasattr(self, '_tb_logger') and self._tb_logger:
+            try:
+                loss_components = {
+                    'base_loss': base_loss.item() if hasattr(base_loss, 'item') else float(base_loss),
+                    'axon_pruning_loss': pruning_loss.item() if hasattr(pruning_loss, 'item') else float(pruning_loss),
+                    'length_penalty': length_penalty.item() if hasattr(length_penalty, 'item') else float(length_penalty),
+                    'total_loss': total_loss.item() if hasattr(total_loss, 'item') else float(total_loss)
+                }
+                self._tb_logger.log_loss_components(loss_components)
+            except Exception as e:
+                # 로깅 실패는 무시하고 계속 진행
+                pass
         
         return total_loss
     
@@ -273,14 +290,30 @@ class TimingLoss(SCSLoss):
         self.sync_target_end = sync_target_end
         self.mse_loss = nn.MSELoss()
 
-    def forward(self, outputs: torch.Tensor, targets: torch.Tensor, 
-               processing_info: Dict[str, Any]) -> torch.Tensor:
+    def forward(self, outputs: torch.Tensor, targets: torch.Tensor, processing_info: Dict[str, Any]) -> torch.Tensor:
+        """타이밍 손실 계산 - TensorBoard 로깅 포함"""
+        
+        # 기본 손실 계산 (부모 클래스 호출)
         total_loss = super().forward(outputs, targets, processing_info)
         
+        # 타이밍 손실 계산
+        timing_loss_value = torch.tensor(0.0, device=outputs.device)
         if self.timing_weight != 0.0:
-            timing_loss = self._calculate_timing_loss(processing_info, outputs.device)
-            total_loss += self.timing_weight * timing_loss
-            
+            timing_loss_value = self._calculate_timing_loss(processing_info, outputs.device)
+            total_loss += self.timing_weight * timing_loss_value
+        
+        # TensorBoard 타이밍 손실 로깅 (새로 추가)
+        if hasattr(self, '_tb_logger') and self._tb_logger:
+            try:
+                timing_components = {
+                    'timing_loss': timing_loss_value.item() if hasattr(timing_loss_value, 'item') else float(timing_loss_value),
+                    'timing_weight': self.timing_weight
+                }
+                self._tb_logger.log_loss_components(timing_components)
+            except Exception as e:
+                # 로깅 실패는 무시
+                pass
+                
         return total_loss
     
     def _calculate_timing_loss(self, processing_info: Dict[str, Any], device: torch.device) -> torch.Tensor:

@@ -183,6 +183,20 @@ class CheckpointConfig(BaseModel):
     compress: bool = Field(default=False)
     max_checkpoints: Optional[int] = Field(default=5)
 
+class TensorBoardConfig(BaseModel):
+    """TensorBoard 설정"""
+    enabled: bool = Field(default=False, description="TensorBoard 로깅 활성화")
+    log_dir: str = Field(default="tensorboard_logs", description="TensorBoard 로그 디렉토리")
+    log_interval: Dict[str, int] = Field(default={
+        "scalars": 1,       # 매 배치
+        "histograms": 100,  # 100배치마다
+        "images": 500,      # 500배치마다
+        "spikes": 50        # 50 CLK마다
+    }, description="로깅 간격 설정")
+    auto_launch: bool = Field(default=False, description="TensorBoard 서버 자동 시작")
+    port: int = Field(default=6006, description="TensorBoard 서버 포트")
+    max_images_per_batch: int = Field(default=4, description="배치당 최대 이미지 수")
+    histogram_freq: int = Field(default=100, description="히스토그램 로깅 빈도")
 
 class LoggingConfig(BaseModel):
     """로깅 설정"""
@@ -195,7 +209,7 @@ class LoggingConfig(BaseModel):
     use_tensorboard: bool = Field(default=False)
     use_wandb: bool = Field(default=False)
     wandb_project: Optional[str] = Field(default=None)
-
+    tensorboard: TensorBoardConfig = Field(default_factory=TensorBoardConfig, description="TensorBoard 설정")
 
 class TokenizerConfig(BaseModel):
     """토크나이저 설정"""

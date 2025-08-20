@@ -36,6 +36,9 @@ def setup_args() -> argparse.ArgumentParser:
   # 학습 모드
   scs --mode train --config configs/phase2_logiqa_small.yaml
   
+  # TensorBoard와 함께 학습
+  scs --mode train --config configs/phase2_logiqa_small.yaml --tensorboard --tb-launch
+  
   # 평가 모드  
   scs --mode evaluate --experiment_dir experiments/phase2_20241201_1430
   
@@ -56,8 +59,14 @@ def setup_args() -> argparse.ArgumentParser:
                        help="재현성을 위한 랜덤 시드")
     parser.add_argument("--debug", action="store_true", 
                        help="디버그 모드 (상세 로깅)")
+    parser.add_argument("--tensorboard", action="store_true", 
+                       help="TensorBoard 로깅 활성화")
+    parser.add_argument("--tb-port", type=int, default=6006, 
+                       help="TensorBoard 서버 포트")
+    parser.add_argument("--tb-launch", action="store_true", 
+                       help="TensorBoard 서버 자동 시작 및 브라우저 열기")
+    
     return parser
-
 
 def validate_args(args: argparse.Namespace):
     """CLI 인자 유효성 검사"""
@@ -127,6 +136,14 @@ def train_mode(args: argparse.Namespace):
             config_path = Path.cwd() / config_path
         
         app_config = load_and_validate_config(config_path)
+        
+        # TensorBoard 설정 오버라이드 (새로 추가)
+        if args.tensorboard:
+            app_config.logging.tensorboard.enabled = True
+            app_config.logging.tensorboard.port = args.tb_port
+            app_config.logging.tensorboard.auto_launch = args.tb_launch
+            logger.info(f"📊 TensorBoard 활성화: 포트 {args.tb_port}, 자동 시작: {args.tb_launch}")
+        
         save_config(app_config.dict(), experiment_dir / "config.yaml")
         logger.info("✅ 설정 파일 로딩 및 검증 완료")
 
@@ -232,7 +249,9 @@ def train_mode(args: argparse.Namespace):
             optimizer=optimizer, 
             scheduler=scheduler, 
             tokenizer=tokenizer,
-            unfreezing_config=unfreezing_config
+            unfreezing_config=unfreezing_config,
+            tensorboard_config=app_config.logging.tensorboard.model_dump(),
+            experiment_dir=experiment_dir
         )
         trainer.train(train_loader, val_loader, save_path=str(experiment_dir / "checkpoints"))
 
@@ -296,6 +315,14 @@ def evaluate_mode(args: argparse.Namespace):
     try:
         # 2. 설정 로딩 (config 패키지 사용)
         app_config = load_and_validate_config(config_path)
+        
+        # TensorBoard 설정 오버라이드 (평가 모드에서도 로깅 가능)
+        if args.tensorboard:
+            app_config.logging.tensorboard.enabled = True
+            app_config.logging.tensorboard.port = args.tb_port
+            app_config.logging.tensorboard.auto_launch = args.tb_launch
+            logger.info(f"📊 평가 모드 TensorBoard 활성화: 포트 {args.tb_port}")
+        
         logger.info("✅ 저장된 설정 파일 로딩 완료")
         
         # 3. 체크포인트 찾기
@@ -341,7 +368,13 @@ def evaluate_mode(args: argparse.Namespace):
         learning_config.device = device
         learning_config.pad_token_id = app_config.data_loading.tokenizer.pad_token_id
         
-        trainer = SCSTrainer(model=model, config=learning_config, tokenizer=tokenizer)
+        trainer = SCSTrainer(
+            model=model, 
+            config=learning_config, 
+            tokenizer=tokenizer,
+            tensorboard_config=app_config.logging.tensorboard.model_dump(),
+            experiment_dir=experiment_dir
+        )
         results = trainer.evaluate(test_loader, save_examples=app_config.evaluation.save_examples)
         
         # 결과 저장

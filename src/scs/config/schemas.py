@@ -151,7 +151,9 @@ class LearningConfig(BaseModel):
     use_temporal_weighting: bool = Field(default=False)
     initial_temporal_weight: float = Field(default=2.0)
     final_temporal_weight: float = Field(default=1.0)
-    
+
+    guide_weight: float = Field(default=0.3)
+
     # 타이밍 손실
     timing_weight: float = Field(default=1.0)
     sync_target_start: float = Field(default=1.0)
@@ -223,6 +225,7 @@ class TaskConfig(BaseModel):
 
 class DataConfig(BaseModel):
     """데이터 설정"""
+    guide_sep_token: str = Field(default="<extra_id_42>")
     train_samples: int = Field(default=-1)
     val_samples: int = Field(default=-1) 
     test_samples: int = Field(default=-1)

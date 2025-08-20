@@ -1,6 +1,6 @@
 # src/scs/training/loss.py
 """
-SCS 손실 함수 - Axon Pruning 중심의 표준적 설계
+SCS 손실 함수 - Axon Pruning 중심의 표준적 설계 + Guide Weight 지원
 """
 
 import torch
@@ -9,11 +9,13 @@ import torch.nn.functional as F
 from typing import Dict, Any, List
 
 class SCSLoss(nn.Module):
-    """SCS 배치 처리 지원 손실 함수 - 표준적인 Loss 중심 설계"""
+    """SCS 배치 처리 지원 손실 함수 - 표준적인 Loss 중심 설계 + Guide Weight"""
     def __init__(
         self, 
         pad_token_id: int,
+        guide_sep_token_id: int,
         max_clk: int = 512,
+        guide_weight: float = 0.3,
         gate_pruning_weight: float = 0.0,
         inner_pruning_weight: float = 0.0,
         length_penalty_weight: float = 0.0,
@@ -23,6 +25,8 @@ class SCSLoss(nn.Module):
     ):
         super().__init__()
         self.max_clk = max_clk
+        self.guide_sep_token_id = guide_sep_token_id
+        self.guide_weight = guide_weight
         
         # 모든 정규화 가중치를 Loss에서 관리 (표준적 접근법)
         self.gate_pruning_weight = gate_pruning_weight
@@ -67,6 +71,23 @@ class SCSLoss(nn.Module):
         normalized_weights = weights * length / weights.sum()
         return normalized_weights
     
+    def _create_guide_weight_mask(self, targets: torch.Tensor) -> torch.Tensor:
+        """guide_sep_token 이전까지 guide_weight 적용하는 마스크 생성"""
+        batch_size, seq_len = targets.shape
+        guide_mask = torch.ones_like(targets, dtype=torch.float)
+        
+        # 각 배치별로 guide_sep_token 위치 찾기
+        for batch_idx in range(batch_size):
+            sep_positions = (targets[batch_idx] == self.guide_sep_token_id).nonzero(as_tuple=False)
+            
+            if len(sep_positions) > 0:
+                # 첫 번째 guide_sep_token 위치까지 guide_weight 적용
+                first_sep_pos = sep_positions[0].item()
+                guide_mask[batch_idx, :first_sep_pos] = self.guide_weight
+                # guide_sep_token 이후는 기본 가중치 1.0 유지
+        
+        return guide_mask
+    
     def forward(
         self, 
         outputs: torch.Tensor, 
@@ -85,7 +106,7 @@ class SCSLoss(nn.Module):
         # 길이 불일치 처리
         outputs, targets = self._handle_length_mismatch(outputs, targets, vocab_size)
         
-        # 기본 분류 손실 계산
+        # 기본 분류 손실 계산 (guide weight 포함)
         total_loss = self._compute_base_loss(outputs, targets, processing_info, vocab_size)
         
         # Axon Pruning 손실 - Loss에서 직접 계산 (표준적 접근법)
@@ -134,8 +155,11 @@ class SCSLoss(nn.Module):
     
     def _compute_base_loss(self, outputs: torch.Tensor, targets: torch.Tensor, 
                           processing_info: Dict[str, Any], vocab_size: int) -> torch.Tensor:
-        """기본 분류 손실 계산 (temporal weighting 적용)"""
+        """기본 분류 손실 계산 (guide weight + temporal weighting 적용)"""
         batch_size = outputs.shape[0]
+        
+        # Guide weight 마스크 생성
+        guide_mask = self._create_guide_weight_mask(targets)
         
         if self.use_temporal_weighting and 'generation_clks' in processing_info:
             generation_clks = processing_info['generation_clks']
@@ -147,6 +171,7 @@ class SCSLoss(nn.Module):
             # 실제 길이만큼 자르기
             trimmed_outputs = outputs[:, :actual_length, :]
             trimmed_targets = targets[:, :actual_length]
+            trimmed_guide_mask = guide_mask[:, :actual_length]
             
             # 손실 계산 (reduction='none')
             base_loss_unweighted = self.base_loss(
@@ -155,25 +180,33 @@ class SCSLoss(nn.Module):
             ).view(batch_size, actual_length)
             
             # 마스크 생성
-            mask = (trimmed_targets != self.base_loss.ignore_index).float()
+            valid_mask = (trimmed_targets != self.base_loss.ignore_index).float()
+            
+            # Guide weight 적용
+            guide_weighted_loss = base_loss_unweighted * trimmed_guide_mask
             
             # 정규화된 temporal weights 적용
             temporal_weights = self._get_normalized_temporal_weights(actual_length, outputs.device)
-            weights = temporal_weights.unsqueeze(0).expand_as(base_loss_unweighted)
+            weights = temporal_weights.unsqueeze(0).expand_as(guide_weighted_loss)
             
-            # 가중치 적용된 손실
-            weighted_loss = base_loss_unweighted * weights
-            return (weighted_loss * mask).sum() / mask.sum().clamp(min=1.0)
+            # 최종 가중치 적용된 손실
+            final_weighted_loss = guide_weighted_loss * weights
+            return (final_weighted_loss * valid_mask).sum() / valid_mask.sum().clamp(min=1.0)
         
         else:
-            # 기존 방식
+            # Guide weight만 적용 (temporal weighting 없음)
             base_loss_unweighted = self.base_loss(
                 outputs.reshape(-1, vocab_size), 
                 targets.reshape(-1)
             ).view(batch_size, -1)
             
-            mask = (targets != self.base_loss.ignore_index).float()
-            return (base_loss_unweighted * mask).sum() / mask.sum().clamp(min=1.0)
+            # 마스크 생성
+            valid_mask = (targets != self.base_loss.ignore_index).float()
+            
+            # Guide weight 적용
+            guide_weighted_loss = base_loss_unweighted * guide_mask
+            
+            return (guide_weighted_loss * valid_mask).sum() / valid_mask.sum().clamp(min=1.0)
     
     def _length_penalty(self, output_len: int, target_len: int, device: torch.device) -> torch.Tensor:
         """길이 패널티 계산"""
@@ -228,12 +261,13 @@ class TimingLoss(SCSLoss):
     def __init__(
         self, 
         pad_token_id: int, 
+        guide_sep_token_id: int,
         timing_weight: float = 1.0,
         sync_target_start: float = 1.0,
         sync_target_end: float = 0.0,
         **kwargs
     ):
-        super().__init__(pad_token_id, **kwargs)
+        super().__init__(pad_token_id, guide_sep_token_id, **kwargs)
         self.timing_weight = timing_weight
         self.sync_target_start = sync_target_start
         self.sync_target_end = sync_target_end
@@ -275,9 +309,10 @@ class TimingLoss(SCSLoss):
 
 class SpikingLoss(SCSLoss):
     """스파이킹 뉴럴 네트워크 특화 손실 - Axon Pruning 중심"""
-    def __init__(self, pad_token_id: int, **kwargs):
+    def __init__(self, pad_token_id: int, guide_sep_token_id: int, **kwargs):
         super().__init__(
             pad_token_id, 
+            guide_sep_token_id,
             gate_pruning_weight=kwargs.pop('gate_pruning_weight', 1e-4),
             inner_pruning_weight=kwargs.pop('inner_pruning_weight', 1e-5),
             **kwargs
@@ -286,9 +321,10 @@ class SpikingLoss(SCSLoss):
 
 class NeuromodulationLoss(SCSLoss):
     """신경 조절 메커니즘 손실"""
-    def __init__(self, pad_token_id: int, **kwargs):
+    def __init__(self, pad_token_id: int, guide_sep_token_id: int, **kwargs):
         super().__init__(
             pad_token_id, 
+            guide_sep_token_id,
             use_temporal_weighting=True,
             **kwargs
         )
@@ -296,9 +332,10 @@ class NeuromodulationLoss(SCSLoss):
 
 class MultiObjectiveLoss(SCSLoss):
     """다목적 최적화 손실 - Axon Pruning 포함"""
-    def __init__(self, pad_token_id: int, **kwargs):
+    def __init__(self, pad_token_id: int, guide_sep_token_id: int, **kwargs):
         super().__init__(
             pad_token_id, 
+            guide_sep_token_id,
             gate_pruning_weight=kwargs.pop('gate_pruning_weight', 1e-4),
             inner_pruning_weight=kwargs.pop('inner_pruning_weight', 1e-5),
             use_temporal_weighting=True,

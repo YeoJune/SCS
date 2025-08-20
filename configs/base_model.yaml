@@ -107,6 +107,8 @@ learning:
   initial_temporal_weight: 5.0 # 초기 CLK에 높은 중요도
   final_temporal_weight: 1.0 # 나중 CLK에 기본 중요도
 
+  guide_weight: 0.3
+
   gate_pruning_weight: 1e-4 # 패치 게이트 L1 정규화 가중치
   inner_pruning_weight: 1e-4 # 내부 연결 L1 정규화 가중치
 
@@ -137,6 +139,7 @@ learning:
         - "output_interface.spatial_compressor"
 
 data:
+  guide_sep_token: <extra_id_42>
   train_samples: -1 # -1은 전체 데이터, 양수는 해당 개수만
   val_samples: -1 # -1은 전체 데이터
   test_samples: -1 # -1은 전체 데이터

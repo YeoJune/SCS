@@ -245,7 +245,7 @@ def _generate_weight_heatmaps(model, node_names: List[str], vis_dir: Path):
             node = model.nodes[node_name]
             influence = node.influence_strength.detach().cpu().numpy()
             
-            im = axes[i].imshow(influence, cmap='RdBu_r', vmin=-5, vmax=5)
+            im = axes[i].imshow(influence, cmap='RdBu_r', vmin=-2, vmax=2)
             axes[i].set_title(f'{node_name}\nInfluence Strength')
             axes[i].set_xlabel('Width')
             axes[i].set_ylabel('Height')
@@ -306,7 +306,7 @@ def _visualize_axonal_connections(axonal_connections, weight_dir: Path):
                         padded[:len(weights)] = weights
                         weights = padded.reshape(pad_size, pad_size)
                 
-                im = axes[i].imshow(weights, cmap='RdBu_r', aspect='auto')
+                im = axes[i].imshow(weights, cmap='hot', aspect='auto')
                 axes[i].set_title(f'{conn_name}\nPatch Gates')
                 axes[i].set_xlabel('Patch Index (reshaped)')
                 axes[i].set_ylabel('Patch Index (reshaped)')

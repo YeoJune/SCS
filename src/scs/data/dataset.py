@@ -365,6 +365,10 @@ class GLUEDataset(BaseDataset):
         if self.task_name not in valid_tasks:
             raise ValueError(f"Invalid task_name '{task_name}'. Must be one of {valid_tasks}")
         
+        # 테스트 셋은 정답 라벨 미공개이기 때문에 validation으로 변경
+        if split == 'test':
+            split = 'validation'
+
         # MNLI의 경우 matched/mismatched 처리
         if self.task_name == 'mnli':
             if split == 'validation':

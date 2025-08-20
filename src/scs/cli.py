@@ -191,10 +191,8 @@ def train_mode(args: argparse.Namespace):
         # 손실 함수 생성
         loss_fn = TimingLoss(
             pad_token_id=app_config.data_loading.tokenizer.pad_token_id,
-            spike_reg_weight=learning_config.spike_reg_weight,
             max_clk=learning_config.max_clk_training,
             length_penalty_weight=learning_config.length_penalty_weight,
-            target_spike_rate=learning_config.target_spike_rate,
             use_temporal_weighting=learning_config.use_temporal_weighting,
             initial_temporal_weight=learning_config.initial_temporal_weight,
             final_temporal_weight=learning_config.final_temporal_weight,

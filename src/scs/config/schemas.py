@@ -142,10 +142,7 @@ class LearningConfig(BaseModel):
     curriculum_schedule: Optional[Dict[int, int]] = Field(default=None)
     
     # 손실 관련
-    spike_reg_weight: float = Field(default=0.0)
     length_penalty_weight: float = Field(default=0.0)
-    target_spike_rate: float = Field(default=0.1)
-    node_target_spike_rates: Dict[str, float] = Field(default_factory=dict)
     
     # 시간적 가중치
     use_temporal_weighting: bool = Field(default=False)

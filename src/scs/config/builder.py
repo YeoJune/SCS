@@ -143,10 +143,6 @@ class ModelBuilder:
                 fixed_delay=timing_config.fixed_delay
             )
             
-            # 학습 설정에서 타겟 스파이크 레이트 추출
-            learning_config = config.learning
-            node_target_spike_rates = learning_config.node_target_spike_rates
-            
             # SCSSystem 생성
             scs_system = SCSSystem(
                 nodes=nodes,
@@ -159,7 +155,6 @@ class ModelBuilder:
                 output_node=output_node_name,
                 acc_node=config.system_roles.acc_node,
                 eos_token_id=eos_token_id,
-                node_target_spike_rates=node_target_spike_rates,
                 device=device
             )
             

@@ -163,7 +163,6 @@ class SCSSystem(nn.Module):
         acc_node: str = "ACC",
         max_clk: int = 500,
         eos_token_id: int = 1,
-        node_target_spike_rates: Dict[str, float] = None,
         device: str = "cuda"
     ):
         super().__init__()
@@ -175,19 +174,12 @@ class SCSSystem(nn.Module):
         self.max_clk = max_clk
         self.eos_token_id = eos_token_id
         
-        # 노드별 target spike rate 설정
-        self.node_target_spike_rates = node_target_spike_rates or {}
-        
         self.nodes = nn.ModuleDict(nodes)
         self.local_connections = nn.ModuleDict(local_connections)
         self.axonal_connections = axonal_connections
         self.input_interface = input_interface
         self.output_interface = output_interface
         self.timing_manager = timing_manager
-
-        # 스파이크율 누적 변수
-        self.accumulated_spike_deviations = {}
-        self.total_samples_processed = 0
 
         self.pad_token_id = output_interface.pad_token_id
         self.decoder_window_size = output_interface.window_size
@@ -285,10 +277,6 @@ class SCSSystem(nn.Module):
                     if decoder_batch.shape[1] > 0:
                         self._last_tokens = decoder_batch[:, -1]
             
-            # 스파이크율 누적
-            if current_spikes:
-                self._accumulate_spike_rates(current_spikes)
-            
             # 조기 종료 조건
             if self.timing_manager.all_ended:
                 break
@@ -313,7 +301,7 @@ class SCSSystem(nn.Module):
             "convergence_achieved": final_clk < self.max_clk - 1,
             "final_acc_activity": final_acc_spikes.mean().item() if final_acc_spikes is not None else 0.0,
             "generation_clks": torch.arange(max_generated, device=self.device),
-            "node_spike_rates": self._get_node_spike_rates()
+            "axonal_parameters": self._get_axonal_parameters()
         }
         
         return {
@@ -486,10 +474,6 @@ class SCSSystem(nn.Module):
     def reset_state(self, batch_size: int = 1):
         """전체 시스템 상태 초기화"""
         self.timing_manager.reset(batch_size, self.device)
-
-        # 스파이크율 누적 변수 초기화
-        self.accumulated_spike_deviations = {}  # CLK별 편차 누적
-        self.total_samples_processed = 0
         
         for node in self.nodes.values():
             node.reset_state(batch_size)
@@ -505,53 +489,22 @@ class SCSSystem(nn.Module):
         
         # last_tokens 초기화
         self._last_tokens = None
-    
-    def _accumulate_spike_rates(self, current_spikes: Dict[str, torch.Tensor]):
-        """매 CLK마다 개별 노드의 스파이크율 편차를 누적 (배치별로 계산)"""
-        if not current_spikes:
-            return
         
-        # 배치 크기 추출
-        first_node_spikes = next(iter(current_spikes.values()))
-        batch_size = first_node_spikes.shape[0]
+    def _get_axonal_parameters(self) -> List[Dict[str, torch.Tensor]]:
+        """Loss가 사용할 수 있도록 axonal 파라미터들을 raw 형태로 반환"""
+        axonal_params = []
         
-        for node_name, spikes in current_spikes.items():
-            # 해당 노드의 target_spike_rate가 설정되어 있는지 확인
-            if node_name not in self.node_target_spike_rates:
-                continue
+        for conn_key in self.axonal_connections.patch_gates:
+            gates = self.axonal_connections.patch_gates[conn_key]
+            transforms = self.axonal_connections.patch_transforms[conn_key]
             
-            target_rate = self.node_target_spike_rates[node_name]
-            
-            # 각 샘플별 스파이크율 계산 [B, H, W] → [B]
-            # spikes: [B, H, W]
-            sample_spike_rates = torch.mean(spikes.view(batch_size, -1), dim=1)  # [B]
-            
-            # 각 샘플별 편차 계산
-            sample_deviations = (sample_spike_rates - target_rate) ** 2  # [B]
-            
-            # 배치 내 모든 샘플의 편차 합계
-            batch_total_deviation = torch.sum(sample_deviations).item()
-            
-            # 누적
-            if node_name not in self.accumulated_spike_deviations:
-                self.accumulated_spike_deviations[node_name] = 0.0
-            
-            self.accumulated_spike_deviations[node_name] += batch_total_deviation
+            axonal_params.append({
+                'connection_name': conn_key,
+                'gates': gates,
+                'transforms': transforms
+            })
         
-        # 전체 처리된 샘플 수 업데이트 (CLK마다 배치 크기만큼 증가)
-        self.total_samples_processed += batch_size
-    
-    def _get_node_spike_rates(self) -> Dict[str, float]:
-        """개별 노드별 평균 스파이크율 편차를 딕셔너리로 반환"""
-        if self.total_samples_processed == 0 or not self.accumulated_spike_deviations:
-            return {}
-        
-        # 각 노드의 평균 편차 계산
-        node_avg_deviations = {}
-        for node_name, total_deviation in self.accumulated_spike_deviations.items():
-            node_avg_deviations[node_name] = total_deviation / self.total_samples_processed
-        
-        return node_avg_deviations
+        return axonal_params
 
     def set_max_clk(self, max_clk: int):
         """최대 CLK 설정 (커리큘럼 학습용)"""

@@ -99,11 +99,6 @@ learning:
   ss_end_prob: 0.0
   ss_decay_epochs: 0
 
-  spike_reg_weight: 0.0 # 스파이크 정규화 가중치
-  node_target_spike_rates: # 이 노드들만 정규화됨
-    IN: 0.1
-    OUT: 0.1
-
   timing_weight: 0.0 # 타이밍 손실 가중치
   sync_target_start: 0.5 # 시작 시점 동기화 목표
   sync_target_end: 0.0 # 종료 시점 동기화 목표
@@ -111,6 +106,9 @@ learning:
   use_temporal_weighting: false
   initial_temporal_weight: 5.0 # 초기 CLK에 높은 중요도
   final_temporal_weight: 1.0 # 나중 CLK에 기본 중요도
+
+  gate_pruning_weight: 1e-4 # 패치 게이트 L1 정규화 가중치
+  inner_pruning_weight: 1e-5 # 내부 연결 L1 정규화 가중치
 
   # 점진적 커리큘럼 학습
   use_curriculum_learning: false

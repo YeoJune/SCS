@@ -1,31 +1,34 @@
 # src/scs/training/loss.py
 """
-SCS 손실 함수
+SCS 손실 함수 - Axon Pruning 중심의 표준적 설계
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 class SCSLoss(nn.Module):
-    """SCS 배치 처리 지원 손실 함수"""
+    """SCS 배치 처리 지원 손실 함수 - 표준적인 Loss 중심 설계"""
     def __init__(
         self, 
         pad_token_id: int,
         max_clk: int = 512,
-        spike_reg_weight: float = 0.0,
+        # Axon pruning 하이퍼파라미터들을 모두 Loss에서 관리
+        gate_pruning_weight: float = 0.0,
+        inner_pruning_weight: float = 0.0,
         length_penalty_weight: float = 0.0,
-        target_spike_rate: float = 0.1,
         use_temporal_weighting: bool = False,
         initial_temporal_weight: float = 2.0,
         final_temporal_weight: float = 1.0
     ):
         super().__init__()
         self.max_clk = max_clk
-        self.spike_reg_weight = spike_reg_weight
+        
+        # 모든 정규화 가중치를 Loss에서 관리 (표준적 접근법)
+        self.gate_pruning_weight = gate_pruning_weight
+        self.inner_pruning_weight = inner_pruning_weight
         self.length_penalty_weight = length_penalty_weight
-        self.target_spike_rate = target_spike_rate
         self.use_temporal_weighting = use_temporal_weighting
         self.initial_temporal_weight = initial_temporal_weight
         self.final_temporal_weight = final_temporal_weight
@@ -86,12 +89,13 @@ class SCSLoss(nn.Module):
         # 기본 분류 손실 계산
         total_loss = self._compute_base_loss(outputs, targets, processing_info, vocab_size)
         
-        # 추가 손실들 (weight가 0이 아닌 경우만 계산)
-        if self.spike_reg_weight != 0.0:
-            spike_reg = self._spike_regularization(processing_info, outputs.device)
-            total_loss += self.spike_reg_weight * spike_reg
+        # Axon Pruning 손실 - Loss에서 직접 계산 (표준적 접근법)
+        if self.gate_pruning_weight > 0.0 or self.inner_pruning_weight > 0.0:
+            pruning_loss = self._compute_axon_pruning_loss(processing_info, outputs.device)
+            total_loss += pruning_loss
         
-        if self.length_penalty_weight != 0.0:
+        # 길이 패널티
+        if self.length_penalty_weight > 0.0:
             length_penalty = self._length_penalty(original_output_len, original_target_len, outputs.device)
             total_loss += self.length_penalty_weight * length_penalty
         
@@ -190,16 +194,34 @@ class SCSLoss(nn.Module):
         
         return torch.tensor(penalty, dtype=torch.float32, device=device)
     
-    def _spike_regularization(self, processing_info: Dict[str, Any], device: torch.device) -> torch.Tensor:
-        """개별 노드별 스파이크 레이트 정규화"""
-        if 'node_spike_rates' not in processing_info or not processing_info['node_spike_rates']:
-            return torch.tensor(0.0, dtype=torch.float32, device=device)
+    def _compute_axon_pruning_loss(self, processing_info: Dict[str, Any], device: torch.device) -> torch.Tensor:
+        """
+        Loss에서 직접 axon pruning 손실 계산 - 표준적 접근법
+        processing_info에서 raw 파라미터를 받아서 Loss가 모든 계산 담당
+        """
+        if 'axonal_parameters' not in processing_info:
+            return torch.tensor(0.0, device=device)
         
-        node_spike_deviations = processing_info['node_spike_rates']
-        total_deviation = sum(node_spike_deviations.values())
-        avg_deviation = total_deviation / len(node_spike_deviations)
+        axonal_params = processing_info['axonal_parameters']
+        total_loss = torch.tensor(0.0, device=device)
         
-        return torch.tensor(avg_deviation, dtype=torch.float32, device=device)
+        for conn_data in axonal_params:
+            gates = conn_data['gates']  # [num_patches]
+            transforms = conn_data['transforms']  # [num_patches, target_size, source_size]
+            
+            # 1. 패치 게이트 L1 손실 (그룹 희소성)
+            if self.gate_pruning_weight > 0.0:
+                gate_loss = torch.norm(gates, 1) / gates.numel() if gates.numel() > 0 else torch.tensor(0.0, device=device)
+                total_loss += self.gate_pruning_weight * gate_loss
+            
+            # 2. 계층적 내부 연결 L1 손실 (개별 희소성)
+            if self.inner_pruning_weight > 0.0:
+                # 게이트로 가중된 내부 연결 - 생물학적 현실성
+                gated_transforms = gates.abs().unsqueeze(-1).unsqueeze(-1) * transforms
+                inner_loss = torch.norm(gated_transforms, 1) / transforms.numel() if transforms.numel() > 0 else torch.tensor(0.0, device=device)
+                total_loss += self.inner_pruning_weight * inner_loss
+        
+        return total_loss
 
 
 class TimingLoss(SCSLoss):
@@ -253,24 +275,34 @@ class TimingLoss(SCSLoss):
 
 
 class SpikingLoss(SCSLoss):
-    """스파이킹 뉴럴 네트워크 특화 손실"""
+    """스파이킹 뉴럴 네트워크 특화 손실 - Axon Pruning 중심"""
     def __init__(self, pad_token_id: int, **kwargs):
-        super().__init__(pad_token_id, spike_reg_weight=0.01, **kwargs)
+        super().__init__(
+            pad_token_id, 
+            gate_pruning_weight=kwargs.pop('gate_pruning_weight', 1e-4),
+            inner_pruning_weight=kwargs.pop('inner_pruning_weight', 1e-5),
+            **kwargs
+        )
 
 
 class NeuromodulationLoss(SCSLoss):
     """신경 조절 메커니즘 손실"""
     def __init__(self, pad_token_id: int, **kwargs):
-        super().__init__(pad_token_id, use_temporal_weighting=True, **kwargs)
+        super().__init__(
+            pad_token_id, 
+            use_temporal_weighting=True,
+            **kwargs
+        )
 
 
 class MultiObjectiveLoss(SCSLoss):
-    """다목적 최적화 손실"""
+    """다목적 최적화 손실 - Axon Pruning 포함"""
     def __init__(self, pad_token_id: int, **kwargs):
         super().__init__(
             pad_token_id, 
-            spike_reg_weight=0.01, 
+            gate_pruning_weight=kwargs.pop('gate_pruning_weight', 1e-4),
+            inner_pruning_weight=kwargs.pop('inner_pruning_weight', 1e-5),
             use_temporal_weighting=True,
-            length_penalty_weight=0.02,
+            length_penalty_weight=kwargs.pop('length_penalty_weight', 0.02),
             **kwargs
         )

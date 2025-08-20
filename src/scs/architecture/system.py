@@ -423,6 +423,7 @@ class SCSSystem(nn.Module):
         """현재 막전위 기준 스파이크 계산"""
         current_spikes = {}
         for node_name, node in self.nodes.items():
+            node.compute_spikes() # 내부 계산
             with torch.no_grad():
                 threshold_exceeded = node.membrane_potential - node.spike_threshold
                 not_refractory = (node.refractory_counter == 0).float()

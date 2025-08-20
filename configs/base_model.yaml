@@ -165,3 +165,22 @@ task:
 # === 평가 설정 ===
 evaluation:
   save_examples: 10
+
+logging:
+  log_level: "INFO"
+  log_dir: "./logs"
+  use_tensorboard: true # 기존 필드 (호환성)
+
+  # 새로운 TensorBoard 설정
+  tensorboard:
+    enabled: true
+    log_dir: "tensorboard_logs"
+    auto_launch: false
+    port: 6006
+    max_images_per_batch: 4
+    histogram_freq: 100
+    log_interval:
+      scalars: 1 # 매 배치마다 스칼라 로깅
+      histograms: 100 # 100배치마다 히스토그램 로깅
+      images: 500 # 500배치마다 이미지 로깅
+      spikes: 50 # 50 CLK마다 스파이크 패턴 로깅

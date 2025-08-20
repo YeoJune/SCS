@@ -108,7 +108,7 @@ learning:
   final_temporal_weight: 1.0 # 나중 CLK에 기본 중요도
 
   gate_pruning_weight: 1e-4 # 패치 게이트 L1 정규화 가중치
-  inner_pruning_weight: 1e-5 # 내부 연결 L1 정규화 가중치
+  inner_pruning_weight: 1e-4 # 내부 연결 L1 정규화 가중치
 
   # 점진적 커리큘럼 학습
   use_curriculum_learning: false

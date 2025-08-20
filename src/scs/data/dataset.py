@@ -23,7 +23,8 @@ class BaseDataset(Dataset):
         tokenizer: SCSTokenizer,
         split: str = "train",
         max_length: int = 256,
-        num_samples: int = -1  # max_samples → num_samples로 변경, -1은 전체
+        num_samples: int = -1,  # max_samples → num_samples로 변경, -1은 전체
+        guide_sep_token: str = "<extra_id_42>"
     ):
         self.dataset_name = dataset_name
         self.tokenizer = tokenizer

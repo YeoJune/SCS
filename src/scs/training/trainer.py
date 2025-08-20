@@ -230,7 +230,21 @@ class SCSTrainer:
         }
     
     def _train_batch(self, batch: Dict[str, torch.Tensor]) -> tuple:
-        """배치 학습 - 대폭 간소화됨"""
+        """배치 학습 - 디버깅 코드가 추가된 버전"""
+        
+        # --- 디버깅 설정 시작 ---
+        DEBUG_GRADIENTS = True 
+        grad_values = {}
+
+        def save_grad(name):
+            def hook(grad):
+                if grad is not None:
+                    grad_values[name] = grad.detach().clone()
+                else:
+                    grad_values[name] = None
+            return hook
+        # --- 디버깅 설정 끝 ---
+
         # 데이터 준비
         input_tokens = batch['input_tokens'].to(self.device)
         target_tokens = batch['target_tokens'].to(self.device) 
@@ -255,12 +269,62 @@ class SCSTrainer:
         if output_logits.shape[1] > 0:
             # 타겟과 같은 길이로 맞춤
             target_subset = target_tokens[:, :output_logits.shape[1]]
-            loss = self.loss_fn(output_logits, target_subset, processing_info)
+            
+            # --- 디버깅: 손실 항 분리 계산 ---
+            loss_fn = self.loss_fn
+            base_loss = loss_fn._compute_base_loss(output_logits, target_subset, processing_info, output_logits.shape[-1])
+            pruning_loss = loss_fn._compute_axon_pruning_loss(processing_info, output_logits.device)
+            
+            loss = base_loss + pruning_loss # + 다른 손실들...
+            # --- 디버깅 끝 ---
+            
         else:
             loss = torch.tensor(0.0, device=self.device, requires_grad=True)
-        
+            base_loss = torch.tensor(0.0)
+            pruning_loss = torch.tensor(0.0)
+
+        # --- 디버깅: Hook 등록 ---
+        if DEBUG_GRADIENTS and loss.requires_grad:
+            # axonal_connections의 첫 번째 연결에 대한 파라미터에 hook을 등록
+            if self.model.axonal_connections.patch_gates:
+                first_conn_key = next(iter(self.model.axonal_connections.patch_gates))
+                
+                gate_param = self.model.axonal_connections.patch_gates[first_conn_key]
+                gate_param.register_hook(save_grad('patch_gates_grad'))
+
+                transform_param = self.model.axonal_connections.patch_transforms[first_conn_key]
+                transform_param.register_hook(save_grad('patch_transforms_grad'))
+            
+            # InputInterface의 mapper 그래디언트도 확인
+            if hasattr(self.model.input_interface, 'pattern_mapper'):
+                self.model.input_interface.pattern_mapper.weight.register_hook(save_grad('input_mapper_grad'))
+        # --- 디버깅 끝 ---
+
         # 역전파
         loss.backward()
+
+        # --- 디버깅: 그래디언트 통계 출력 ---
+        if DEBUG_GRADIENTS:
+            print("\n" + "="*50)
+            print("Gradient Debug Information")
+            print("="*50)
+            print(f"Loss -> Base: {base_loss.item():.6f}, Pruning: {pruning_loss.item():.6f}, Total: {loss.item():.6f}")
+
+            for name, grad_tensor in grad_values.items():
+                if grad_tensor is not None:
+                    print(f"--- Grad for {name} ---")
+                    print(f"  Shape: {grad_tensor.shape}")
+                    print(f"  Mean:  {grad_tensor.mean().item():.6e}")
+                    print(f"  Std:   {grad_tensor.std().item():.6e}")
+                    print(f"  Max:   {grad_tensor.max().item():.6e}")
+                    print(f"  Min:   {grad_tensor.min().item():.6e}")
+                    print(f"  Is NaN: {torch.isnan(grad_tensor).any().item()}")
+                else:
+                    print(f"--- Grad for {name}: IS NONE --- <--- CRITICAL ERROR!")
+            
+            print("="*50 + "\n")
+            
+            
         if self.config.gradient_clip_norm > 0:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip_norm)
         self.optimizer.step()

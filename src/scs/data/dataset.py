@@ -332,7 +332,7 @@ class GLUEDataset(BaseDataset):
     # 각 태스크별 프롬프트 템플릿
     TASK_PROMPTS = {
         'cola': "Judge if this sentence is grammatically acceptable:",
-        'sst2': "Classify the sentiment of this sentence:",
+        'sst2': "",
         'mrpc': "Determine if these two sentences are semantically equivalent:",
         'qqp': "Determine if these two questions are duplicates:",
         'rte': "Determine if the premise entails the hypothesis:",

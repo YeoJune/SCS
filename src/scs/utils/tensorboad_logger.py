@@ -248,7 +248,7 @@ class SCSTensorBoardLogger:
         try:
             cmd = [
                 "tensorboard", 
-                "--logdir", str(self.log_dir), 
+                "--logdir", str(self.log_dir.parent), 
                 "--port", str(port), 
                 "--host", "0.0.0.0"
             ]

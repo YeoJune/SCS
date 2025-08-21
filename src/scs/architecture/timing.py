@@ -158,6 +158,7 @@ class TimingManager:
                     temp_condition = torch.full_like(self.output_ended, True)
                 else:
                     temp_condition = torch.full_like(self.output_ended, False)
+                return temp_condition
                 
                 # EOS 토큰 조건
                 eos_condition = torch.full_like(self.output_ended, False)

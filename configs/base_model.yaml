@@ -177,10 +177,10 @@ logging:
     log_dir: "tensorboard_logs"
     auto_launch: false
     port: 6006
-    max_images_per_batch: 4
+    max_images_per_batch: 10
     histogram_freq: 100
     log_interval:
-      scalars: 1 # 매 배치마다 스칼라 로깅
-      histograms: 100 # 100배치마다 히스토그램 로깅
-      images: 500 # 500배치마다 이미지 로깅
-      spikes: 50 # 50 CLK마다 스파이크 패턴 로깅
+      scalars: 1 # N 배치마다 스칼라 로깅
+      histograms: 10 # N 배치마다 히스토그램 로깅
+      images: 5 # N 배치마다 이미지 로깅
+      spikes: 10 # N CLK마다 스파이크 패턴 로깅

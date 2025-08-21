@@ -31,36 +31,14 @@ brain_regions:
     grid_size: [64, 64]
     decay_rate: 0.8
     distance_tau: 1.0
-  MEM1:
-    grid_size: [64, 64]
-    decay_rate: 0.8
-    distance_tau: 1.0
-  MEM2:
-    grid_size: [64, 64]
-    decay_rate: 0.8
-    distance_tau: 1.0
 
 # === 축삭 연결 ===
 axonal_connections:
   connections:
+    # 기본 정보 처리 경로
     - source: "IN"
-      target: "MEM1"
-      patch_size: 1
-      patch_weight_scale: 1.0
-      inner_weight_scale: 1.0
-    - source: "MEM1"
-      target: "MEM2"
-      patch_size: 2
-      patch_weight_scale: 1.0
-      inner_weight_scale: 1.0
-    - source: "MEM2"
-      target: "MEM1"
-      patch_size: 2
-      patch_weight_scale: 1.0
-      inner_weight_scale: 1.0
-    - source: "MEM2"
       target: "OUT"
-      patch_size: 1
+      patch_size: 2
       patch_weight_scale: 1.0
       inner_weight_scale: 1.0
 
@@ -107,9 +85,9 @@ data_loading:
     max_length: 128
 
 data:
-  train_samples: 2000
-  val_samples: 200
-  test_samples: 200
+  train_samples: 200
+  val_samples: 20
+  test_samples: 20
 
 # === 평가 설정 ===
 evaluation:

@@ -384,6 +384,8 @@ class GLUEDataset(BaseDataset):
             num_samples=num_samples,
             guide_sep_token=guide_sep_token
         )
+
+        print(self.guide_sep_token)
     
     def _load_and_process_data(self) -> List[Dict[str, Any]]:
         """GLUE 데이터 로딩 및 전처리"""

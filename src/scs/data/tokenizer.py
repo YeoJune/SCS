@@ -10,7 +10,7 @@ from transformers import AutoTokenizer
 class SCSTokenizer:
     """SCS용 토크나이저"""
     
-    def __init__(self, tokenizer_name: str = "bert-base-uncased"):
+    def __init__(self, tokenizer_name: str = "t5-small"):
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         self.vocab_size = self.tokenizer.vocab_size
         

@@ -107,7 +107,7 @@ learning:
   initial_temporal_weight: 5.0 # 초기 CLK에 높은 중요도
   final_temporal_weight: 1.0 # 나중 CLK에 기본 중요도
 
-  guide_sep_token_id: 32141
+  guide_sep_token_id: 32057
   guide_weight: 0.3
 
   gate_pruning_weight: 1e-4 # 패치 게이트 L1 정규화 가중치

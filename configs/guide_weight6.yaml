@@ -1,0 +1,9 @@
+# configs/guide_weight6.yaml
+
+# === 기본 설정 상속 ===
+defaults:
+  - glue_test
+
+# === 학습 설정 오버라이드 ===
+learning:
+  guide_weight: 0.6

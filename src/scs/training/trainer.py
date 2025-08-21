@@ -75,7 +75,12 @@ class SCSTrainer:
         # 텐서보드 로그 초기화
         self.tb_logger = None
         if tensorboard_config and tensorboard_config.get('enabled', False):
-            tb_log_dir = experiment_dir.replace("experiments", tensorboard_config.get('log_dir', 'tensorboard_logs'))
+            exp_dir_str = str(experiment_dir)
+
+            log_base_name = tensorboard_config.get('log_dir', 'runs')
+            tb_log_dir_str = exp_dir_str.replace('experiments', log_base_name, 1)
+
+            tb_log_dir = Path(tb_log_dir_str)
             self.tb_logger = SCSTensorBoardLogger(tb_log_dir, tensorboard_config)
 
     

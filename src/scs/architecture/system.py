@@ -483,7 +483,7 @@ class SCSSystem(nn.Module):
             spikes = current_spikes[node_name]
             node.post_spike_update(spikes)
     
-    def _generate_logits(self, current_spikes, decoder_input_ids: torch.Tensor) -> torch.Tensor:
+    def _generate_logits(self, current_spikes: Dict[str, torch.Tensor], decoder_input_ids: torch.Tensor) -> torch.Tensor:
         """출력 인터페이스를 통한 로짓 생성"""
         # OutputInterface 윈도우 업데이트
         output_spikes = current_spikes[self.output_node]

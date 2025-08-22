@@ -278,7 +278,7 @@ class SCSSystem(nn.Module):
                 if max_len_for_decoder > 0:
                     max_len_for_decoder = min(max_len_for_decoder, self.decoder_window_size)
                     decoder_batch = self.decoder_sequences[:, :max_len_for_decoder]
-                    logits = self._generate_logits(decoder_batch)
+                    logits = self._generate_logits(current_spikes, decoder_batch)
                     
                     # 로짓 저장 및 디코더 업데이트
                     self._update_outputs_and_decoder(
@@ -483,10 +483,10 @@ class SCSSystem(nn.Module):
             spikes = current_spikes[node_name]
             node.post_spike_update(spikes)
     
-    def _generate_logits(self, decoder_input_ids: torch.Tensor) -> torch.Tensor:
+    def _generate_logits(self, current_spikes, decoder_input_ids: torch.Tensor) -> torch.Tensor:
         """출력 인터페이스를 통한 로짓 생성"""
         # OutputInterface 윈도우 업데이트
-        output_spikes = self._compute_spikes()[self.output_node]
+        output_spikes = current_spikes[self.output_node]
         self.output_interface.update_hidden_window(output_spikes)
         
         # 로짓 생성

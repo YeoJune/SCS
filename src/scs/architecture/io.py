@@ -151,37 +151,30 @@ class T5Attention(nn.Module):
         
         # Apply attention mask
         if attention_mask is not None:
-            # Cross-Attention에서 key_value_states가 있으면 key padding mask 처리
-            if key_value_states is not None and attention_mask.dim() == 2 and attention_mask.shape[0] != attention_mask.shape[1]:
-                # Cross-Attention key padding mask: (batch_size, key_length) -> (batch_size, 1, 1, key_length)
-                attention_mask = attention_mask.unsqueeze(1).unsqueeze(1)
+            # Extend attention_mask to 4D: (batch_size, 1, query_length, key_length)
+            if attention_mask.dim() == 3:
+                # Self-attention combined mask: (batch_size, query_length, key_length)
+                extended_attention_mask = attention_mask[:, None, :, :]
             elif attention_mask.dim() == 2:
-                if attention_mask.shape[0] == attention_mask.shape[1]:
-                    # Causal mask: (seq_length, seq_length) -> (1, 1, seq_length, seq_length)
-                    attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)
+                if key_value_states is not None:
+                    # Cross-attention key padding mask: (batch_size, key_length)
+                    extended_attention_mask = attention_mask[:, None, None, :]
                 else:
-                    # Self-Attention key padding mask: (batch_size, seq_length) -> (batch_size, 1, 1, seq_length)
-                    attention_mask = attention_mask.unsqueeze(1).unsqueeze(1)
-            elif attention_mask.dim() == 3:
-                # Combined mask: (batch_size, query_length, key_length) -> (batch_size, 1, query_length, key_length)  
-                attention_mask = attention_mask.unsqueeze(1)
-            elif attention_mask.dim() == 4:
-                # Already in correct shape: (batch_size, n_heads, query_length, key_length)
-                pass
+                    # Self-attention key padding mask: (batch_size, seq_length) or causal mask: (seq_length, seq_length)
+                    if attention_mask.shape[0] == batch_size:
+                        extended_attention_mask = attention_mask[:, None, None, :]
+                    else:
+                        extended_attention_mask = attention_mask[None, None, :, :]
+            else:
+                extended_attention_mask = attention_mask
             
             # Convert to additive mask
-            if attention_mask.dtype == torch.bool:
-                # True = attend, False = mask
-                attention_mask = attention_mask.masked_fill(~attention_mask, float('-inf')).masked_fill(attention_mask, 0.0)
-            else:
-                # 1 = attend, 0 = mask (causal mask에서 -inf는 mask, 0은 attend)
-                if torch.any(attention_mask == float('-inf')):
-                    # 이미 additive mask 형태
-                    pass  # 변환하지 않음
-                else:
-                    attention_mask = (1.0 - attention_mask) * -1e9
+            if extended_attention_mask.dtype == torch.bool:
+                extended_attention_mask = extended_attention_mask.masked_fill(
+                    ~extended_attention_mask, float('-inf')
+                ).masked_fill(extended_attention_mask, 0.0)
             
-            scores = scores + attention_mask
+            scores += extended_attention_mask
         
         # Softmax and dropout
         attn_weights = F.softmax(scores.float(), dim=-1).type_as(scores)

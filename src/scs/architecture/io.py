@@ -77,51 +77,157 @@ class MultiheadAttention(nn.Module):
                 need_weights: bool = True, attn_mask: Optional[Tensor] = None, average_attn_weights: bool = True,
                 is_causal: bool = False) -> Tuple[Tensor, Optional[Tensor]]:
         
-        # === START: PyTorch 공식 로직 ===
+        # =========================================================================
+        # START: functional.py의 multi_head_attention_forward 로직 이식
+        # =========================================================================
+
+        # 1. Shape 검증 및 배치 처리 (functional.py의 _mha_shape_check 및 초반 로직)
         is_batched = query.dim() == 3
-        # batch_first가 True이면 (S, B, E) -> (B, S, E)로 바꿔서 F.m_h_a_f에 전달해야 함
-        # 하지만 F.m_h_a_f는 내부적으로 (S, B, E)를 기준으로 동작하므로, 여기서는 그에 맞춰줌
-        if self.batch_first and is_batched:
-            # make sure that the transpose op does not affect the "is" property
-            if key is value:
-                if query is key:
-                    query = key = value = query.transpose(1, 0)
-                else:
-                    query, key = (x.transpose(1, 0) for x in (query, key))
-                    value = key
+        if not is_batched:
+            # unbatched 입력을 batched처럼 처리하기 위해 차원 추가
+            query = query.unsqueeze(1)
+            key = key.unsqueeze(1)
+            value = value.unsqueeze(1)
+            if key_padding_mask is not None:
+                key_padding_mask = key_padding_mask.unsqueeze(0)
+        
+        # `batch_first`는 nn.Module 레벨의 인터페이스. functional 레벨은 (S, N, E)를 기본으로 함
+        if self.batch_first:
+            query, key, value = [x.transpose(1, 0) for x in (query, key, value)]
+
+        # 2. 차원 정보 설정 및 마스크 정규화 (functional.py 로직)
+        tgt_len, bsz, embed_dim = query.shape
+        src_len, _, _ = key.shape
+        head_dim = self.embed_dim // self.num_heads
+        assert head_dim * self.num_heads == self.embed_dim, f"embed_dim {self.embed_dim} not divisible by num_heads {self.num_heads}"
+
+        # 3. 입력 프로젝션 (functional.py의 _in_projection_packed 로직)
+        if self._qkv_same_embed_dim:
+            # self-attention fast path
+            q, k, v = F.linear(query, self.in_proj_weight, self.in_proj_bias).chunk(3, dim=-1)
+        else:
+            # separate q, k, v projection
+            if self.in_proj_bias is None:
+                b_q = b_k = b_v = None
             else:
-                query, key, value = (x.transpose(1, 0) for x in (query, key, value))
+                b_q, b_k, b_v = self.in_proj_bias.chunk(3)
+            q = F.linear(query, self.q_proj_weight, b_q)
+            k = F.linear(key, self.k_proj_weight, b_k)
+            v = F.linear(value, self.v_proj_weight, b_v)
 
-        # F.multi_head_attention_forward 호출
-        if not self._qkv_same_embed_dim:
-            attn_output, attn_output_weights = F.multi_head_attention_forward(
-                query, key, value, self.embed_dim, self.num_heads,
-                self.in_proj_weight, self.in_proj_bias,
-                self.bias_k, self.bias_v, self.add_zero_attn,
-                self.dropout, self.out_proj.weight, self.out_proj.bias,
-                training=self.training,
-                key_padding_mask=key_padding_mask, need_weights=need_weights,
-                attn_mask=attn_mask, use_separate_proj_weight=True,
-                q_proj_weight=self.q_proj_weight, k_proj_weight=self.k_proj_weight,
-                v_proj_weight=self.v_proj_weight, average_attn_weights=average_attn_weights,
-                is_causal=is_causal)
-        else:
-            attn_output, attn_output_weights = F.multi_head_attention_forward(
-                query, key, value, self.embed_dim, self.num_heads,
-                self.in_proj_weight, self.in_proj_bias,
-                self.bias_k, self.bias_v, self.add_zero_attn,
-                self.dropout, self.out_proj.weight, self.out_proj.bias,
-                training=self.training,
-                key_padding_mask=key_padding_mask, need_weights=need_weights,
-                attn_mask=attn_mask, average_attn_weights=average_attn_weights,
-                is_causal=is_causal)
+        # 4. Reshape q, k, v for multihead attention
+        q = q.contiguous().view(tgt_len, bsz * self.num_heads, head_dim).transpose(0, 1)
+        k = k.contiguous().view(src_len, bsz * self.num_heads, head_dim).transpose(0, 1)
+        v = v.contiguous().view(src_len, bsz * self.num_heads, head_dim).transpose(0, 1)
+        
+        # 5. bias_k, bias_v 및 zero_attn 처리 (소스 코드에선 프로젝션 이후에 처리됨)
+        # 이 부분은 PyTorch 1.12 이전 버전의 로직이며, 최신 버전에선 SDPA 내부에서 처리될 수 있음
+        # 호환성을 위해 유지
+        if self.bias_k is not None and self.bias_v is not None:
+            k = torch.cat([k.transpose(0, 1), self.bias_k.repeat(1, bsz, 1)]).transpose(0, 1)
+            v = torch.cat([v.transpose(0, 1), self.bias_v.repeat(1, bsz, 1)]).transpose(0, 1)
+            if attn_mask is not None:
+                attn_mask = F.pad(attn_mask, (0, 1))
+            if key_padding_mask is not None:
+                key_padding_mask = F.pad(key_padding_mask, (0, 1))
 
-        # batch_first가 True였으면 다시 (B, S, E) 형태로 복원
-        if self.batch_first and is_batched:
-            return attn_output.transpose(1, 0), attn_output_weights
+        if self.add_zero_attn:
+            zero_attn_shape = (bsz * self.num_heads, 1, head_dim)
+            k = torch.cat([k, torch.zeros(zero_attn_shape, dtype=k.dtype, device=k.device)], dim=1)
+            v = torch.cat([v, torch.zeros(zero_attn_shape, dtype=v.dtype, device=v.device)], dim=1)
+            if attn_mask is not None:
+                attn_mask = F.pad(attn_mask, (0, 1))
+            if key_padding_mask is not None:
+                key_padding_mask = F.pad(key_padding_mask, (0, 1))
+        
+        # src_len 최종 업데이트
+        src_len = k.size(1)
+
+        # 6. 마스크 통합 및 최종 어텐션 계산
+        if key_padding_mask is not None:
+            assert key_padding_mask.shape == (bsz, src_len), \
+                f"expecting key_padding_mask shape of {(bsz, src_len)}, but got {key_padding_mask.shape}"
+            key_padding_mask = key_padding_mask.view(bsz, 1, 1, src_len).   \
+                expand(-1, self.num_heads, -1, -1).reshape(bsz * self.num_heads, 1, src_len)
+            if attn_mask is None:
+                attn_mask = key_padding_mask
+            elif attn_mask.dtype == torch.bool:
+                attn_mask = attn_mask.logical_or(key_padding_mask)
+            else:
+                attn_mask = attn_mask.add(key_padding_mask)
+
+        # dropout 확률 조정
+        if not self.training:
+            dropout_p = 0.0
         else:
-            return attn_output, attn_output_weights
-        # === END: PyTorch 공식 로직 ===
+            dropout_p = self.dropout
+
+        # (★핵심★) 어텐션 계산. 아직 bias는 추가하지 않음.
+        # 이 부분이 T5 bias를 추가할 위치.
+        # need_weights=False일 때와 True일 때의 로직이 나뉨
+        
+        attn_output: Tensor
+        attn_output_weights: Optional[Tensor] = None
+        
+        # PyTorch 2.0+ 에서는 F.scaled_dot_product_attention (SDPA)가 기본.
+        # SDPA는 need_weights=False일 때 최적화되어 있음
+        if not need_weights:
+            # SDPA는 4D 입력을 기대 (N, H, L, E)
+            q_sdpa = q.view(bsz, self.num_heads, tgt_len, head_dim)
+            k_sdpa = k.view(bsz, self.num_heads, src_len, head_dim)
+            v_sdpa = v.view(bsz, self.num_heads, src_len, head_dim)
+            
+            # attn_mask도 SDPA에 맞게 reshape
+            if attn_mask is not None:
+                # (B*H, L, S) or (B*H, 1, S) -> (B, H, L, S)
+                if attn_mask.dim() == 3 and attn_mask.size(1) == 1: # key_padding_mask
+                    attn_mask = attn_mask.view(bsz, self.num_heads, 1, src_len)
+                elif attn_mask.dim() == 3:
+                     attn_mask = attn_mask.view(bsz, self.num_heads, tgt_len, src_len)
+
+            attn_output = F.scaled_dot_product_attention(q_sdpa, k_sdpa, v_sdpa, attn_mask, dropout_p, is_causal)
+            # (B, H, L, E) -> (L, B, H*E) -> (L, B, D)
+            attn_output = attn_output.transpose(1, 2).contiguous().view(tgt_len, bsz, self.embed_dim)
+        else:
+            # 수동 계산 (need_weights=True)
+            attn_output_weights = torch.bmm(q, k.transpose(1, 2))
+            attn_output_weights = attn_output_weights / math.sqrt(head_dim)
+            
+            if attn_mask is not None:
+                if attn_mask.dtype == torch.bool:
+                    attn_output_weights.masked_fill_(attn_mask, float('-inf'))
+                else:
+                    attn_output_weights += attn_mask
+
+            attn_output_weights = F.softmax(attn_output_weights, dim=-1)
+            attn_output_weights = F.dropout(attn_output_weights, p=dropout_p, training=self.training)
+            
+            attn_output = torch.bmm(attn_output_weights, v)
+            # (B*H, L, E) -> (L, B*H, E) -> (L, B, H*E=D)
+            attn_output = attn_output.transpose(0, 1).contiguous().view(tgt_len, bsz, self.embed_dim)
+
+        # 7. 출력 프로젝션
+        attn_output = self.out_proj(attn_output)
+        
+        # 8. 최종 결과 정리
+        if need_weights:
+            # (B*H, L, S) -> (B, H, L, S)
+            attn_output_weights = attn_output_weights.view(bsz, self.num_heads, tgt_len, src_len)
+            if average_attn_weights:
+                attn_output_weights = attn_output_weights.sum(dim=1) / self.num_heads
+        
+        # batch_first 와 unbatched 입력에 맞춰 최종 출력 형태 조정
+        if self.batch_first:
+            attn_output = attn_output.transpose(1, 0)
+
+        if not is_batched:
+            attn_output = attn_output.squeeze(0 if self.batch_first else 1)
+            if need_weights and average_attn_weights:
+                attn_output_weights = attn_output_weights.squeeze(0)
+            elif need_weights: # not average_attn_weights
+                 attn_output_weights = attn_output_weights.view(self.num_heads, tgt_len, src_len)
+        
+        return attn_output, attn_output_weights if need_weights else None
 
 class TransformerEncoderLayer(nn.Module):
     """PyTorch nn.TransformerEncoderLayer와 완전히 동일한 구현"""

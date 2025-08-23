@@ -873,6 +873,7 @@ class OutputInterface(nn.Module):
             nhead=decoder_heads,
             dim_feedforward=dim_feedforward,
             dropout=dropout,
+            norm_first=True,
             batch_first=True
         )
         self.transformer_decoder = TransformerDecoder(

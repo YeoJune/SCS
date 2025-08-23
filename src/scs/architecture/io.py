@@ -213,9 +213,11 @@ class T5LayerSelfAttention(nn.Module):
     
     def forward(self, hidden_states, attention_mask=None, position_bias=None, 
                 output_attentions=False):
+        normed_hidden_states = self.layer_norm(hidden_states)
+
         # Self-attention
         attention_output = self.SelfAttention(
-            hidden_states,
+            normed_hidden_states,
             attention_mask=attention_mask,
             position_bias=position_bias,
             output_attentions=output_attentions

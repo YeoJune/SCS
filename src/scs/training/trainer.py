@@ -278,6 +278,27 @@ class SCSTrainer:
     
     def _train_batch(self, batch: Dict[str, torch.Tensor]) -> tuple:
         """배치 학습 - 대폭 간소화됨"""
+            
+        # --- 디버깅 코드 ---
+        print("\n" + "="*20 + " BATCH DEBUG START " + "="*20)
+        # 0번째 샘플만 확인
+        sample_idx = 0
+        input_t = batch['input_tokens'][sample_idx]
+        target_t = batch['target_tokens'][sample_idx]
+
+        print(f"INPUT TOKENS (shape {input_t.shape}):\n{self._decode_tokens_to_text(input_t)}")
+        print(f"TARGET TOKENS (shape {target_t.shape}):\n{self._decode_tokens_to_text(target_t)}")
+
+        # target_tokens에 guide_sep_token_id가 있는지 확인
+        sep_id = self.config.guide_sep_token_id
+        if sep_id in target_t:
+            sep_index = (target_t == sep_id).nonzero(as_tuple=True)[0][0].item()
+            print(f"GUIDE_SEP_TOKEN ({sep_id}) FOUND at index {sep_index}")
+        else:
+            print(f"!!!!!!!!!! CRITICAL WARNING: GUIDE_SEP_TOKEN ({sep_id}) NOT FOUND in target_tokens !!!!!!!!!!")
+        print("="*21 + " BATCH DEBUG END " + "="*21 + "\n")
+        # --- 디버깅 코드 끝 ---
+
         # 데이터 준비
         input_tokens = batch['input_tokens'].to(self.device)
         target_tokens = batch['target_tokens'].to(self.device) 

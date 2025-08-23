@@ -125,12 +125,14 @@ learning:
       - "input_interface.transformer_encoder"
       - "input_interface.pattern_mapper"
       - "input_interface.layer_norm"
+      - "input_interface.relative_attention_bias"
 
       - "output_interface.token_embedding"
       - "output_interface.final_projection"
       - "output_interface.layer_norm"
       - "output_interface.spatial_compressor"
       - "output_interface.transformer_decoder.layers.0.self_attn"
+      - "output_interface.relative_attention_bias"
     unfreeze_schedule: # 에포크별 해제 스케줄
       10000: # 에포크 10000에 T5 임베딩 해제
         - "input_interface.token_embedding"

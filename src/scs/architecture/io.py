@@ -147,7 +147,7 @@ class T5Attention(nn.Module):
             else:
                 position_bias = self.compute_bias(real_seq_length, key_length)
         
-        #scores += position_bias
+        scores += position_bias
         
         # Apply attention mask
         if attention_mask is not None:
@@ -213,12 +213,9 @@ class T5LayerSelfAttention(nn.Module):
     
     def forward(self, hidden_states, attention_mask=None, position_bias=None, 
                 output_attentions=False):
-        # Pre-norm
-        normed_hidden_states = self.layer_norm(hidden_states)
-        
         # Self-attention
         attention_output = self.SelfAttention(
-            normed_hidden_states,
+            hidden_states,
             attention_mask=attention_mask,
             position_bias=position_bias,
             output_attentions=output_attentions
@@ -1054,8 +1051,7 @@ class OutputInterface(nn.Module):
         else:
             combined_embeds = token_embeds
         
-        # 정규화
-        return self.layer_norm(combined_embeds)
+        return combined_embeds
     
     def _generate_causal_mask(self, size: int) -> torch.Tensor:
         """자기회귀를 위한 causal mask 생성 (기존 유지)"""

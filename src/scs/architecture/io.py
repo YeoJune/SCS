@@ -498,35 +498,32 @@ class CustomT5Decoder(nn.Module):
         Causal mask와 Padding mask를 올바르게 결합
         
         Args:
-            tgt_mask: (seq_len, seq_len) causal mask
-            tgt_key_padding_mask: (batch_size, seq_len) padding mask
+            tgt_mask: (seq_len, seq_len) causal mask (float type: 0과 -inf)
+            tgt_key_padding_mask: (batch_size, seq_len) padding mask (boolean type)
             seq_len: sequence length
             
         Returns:
-            combined_mask: 결합된 attention mask
+            combined_mask: 결합된 attention mask (boolean type for T5Attention)
         """
-        # Causal mask 변환
-        causal_mask = self._convert_causal_mask(tgt_mask, seq_len) if tgt_mask is not None else None
-        
-        # Padding mask가 없으면 causal mask만 반환
+        # Padding mask가 없으면 causal mask만 변환하여 반환
         if tgt_key_padding_mask is None:
-            return causal_mask
+            return self._convert_causal_mask(tgt_mask, seq_len) if tgt_mask is not None else None
         
         # Causal mask가 없으면 padding mask만 반환
-        if causal_mask is None:
+        if tgt_mask is None:
             return tgt_key_padding_mask
         
         # 두 마스크 모두 있는 경우 결합
-        # causal_mask: (seq_len, seq_len) boolean
-        # tgt_key_padding_mask: (batch_size, seq_len) boolean  
+        # 1. Causal mask를 boolean으로 변환
+        causal_mask_bool = self._convert_causal_mask(tgt_mask, seq_len)  # (seq_len, seq_len) boolean
         
-        # causal_mask를 batch 차원으로 확장: (1, seq_len, seq_len)
-        causal_mask_expanded = causal_mask.unsqueeze(0)
+        # 2. Causal mask를 batch 차원으로 확장: (1, seq_len, seq_len)
+        causal_mask_expanded = causal_mask_bool.unsqueeze(0)
         
-        # padding_mask를 attention 차원으로 확장: (batch_size, 1, seq_len)
+        # 3. Padding mask를 attention 차원으로 확장: (batch_size, 1, seq_len)
         padding_mask_expanded = tgt_key_padding_mask.unsqueeze(1)
         
-        # 브로드캐스팅으로 결합: (batch_size, seq_len, seq_len)
+        # 4. 브로드캐스팅으로 결합: (batch_size, seq_len, seq_len)
         # 둘 다 True여야 attend 가능
         combined_mask = causal_mask_expanded & padding_mask_expanded
         

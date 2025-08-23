@@ -79,7 +79,6 @@ class MultiheadAttention(nn.Module):
         is_batched = query.dim() == 3
         
         # PyTorch 공식 구현과 똑같이: batch_first 처리
-        why_not_sparsity_fast_path = ''
         if self.batch_first and is_batched:
             if query is key and key is value:
                 query = key = value = query.transpose(1, 0)
@@ -109,14 +108,6 @@ class MultiheadAttention(nn.Module):
             k = F.linear(key, self.k_proj_weight, b_k)
             v = F.linear(value, self.v_proj_weight, b_v)
         
-        # PyTorch 공식과 똑같이: multi-head reshape
-        q = q.contiguous().view(tgt_len, bsz * self.num_heads, self.head_dim).transpose(0, 1)
-        k = k.contiguous().view(-1, bsz * self.num_heads, self.head_dim).transpose(0, 1)
-        v = v.contiguous().view(-1, bsz * self.num_heads, self.head_dim).transpose(0, 1)
-        
-        # PyTorch 공식과 똑같이: src_len 업데이트 (bias_k, add_zero_attn 전)
-        src_len = k.size(1)
-        
         # PyTorch 공식과 똑같이: bias_k, bias_v 처리
         if self.bias_k is not None and self.bias_v is not None:
             k = torch.cat([k, self.bias_k.repeat(1, bsz, 1)])
@@ -125,46 +116,76 @@ class MultiheadAttention(nn.Module):
                 attn_mask = F.pad(attn_mask, (0, 1))
             if key_padding_mask is not None:
                 key_padding_mask = F.pad(key_padding_mask, (0, 1))
-        
+
         # PyTorch 공식과 똑같이: zero attention 처리  
         if self.add_zero_attn:
-            zero_attn_shape = (bsz * self.num_heads, 1, self.head_dim)
-            k = torch.cat([k, torch.zeros(zero_attn_shape, dtype=k.dtype, device=k.device)], dim=1)
-            v = torch.cat([v, torch.zeros(zero_attn_shape, dtype=v.dtype, device=v.device)], dim=1)
+            # src_len 업데이트 전 zero_attn을 추가해야 함.
+            zero_attn_shape = (1, bsz, self.head_dim * self.num_heads)
+            k = torch.cat([k, torch.zeros(zero_attn_shape, dtype=k.dtype, device=k.device)], dim=0)
+            v = torch.cat([v, torch.zeros(zero_attn_shape, dtype=v.dtype, device=v.device)], dim=0)
             if attn_mask is not None:
                 attn_mask = F.pad(attn_mask, (0, 1))
             if key_padding_mask is not None:
                 key_padding_mask = F.pad(key_padding_mask, (0, 1))
         
-        # PyTorch 공식과 똑같이: src_len 최종 업데이트
-        src_len = k.size(1)
+        # PyTorch 공식과 똑같이: multi-head reshape
+        q = q.contiguous().view(tgt_len, bsz * self.num_heads, self.head_dim).transpose(0, 1)
+        k = k.contiguous().view(-1, bsz * self.num_heads, self.head_dim).transpose(0, 1)
+        v = v.contiguous().view(-1, bsz * self.num_heads, self.head_dim).transpose(0, 1)
         
+        # src_len 최종 업데이트
+        src_len = k.size(1)
+
+        # =========================================================================
+        # START: 마스크 처리 로직 수정 (functional.py 기반)
+        # =========================================================================
+        
+        # functional.py의 _canonical_mask 동작 모사
+        def to_float_mask(mask: Optional[Tensor], dtype: torch.dtype) -> Optional[Tensor]:
+            if mask is not None and mask.dtype == torch.bool:
+                return torch.zeros_like(mask, dtype=dtype).masked_fill_(mask, float("-inf"))
+            return mask
+
+        attn_mask = to_float_mask(attn_mask, q.dtype)
+        key_padding_mask = to_float_mask(key_padding_mask, q.dtype)
+
+        # is_causal 힌트가 있고, 다른 마스크가 없으면 Causal 마스크를 생성
+        if is_causal and attn_mask is None and key_padding_mask is None:
+            # PyTorch 2.0부터는 is_causal=True이면 attn_mask가 None이어야 함
+            if tgt_len == src_len:
+                attn_mask = torch.triu(
+                    torch.full((tgt_len, src_len), float("-inf"), device=q.device, dtype=q.dtype),
+                    diagonal=1,
+                )
+            else:
+                # is_causal은 tgt_len == src_len일 때만 의미가 있으므로, 아닐 경우 경고
+                warnings.warn(f"is_causal=True is not supported when tgt_len({tgt_len}) != src_len({src_len}).")
+        
+        # key_padding_mask와 attn_mask 병합
+        if key_padding_mask is not None:
+            # key_padding_mask: (bsz, src_len) -> (bsz, 1, 1, src_len) -> (bsz * num_heads, 1, src_len)
+            merged_mask = key_padding_mask.view(bsz, 1, 1, src_len).expand(-1, self.num_heads, -1, -1).reshape(bsz * self.num_heads, 1, src_len)
+            if attn_mask is None:
+                attn_mask = merged_mask
+            else:
+                # attn_mask: (bsz * num_heads, tgt_len, src_len) 또는 (tgt_len, src_len)
+                # 브로드캐스팅을 위해 차원을 맞춰줌
+                if attn_mask.dim() == 2:
+                    attn_mask = attn_mask.unsqueeze(0)
+                attn_mask = attn_mask + merged_mask
+
+        # =========================================================================
+        # END: 마스크 처리 로직 수정
+        # =========================================================================
+
         # PyTorch 공식과 똑같이: attention weights 계산
         attn_output_weights = torch.bmm(q, k.transpose(1, 2))
         attn_output_weights = attn_output_weights / math.sqrt(self.head_dim)
         
-        # PyTorch 공식과 똑같이: is_causal과 attn_mask를 모두 처리
-        # F.scaled_dot_product_attention의 내부 로직을 직접 구현
-        if is_causal:
-            # is_causal이 True이면, attn_mask가 있든 없든 causal mask를 먼저 적용합니다.
-            temp_mask = torch.ones(tgt_len, src_len, dtype=torch.bool, device=q.device).tril(diagonal=0).logical_not()
-            attn_output_weights.masked_fill_(temp_mask, float('-inf'))
-        
-        # 사용자가 제공한 attn_mask가 있다면 추가로 적용합니다.
+        # 통합된 마스크를 한 번에 적용
         if attn_mask is not None:
-            if attn_mask.dtype == torch.bool:
-                attn_output_weights.masked_fill_(attn_mask, float('-inf'))
-            else:
-                attn_output_weights += attn_mask
-        
-        # PyTorch 공식과 똑같이: key padding mask 적용
-        if key_padding_mask is not None:
-            attn_output_weights = attn_output_weights.view(bsz, self.num_heads, tgt_len, src_len)
-            attn_output_weights = attn_output_weights.masked_fill(
-                key_padding_mask.unsqueeze(1).unsqueeze(2), float('-inf')
-            )
-            attn_output_weights = attn_output_weights.view(bsz * self.num_heads, tgt_len, src_len)
-        
+            attn_output_weights += attn_mask
+
         # PyTorch 공식과 똑같이: softmax + dropout
         attn_output_weights = F.softmax(attn_output_weights, dim=-1)
         attn_output_weights = F.dropout(attn_output_weights, p=self.dropout, training=self.training)
@@ -193,7 +214,6 @@ class MultiheadAttention(nn.Module):
             return attn_output, attn_output_weights
         else:
             return attn_output, None
-
 
 class TransformerEncoderLayer(nn.Module):
     """PyTorch nn.TransformerEncoderLayer와 완전히 동일한 구현"""
@@ -1030,7 +1050,7 @@ class OutputInterface(nn.Module):
         
         # 순환 버퍼를 시간 순서로 재정렬
         rolled_window = torch.roll(self.hidden_window, shifts=-self.window_ptr, dims=1)
-        
+
         tgt_mask = self._generate_causal_mask(seq_len)
 
         # 손 구현 Transformer 디코더 실행 (causal mask는 is_causal=True로만 처리)

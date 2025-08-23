@@ -151,16 +151,23 @@ class T5Attention(nn.Module):
         
         # Apply attention mask
         if attention_mask is not None:
-            if attention_mask.dim() == 2:
+            # Cross-Attention에서 key_value_states가 있으면 key padding mask 처리
+            if key_value_states is not None and attention_mask.dim() == 2 and attention_mask.shape[0] != attention_mask.shape[1]:
+                # Cross-Attention key padding mask: (batch_size, key_length) -> (batch_size, 1, 1, key_length)
+                attention_mask = attention_mask.unsqueeze(1).unsqueeze(1)
+            elif attention_mask.dim() == 2:
                 if attention_mask.shape[0] == attention_mask.shape[1]:
                     # Causal mask: (seq_length, seq_length) -> (1, 1, seq_length, seq_length)
                     attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)
                 else:
-                    # Key padding mask: (batch_size, key_length) -> (batch_size, 1, 1, key_length)
-                    attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+                    # Self-Attention key padding mask: (batch_size, seq_length) -> (batch_size, 1, 1, seq_length)
+                    attention_mask = attention_mask.unsqueeze(1).unsqueeze(1)
             elif attention_mask.dim() == 3:
-                # Sequence mask: (batch_size, seq_length, seq_length) -> (batch_size, 1, seq_length, seq_length)
+                # Combined mask: (batch_size, query_length, key_length) -> (batch_size, 1, query_length, key_length)  
                 attention_mask = attention_mask.unsqueeze(1)
+            elif attention_mask.dim() == 4:
+                # Already in correct shape: (batch_size, n_heads, query_length, key_length)
+                pass
             
             # Convert to additive mask
             if attention_mask.dtype == torch.bool:

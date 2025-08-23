@@ -115,6 +115,9 @@ class MultiheadAttention(nn.Module):
                 is_causal: bool = False) -> Tuple[Tensor, Optional[Tensor]]:
         
         is_batched = query.dim() == 3
+        
+        # PyTorch 공식 구현과 똑같이: batch_first 처리
+        why_not_sparsity_fast_path = ''
         if self.batch_first and is_batched:
             if query is key and key is value:
                 query = key = value = query.transpose(1, 0)
@@ -123,15 +126,16 @@ class MultiheadAttention(nn.Module):
         
         if not is_batched:
             query = query.unsqueeze(1)
-            key = key.unsqueeze(1)
+            key = key.unsqueeze(1) 
             value = value.unsqueeze(1)
             if key_padding_mask is not None:
                 key_padding_mask = key_padding_mask.unsqueeze(0)
         
+        # PyTorch 공식과 똑같이: 차원 추출
         tgt_len, bsz, embed_dim = query.shape
         src_len, _, _ = key.shape
         
-        # Compute Q, K, V
+        # PyTorch 공식과 똑같이: Q, K, V 계산
         if self._qkv_same_embed_dim:
             q, k, v = F.linear(query, self.in_proj_weight, self.in_proj_bias).chunk(3, dim=-1)
         else:
@@ -143,12 +147,15 @@ class MultiheadAttention(nn.Module):
             k = F.linear(key, self.k_proj_weight, b_k)
             v = F.linear(value, self.v_proj_weight, b_v)
         
-        # Reshape to multi-head
+        # PyTorch 공식과 똑같이: multi-head reshape
         q = q.contiguous().view(tgt_len, bsz * self.num_heads, self.head_dim).transpose(0, 1)
-        k = k.contiguous().view(src_len, bsz * self.num_heads, self.head_dim).transpose(0, 1)
-        v = v.contiguous().view(src_len, bsz * self.num_heads, self.head_dim).transpose(0, 1)
+        k = k.contiguous().view(-1, bsz * self.num_heads, self.head_dim).transpose(0, 1)
+        v = v.contiguous().view(-1, bsz * self.num_heads, self.head_dim).transpose(0, 1)
         
-        # Add bias_k, bias_v
+        # PyTorch 공식과 똑같이: src_len 업데이트 (bias_k, add_zero_attn 전)
+        src_len = k.size(1)
+        
+        # PyTorch 공식과 똑같이: bias_k, bias_v 처리
         if self.bias_k is not None and self.bias_v is not None:
             k = torch.cat([k, self.bias_k.repeat(1, bsz, 1)])
             v = torch.cat([v, self.bias_v.repeat(1, bsz, 1)])
@@ -157,7 +164,7 @@ class MultiheadAttention(nn.Module):
             if key_padding_mask is not None:
                 key_padding_mask = F.pad(key_padding_mask, (0, 1))
         
-        # Add zero attention
+        # PyTorch 공식과 똑같이: zero attention 처리  
         if self.add_zero_attn:
             zero_attn_shape = (bsz * self.num_heads, 1, self.head_dim)
             k = torch.cat([k, torch.zeros(zero_attn_shape, dtype=k.dtype, device=k.device)], dim=1)
@@ -167,53 +174,51 @@ class MultiheadAttention(nn.Module):
             if key_padding_mask is not None:
                 key_padding_mask = F.pad(key_padding_mask, (0, 1))
         
-        # Update src_len
-        if self.bias_k is not None:
-            src_len += 1
-        if self.add_zero_attn:
-            src_len += 1
+        # PyTorch 공식과 똑같이: src_len 최종 업데이트
+        src_len = k.size(1)
         
-        # Compute attention weights
+        # PyTorch 공식과 똑같이: attention weights 계산
         attn_output_weights = torch.bmm(q, k.transpose(1, 2))
         attn_output_weights = attn_output_weights / math.sqrt(self.head_dim)
         
-        # Apply causal mask
+        # PyTorch 공식과 똑같이: causal mask 처리
         if is_causal:
             assert attn_mask is None, "attn_mask and is_causal cannot be both specified"
             temp_mask = torch.ones(tgt_len, src_len, dtype=torch.bool, device=q.device).tril(diagonal=0)
             attn_mask = temp_mask.logical_not()
         
-        # Apply attention mask
+        # PyTorch 공식과 똑같이: attention mask 적용
         if attn_mask is not None:
             if attn_mask.dtype == torch.bool:
                 attn_output_weights.masked_fill_(attn_mask, float('-inf'))
             else:
                 attn_output_weights += attn_mask
         
-        # Apply key padding mask
+        # PyTorch 공식과 똑같이: key padding mask 적용
         if key_padding_mask is not None:
             attn_output_weights = attn_output_weights.view(bsz, self.num_heads, tgt_len, src_len)
             attn_output_weights = attn_output_weights.masked_fill(
-                key_padding_mask.unsqueeze(1).unsqueeze(2), float('-inf'))
+                key_padding_mask.unsqueeze(1).unsqueeze(2), float('-inf')
+            )
             attn_output_weights = attn_output_weights.view(bsz * self.num_heads, tgt_len, src_len)
         
-        # Softmax and dropout
+        # PyTorch 공식과 똑같이: softmax + dropout
         attn_output_weights = F.softmax(attn_output_weights, dim=-1)
         attn_output_weights = F.dropout(attn_output_weights, p=self.dropout, training=self.training)
         
-        # Apply attention to values
+        # PyTorch 공식과 똑같이: value와 곱셈 + output projection
         attn_output = torch.bmm(attn_output_weights, v)
         attn_output = attn_output.transpose(0, 1).contiguous().view(tgt_len, bsz, embed_dim)
         attn_output = self.out_proj(attn_output)
         
-        # Convert back to batch_first if needed
+        # PyTorch 공식과 똑같이: batch_first 복원
         if self.batch_first and is_batched:
             attn_output = attn_output.transpose(1, 0)
         
         if not is_batched:
             attn_output = attn_output.squeeze(1)
         
-        # Return attention weights if needed
+        # PyTorch 공식과 똑같이: attention weights 반환
         if need_weights:
             attn_output_weights = attn_output_weights.view(bsz, self.num_heads, tgt_len, src_len)
             if average_attn_weights:

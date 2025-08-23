@@ -892,7 +892,6 @@ class OutputInterface(nn.Module):
             print(f"Loaded T5 LM head: {self.final_projection.weight.shape}")
         
         self.layer_norm = RMSNorm(self.embedding_dim)
-        self.dropout = nn.Dropout(dropout)
     
     def _transplant_t5_decoder(self, t5_model):
         """T5 decoder 가중치를 손 구현 decoder로 이식"""
@@ -1031,19 +1030,26 @@ class OutputInterface(nn.Module):
         
         # 순환 버퍼를 시간 순서로 재정렬
         rolled_window = torch.roll(self.hidden_window, shifts=-self.window_ptr, dims=1)
+        
+        tgt_mask = self._generate_causal_mask(seq_len)
 
         # 손 구현 Transformer 디코더 실행 (causal mask는 is_causal=True로만 처리)
         decoder_output = self.transformer_decoder(
             tgt=target_embeds,
             memory=rolled_window,
-            tgt_mask=None,  # causal mask는 tgt_is_causal로 처리
-            tgt_is_causal=True  # 자동으로 causal mask 적용
+            tgt_mask=tgt_mask,
         )
 
         # 최종 로짓 계산
         output_logits = self.final_projection(decoder_output)
         
         return output_logits
+    
+    def _generate_causal_mask(self, size: int) -> torch.Tensor:
+        """자기회귀를 위한 causal mask 생성"""
+        mask = torch.triu(torch.ones(size, size, device=self.device), diagonal=1)
+        # PyTorch의 nn.Transformer는 float 타입 마스크를 기대하므로 boolean 대신 float으로 만듭니다.
+        return mask.masked_fill(mask == 1, float('-inf'))
     
     def _prepare_target_embeddings(self, decoder_input_ids: torch.Tensor) -> torch.Tensor:
         """디코더 입력 토큰들을 임베딩으로 변환"""
@@ -1061,7 +1067,7 @@ class OutputInterface(nn.Module):
             combined_embeds = token_embeds
         
         # 정규화
-        return self.dropout(combined_embeds)
+        return self.layer_norm(combined_embeds)
     
     def _generate_causal_mask(self, size: int) -> torch.Tensor:
         """자기회귀를 위한 causal mask 생성 (현재 사용 안함 - is_causal=True로 대체)"""

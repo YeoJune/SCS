@@ -152,8 +152,12 @@ class T5Attention(nn.Module):
         # Apply attention mask
         if attention_mask is not None:
             if attention_mask.dim() == 2:
-                # Key padding mask: (batch_size, key_length) -> (batch_size, 1, 1, key_length)
-                attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+                if attention_mask.shape[0] == attention_mask.shape[1]:
+                    # Causal mask: (seq_length, seq_length) -> (1, 1, seq_length, seq_length)
+                    attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)
+                else:
+                    # Key padding mask: (batch_size, key_length) -> (batch_size, 1, 1, key_length)
+                    attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
             elif attention_mask.dim() == 3:
                 # Sequence mask: (batch_size, seq_length, seq_length) -> (batch_size, 1, seq_length, seq_length)
                 attention_mask = attention_mask.unsqueeze(1)
@@ -163,8 +167,12 @@ class T5Attention(nn.Module):
                 # True = attend, False = mask
                 attention_mask = attention_mask.masked_fill(~attention_mask, float('-inf')).masked_fill(attention_mask, 0.0)
             else:
-                # 1 = attend, 0 = mask
-                attention_mask = (1.0 - attention_mask) * -1e9
+                # 1 = attend, 0 = mask (causal mask에서 -inf는 mask, 0은 attend)
+                if torch.any(attention_mask == float('-inf')):
+                    # 이미 additive mask 형태
+                    pass  # 변환하지 않음
+                else:
+                    attention_mask = (1.0 - attention_mask) * -1e9
             
             scores = scores + attention_mask
         

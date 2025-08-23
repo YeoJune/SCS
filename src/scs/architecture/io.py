@@ -649,7 +649,7 @@ class InputInterface(nn.Module):
             min_layers = min(len(self.transformer_encoder.layers), len(t5_encoder.block))
             
             for i in range(min_layers):
-                transplant_encoder_layer(
+                self._transplant_encoder_layer(
                     self.transformer_encoder.layers[i],
                     t5_encoder.block[i]
                 )
@@ -659,6 +659,50 @@ class InputInterface(nn.Module):
         except Exception as e:
             print(f"Failed to transplant T5 encoder: {e}")
             warnings.warn(f"T5 encoder transplant failed: {e}")
+    
+    def _transplant_encoder_layer(self, scs_layer, t5_layer):
+        """T5 encoder 레이어를 손 구현 TransformerEncoderLayer로 이식"""
+        t5_self_attn = t5_layer.layer[0].SelfAttention
+        t5_ff = t5_layer.layer[1].DenseReluDense
+        
+        with torch.no_grad():
+            # Self-Attention weights (MultiheadAttention 구조에 맞춤)
+            q_weight = t5_self_attn.q.weight.data
+            k_weight = t5_self_attn.k.weight.data  
+            v_weight = t5_self_attn.v.weight.data
+            in_proj_weight = torch.cat([q_weight, k_weight, v_weight], dim=0)
+            
+            scs_layer.self_attn.in_proj_weight.copy_(in_proj_weight)
+            scs_layer.self_attn.out_proj.weight.copy_(t5_self_attn.o.weight.data)
+            
+            # LayerNorms (EncoderLayer는 norm1, norm2만 존재)
+            scs_layer.norm1.weight.copy_(t5_layer.layer[0].layer_norm.weight.data)
+            scs_layer.norm2.weight.copy_(t5_layer.layer[1].layer_norm.weight.data)
+            
+            # Feed Forward
+            scs_layer.linear1.weight.copy_(t5_ff.wi.weight.data)
+            scs_layer.linear2.weight.copy_(t5_ff.wo.weight.data)
+            
+            # Bias 처리 (있는 경우에만)
+            if hasattr(t5_self_attn.q, 'bias') and t5_self_attn.q.bias is not None:
+                q_bias = t5_self_attn.q.bias.data
+                k_bias = t5_self_attn.k.bias.data
+                v_bias = t5_self_attn.v.bias.data
+                in_proj_bias = torch.cat([q_bias, k_bias, v_bias], dim=0)
+                if scs_layer.self_attn.in_proj_bias is not None:
+                    scs_layer.self_attn.in_proj_bias.copy_(in_proj_bias)
+            
+            if hasattr(t5_self_attn.o, 'bias') and t5_self_attn.o.bias is not None:
+                if scs_layer.self_attn.out_proj.bias is not None:
+                    scs_layer.self_attn.out_proj.bias.copy_(t5_self_attn.o.bias.data)
+            
+            if hasattr(t5_ff.wi, 'bias') and t5_ff.wi.bias is not None:
+                if scs_layer.linear1.bias is not None:
+                    scs_layer.linear1.bias.copy_(t5_ff.wi.bias.data)
+                    
+            if hasattr(t5_ff.wo, 'bias') and t5_ff.wo.bias is not None:
+                if scs_layer.linear2.bias is not None:
+                    scs_layer.linear2.bias.copy_(t5_ff.wo.bias.data)
     
     def _initialize_mapper(self):
         """패턴 매핑 레이어 직교 초기화"""
@@ -823,7 +867,7 @@ class OutputInterface(nn.Module):
             min_layers = min(len(self.transformer_decoder.layers), len(t5_decoder.block))
             
             for i in range(min_layers):
-                transplant_decoder_layer(
+                self._transplant_decoder_layer(
                     self.transformer_decoder.layers[i],
                     t5_decoder.block[i],
                     include_cross_attention=self.transplant_cross_attention
@@ -835,6 +879,39 @@ class OutputInterface(nn.Module):
         except Exception as e:
             print(f"Failed to transplant T5 decoder: {e}")
             warnings.warn(f"T5 decoder transplant failed: {e}")
+    
+    def _transplant_decoder_layer(self, scs_layer, t5_layer, include_cross_attention=False):
+        """T5 decoder 레이어를 손 구현 TransformerDecoderLayer로 이식"""
+        t5_self_attn = t5_layer.layer[0].SelfAttention
+        t5_cross_attn = t5_layer.layer[1].EncDecAttention
+        t5_ff = t5_layer.layer[2].DenseReluDense
+        
+        with torch.no_grad():
+            # Self-Attention
+            q_weight = t5_self_attn.q.weight.data
+            k_weight = t5_self_attn.k.weight.data  
+            v_weight = t5_self_attn.v.weight.data
+            in_proj_weight = torch.cat([q_weight, k_weight, v_weight], dim=0)
+            
+            scs_layer.self_attn.in_proj_weight.copy_(in_proj_weight)
+            scs_layer.self_attn.out_proj.weight.copy_(t5_self_attn.o.weight.data)
+            scs_layer.norm1.weight.copy_(t5_layer.layer[0].layer_norm.weight.data)
+            
+            # Cross-Attention (optional)
+            if include_cross_attention:
+                q_weight = t5_cross_attn.q.weight.data
+                k_weight = t5_cross_attn.k.weight.data
+                v_weight = t5_cross_attn.v.weight.data
+                in_proj_weight = torch.cat([q_weight, k_weight, v_weight], dim=0)
+                
+                scs_layer.multihead_attn.in_proj_weight.copy_(in_proj_weight)
+                scs_layer.multihead_attn.out_proj.weight.copy_(t5_cross_attn.o.weight.data)
+                scs_layer.norm2.weight.copy_(t5_layer.layer[1].layer_norm.weight.data)
+            
+            # Feed Forward
+            scs_layer.linear1.weight.copy_(t5_ff.wi.weight.data)
+            scs_layer.linear2.weight.copy_(t5_ff.wo.weight.data)
+            scs_layer.norm3.weight.copy_(t5_layer.layer[2].layer_norm.weight.data)
     
     def _initialize_compressor(self):
         """공간 압축 레이어 직교 초기화"""
@@ -918,17 +995,15 @@ class OutputInterface(nn.Module):
         # 디코더 입력 임베딩
         target_embeds = self._prepare_target_embeddings(decoder_input_ids)
         
-        # Causal mask 생성
-        tgt_mask = self._generate_causal_mask(seq_len)
-        
         # 순환 버퍼를 시간 순서로 재정렬
         rolled_window = torch.roll(self.hidden_window, shifts=-self.window_ptr, dims=1)
 
-        # 손 구현 Transformer 디코더 실행 (batch_first=True)
+        # 손 구현 Transformer 디코더 실행 (causal mask는 is_causal=True로만 처리)
         decoder_output = self.transformer_decoder(
             tgt=target_embeds,
             memory=rolled_window,
-            tgt_mask=tgt_mask
+            tgt_mask=None,  # causal mask는 tgt_is_causal로 처리
+            tgt_is_causal=True  # 자동으로 causal mask 적용
         )
 
         # 최종 로짓 계산
@@ -955,7 +1030,7 @@ class OutputInterface(nn.Module):
         return self.layer_norm(combined_embeds)
     
     def _generate_causal_mask(self, size: int) -> torch.Tensor:
-        """자기회귀를 위한 causal mask 생성"""
+        """자기회귀를 위한 causal mask 생성 (현재 사용 안함 - is_causal=True로 대체)"""
         mask = torch.triu(torch.ones(size, size, device=self.device), diagonal=1)
         mask = mask.masked_fill(mask == 1, float('-inf'))
         return mask

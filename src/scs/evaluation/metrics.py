@@ -13,6 +13,7 @@ class SCSMetrics:
     @staticmethod
     def accuracy(outputs: torch.Tensor, targets: torch.Tensor, pad_token_id: int = None, guide_sep_token_id: int = None) -> float:
         """정확도 계산 (배치 처리 지원, 길이 불일치 처리, guide 영역 제외)"""
+        eos_token_id = 1 # TEMP
         if outputs.dim() == 3:  # [B, seq_len, vocab_size]
             batch_size, output_seq_len, vocab_size = outputs.shape
             batch_size_t, target_seq_len = targets.shape
@@ -30,7 +31,7 @@ class SCSMetrics:
             
             # 기본 마스크 생성 (패딩 토큰 제외)
             if pad_token_id is not None:
-                mask = (targets != pad_token_id)
+                mask = (targets != pad_token_id) & (targets != eos_token_id)
             else:
                 mask = torch.ones_like(targets, dtype=torch.bool)
             

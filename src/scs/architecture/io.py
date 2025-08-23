@@ -165,7 +165,8 @@ class MultiheadAttention(nn.Module):
         
         return attn_output, attn_output_weights
 
-    # 이 메소드는 functional.py의 multi_head_attention_forward를 그대로 가져온 것입니다.
+# multi_head_attention_forward_unfolded 메소드만 교체
+
     @staticmethod
     def multi_head_attention_forward_unfolded(
         query: Tensor, key: Tensor, value: Tensor, embed_dim_to_check: int, num_heads: int,
@@ -183,15 +184,12 @@ class MultiheadAttention(nn.Module):
         is_batched = _mha_shape_check(query, key, value, key_padding_mask, attn_mask, num_heads)
 
         if not is_batched:
-            query = query.unsqueeze(1)
-            key = key.unsqueeze(1)
-            value = value.unsqueeze(1)
+            query, key, value = [x.unsqueeze(1) for x in (query, key, value)]
             if key_padding_mask is not None:
                 key_padding_mask = key_padding_mask.unsqueeze(0)
 
         tgt_len, bsz, embed_dim = query.shape
         src_len, _, _ = key.shape
-        
         head_dim = embed_dim // num_heads
         
         # In-projection
@@ -206,41 +204,58 @@ class MultiheadAttention(nn.Module):
 
         # Reshape q, k, v
         q = q.contiguous().view(tgt_len, bsz * num_heads, head_dim).transpose(0, 1)
-        k = k.contiguous().view(src_len, bsz * num_heads, head_dim).transpose(0, 1)
-        v = v.contiguous().view(src_len, bsz * num_heads, head_dim).transpose(0, 1)
+        k = k.contiguous().view(-1, bsz * num_heads, head_dim).transpose(0, 1)
+        v = v.contiguous().view(-1, bsz * num_heads, head_dim).transpose(0, 1)
+        src_len = k.size(1)
 
-        # is_causal 처리. functional.py에서는 SDPA에 힌트로 넘겨주지만, 여기서는 마스크를 직접 생성
-        if is_causal:
-            # is_causal은 attn_mask와 동시에 사용될 수 없다고 가정
-            assert attn_mask is None, "Cannot specify both attn_mask and is_causal=True"
-            mask = torch.triu(torch.ones(tgt_len, src_len, device=query.device, dtype=torch.bool), diagonal=1)
-            attn_mask = mask
+        # =========================================================================
+        # START: `functional.py`의 마스크 처리 로직을 정확하게 반영
+        # =========================================================================
         
-        # 마스크 정규화 및 통합
+        # 1. is_causal과 attn_mask의 관계 처리
+        #    functional.py에서는 SDPA에 is_causal 힌트를 넘길지 말지를 결정한다.
+        #    우리는 수동 계산을 하므로, attn_mask 텐서 자체를 올바르게 만드는 데 집중한다.
+        #    Decoder에서 is_causal=True와 attn_mask(causal_mask)가 함께 들어오는 것은 정상이다.
+        #    이때는 제공된 attn_mask를 사용하면 된다. is_causal 힌트는 무시한다.
+        
+        # 2. key_padding_mask와 attn_mask를 float 타입으로 정규화 및 통합
+        final_attn_mask = attn_mask
+        if final_attn_mask is not None and final_attn_mask.dtype == torch.bool:
+             # PyTorch TransformerEncoder/DecoderLayer에서 _canonical_mask를 거치므로,
+             # 이곳으로 전달되는 attn_mask와 key_padding_mask는 float 타입일 것을 가정하는 것이 안전함.
+             # 하지만, 만약을 대비해 bool 타입 처리 로직을 남겨둠.
+             pass # boolean 마스크는 나중에 masked_fill로 처리
+        
         if key_padding_mask is not None:
-            # (B, S) -> (B, 1, 1, S) -> (B*H, 1, S)
-            key_padding_mask = key_padding_mask.view(bsz, 1, 1, src_len).expand(-1, num_heads, -1, -1).reshape(bsz * num_heads, 1, src_len)
-            if attn_mask is None:
-                attn_mask = key_padding_mask
-            elif attn_mask.dtype == torch.bool:
-                attn_mask = attn_mask.logical_or(key_padding_mask)
-            else: # float mask
-                attn_mask = attn_mask.add(key_padding_mask)
+            # key_padding_mask는 항상 boolean (True=무시)
+            kpm_expanded = key_padding_mask.view(bsz, 1, 1, src_len).expand(-1, num_heads, tgt_len, -1).reshape(bsz * num_heads, tgt_len, src_len)
+            
+            if final_attn_mask is None:
+                final_attn_mask = torch.zeros_like(kpm_expanded, dtype=query.dtype).masked_fill_(kpm_expanded, float("-inf"))
+            elif final_attn_mask.dtype == torch.bool:
+                final_attn_mask = final_attn_mask.logical_or(kpm_expanded)
+            else:
+                # float 마스크에 kpm을 반영 (True 위치에 -inf 더하기)
+                final_attn_mask = final_attn_mask.masked_fill(kpm_expanded, float("-inf"))
 
-        # (★핵심★) 어텐션 계산. 아직 bias는 추가하지 않음.
+        # =========================================================================
+        # END: 마스크 처리 로직 수정
+        # =========================================================================
+
+        # 어텐션 계산
         attn_output_weights = torch.bmm(q, k.transpose(1, 2))
         attn_output_weights /= math.sqrt(head_dim)
         
-        if attn_mask is not None:
-            if attn_mask.dtype == torch.bool:
-                if attn_mask.dim() == 2:
-                    attn_mask = attn_mask.unsqueeze(0) # (L,S) -> (1,L,S)
-                attn_output_weights.masked_fill_(attn_mask, float("-inf"))
+        if final_attn_mask is not None:
+            if final_attn_mask.dim() == 2:
+                 final_attn_mask = final_attn_mask.unsqueeze(0)
+            if final_attn_mask.dtype == torch.bool:
+                attn_output_weights.masked_fill_(final_attn_mask, float("-inf"))
             else:
-                attn_output_weights += attn_mask
+                attn_output_weights += final_attn_mask
 
         attn_output_weights = F.softmax(attn_output_weights, dim=-1)
-        if training:
+        if training and dropout_p > 0.0:
             attn_output_weights = F.dropout(attn_output_weights, p=dropout_p)
 
         attn_output = torch.bmm(attn_output_weights, v)

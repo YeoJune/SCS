@@ -130,6 +130,7 @@ learning:
       - "output_interface.final_projection"
       - "output_interface.layer_norm"
       - "output_interface.spatial_compressor"
+      - "output_interface.transformer_decoder.layers.0.self_attn"
       - "output_interface.transformer_decoder.layers.0.layer.0.SelfAttention"
     unfreeze_schedule: # 에포크별 해제 스케줄
       10000: # 에포크 10000에 T5 임베딩 해제

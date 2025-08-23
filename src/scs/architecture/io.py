@@ -7,6 +7,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn import TransformerEncoder, TransformerEncoderLayer, TransformerDecoder, TransformerDecoderLayer
 from transformers import T5ForConditionalGeneration
 from typing import Optional, Tuple, Dict, Any, List
 import math
@@ -39,7 +40,7 @@ class T5Attention(nn.Module):
         self.relative_attention_max_distance = relative_attention_max_distance
         self.d_model = d_model
         self.n_heads = n_heads
-        self.key_value_proj_dim = d_model // n_heads  # T5에서는 d_kv
+        self.key_value_proj_dim = d_model // n_heads
         self.inner_dim = self.n_heads * self.key_value_proj_dim
         self.dropout = dropout
         
@@ -104,7 +105,7 @@ class T5Attention(nn.Module):
         
         Args:
             hidden_states: (batch_size, seq_length, d_model)
-            attention_mask: (batch_size, seq_length) or (batch_size, seq_length, seq_length)
+            attention_mask: (batch_size, seq_length) 
             key_value_states: (batch_size, key_length, d_model) for cross-attention
             position_bias: precomputed position bias
             
@@ -153,12 +154,12 @@ class T5Attention(nn.Module):
             if attention_mask.dim() == 2:
                 # (batch_size, seq_length) -> (batch_size, 1, 1, seq_length)
                 attention_mask = attention_mask.unsqueeze(1).unsqueeze(1)
-            elif attention_mask.dim() == 3:
-                # (batch_size, seq_length, seq_length) -> (batch_size, 1, seq_length, seq_length)
-                attention_mask = attention_mask.unsqueeze(1)
             
-            # Convert to additive mask
-            attention_mask = (1.0 - attention_mask) * -1e9
+            # Convert to additive mask (PyTorch style: True = attend, False = mask)
+            if attention_mask.dtype == torch.bool:
+                attention_mask = attention_mask.masked_fill(~attention_mask, float('-inf'))
+            else:
+                attention_mask = (1.0 - attention_mask) * -1e9
             scores = scores + attention_mask
         
         # Softmax and dropout
@@ -347,7 +348,9 @@ class T5Block(nn.Module):
 
 
 class CustomT5Encoder(nn.Module):
-    """커스텀 T5 Encoder (기존 I/O 인터페이스와 호환)"""
+    """
+    커스텀 T5 Encoder - PyTorch TransformerEncoder와 동일한 인터페이스
+    """
     
     def __init__(self, d_model, n_heads, d_ff, num_layers, dropout=0.1,
                  relative_attention_num_buckets=32, relative_attention_max_distance=128):
@@ -370,27 +373,20 @@ class CustomT5Encoder(nn.Module):
         self.final_layer_norm = RMSNorm(d_model)
         self.dropout = nn.Dropout(dropout)
     
-    def forward(self, hidden_states, attention_mask=None):
+    def forward(self, src, mask=None, src_key_padding_mask=None):
         """
         PyTorch TransformerEncoder와 동일한 인터페이스
         
         Args:
-            hidden_states: (seq_length, batch_size, d_model) 또는 (batch_size, seq_length, d_model)
-            attention_mask: attention mask
+            src: (S, N, E) 또는 (N, S, E) - sequence_first 여부에 따라
+            mask: attention mask
+            src_key_padding_mask: key padding mask
             
         Returns:
-            hidden_states: (seq_length, batch_size, d_model) 또는 (batch_size, seq_length, d_model)
+            output: 입력과 동일한 형태
         """
-        # batch_first 처리
-        if hidden_states.dim() == 3 and hidden_states.shape[0] != hidden_states.shape[1]:
-            # (seq_length, batch_size, d_model) -> (batch_size, seq_length, d_model)
-            if hidden_states.shape[1] < hidden_states.shape[0]:  # batch_size < seq_length
-                hidden_states = hidden_states.transpose(0, 1)
-                need_transpose = True
-            else:
-                need_transpose = False
-        else:
-            need_transpose = False
+        # 기존 코드에서는 batch_first=True를 사용하므로 (N, S, E) 형태로 가정
+        hidden_states = src
         
         hidden_states = self.dropout(hidden_states)
         position_bias = None
@@ -398,7 +394,7 @@ class CustomT5Encoder(nn.Module):
         for layer in self.layers:
             layer_outputs = layer(
                 hidden_states,
-                attention_mask=attention_mask,
+                attention_mask=src_key_padding_mask,
                 position_bias=position_bias
             )
             hidden_states = layer_outputs[0]
@@ -407,15 +403,13 @@ class CustomT5Encoder(nn.Module):
         hidden_states = self.final_layer_norm(hidden_states)
         hidden_states = self.dropout(hidden_states)
         
-        # 원래 형태로 복원
-        if need_transpose:
-            hidden_states = hidden_states.transpose(0, 1)
-        
         return hidden_states
 
 
 class CustomT5Decoder(nn.Module):
-    """커스텀 T5 Decoder (기존 I/O 인터페이스와 호환)"""
+    """
+    커스텀 T5 Decoder - PyTorch TransformerDecoder와 동일한 인터페이스
+    """
     
     def __init__(self, d_model, n_heads, d_ff, num_layers, dropout=0.1,
                  relative_attention_num_buckets=32, relative_attention_max_distance=128):
@@ -441,42 +435,33 @@ class CustomT5Decoder(nn.Module):
     def forward(self, tgt, memory, tgt_mask=None, memory_mask=None, 
                 tgt_key_padding_mask=None, memory_key_padding_mask=None):
         """
-        PyTorch TransformerDecoder와 동일한 인터페이스
+        PyTorch TransformerDecoder와 정확히 동일한 인터페이스
         
         Args:
-            tgt: (tgt_seq_length, batch_size, d_model)
-            memory: (src_seq_length, batch_size, d_model)
-            tgt_mask: causal mask
-            memory_mask: encoder attention mask
+            tgt: (T, N, E) 또는 (N, T, E) - target sequence
+            memory: (S, N, E) 또는 (N, S, E) - memory sequence  
+            tgt_mask: target mask (causal)
+            memory_mask: memory mask
+            tgt_key_padding_mask: target padding mask
+            memory_key_padding_mask: memory padding mask
             
         Returns:
-            output: (tgt_seq_length, batch_size, d_model)
+            output: 입력과 동일한 형태
         """
-        # batch_first 처리
-        need_transpose_tgt = False
-        need_transpose_memory = False
+        # 기존 코드에서는 batch_first=True를 사용하므로 (N, T, E), (N, S, E) 형태로 가정
+        hidden_states = tgt
         
-        if tgt.dim() == 3 and tgt.shape[0] != tgt.shape[1]:
-            if tgt.shape[1] < tgt.shape[0]:  # batch_size < seq_length
-                tgt = tgt.transpose(0, 1)
-                need_transpose_tgt = True
-        
-        if memory.dim() == 3 and memory.shape[0] != memory.shape[1]:
-            if memory.shape[1] < memory.shape[0]:  # batch_size < seq_length
-                memory = memory.transpose(0, 1)
-                need_transpose_memory = True
-        
-        hidden_states = self.dropout(tgt)
+        hidden_states = self.dropout(hidden_states)
         position_bias = None
         encoder_decoder_position_bias = None
         
         for layer in self.layers:
             layer_outputs = layer(
                 hidden_states,
-                attention_mask=self._convert_mask_to_t5_format(tgt_mask),
+                attention_mask=self._convert_causal_mask(tgt_mask, tgt.shape[1]) if tgt_mask is not None else None,
                 position_bias=position_bias,
                 encoder_hidden_states=memory,
-                encoder_attention_mask=self._convert_mask_to_t5_format(memory_mask),
+                encoder_attention_mask=memory_key_padding_mask,
                 encoder_decoder_position_bias=encoder_decoder_position_bias
             )
             hidden_states = layer_outputs[0]
@@ -487,24 +472,24 @@ class CustomT5Decoder(nn.Module):
         hidden_states = self.final_layer_norm(hidden_states)
         hidden_states = self.dropout(hidden_states)
         
-        # 원래 형태로 복원
-        if need_transpose_tgt:
-            hidden_states = hidden_states.transpose(0, 1)
-        
         return hidden_states
     
-    def _convert_mask_to_t5_format(self, mask):
-        """PyTorch mask를 T5 형태로 변환"""
-        if mask is None:
+    def _convert_causal_mask(self, tgt_mask, seq_len):
+        """
+        PyTorch causal mask를 T5 형태로 변환
+        PyTorch: -inf는 mask, 0은 attend
+        T5: False는 mask, True는 attend
+        """
+        if tgt_mask is None:
             return None
         
-        # causal mask: -inf를 0으로, 0을 1로 변환
-        if mask.dtype == torch.float and torch.any(mask == float('-inf')):
-            # (seq_length, seq_length) causal mask
-            converted_mask = (mask != float('-inf')).float()
+        # causal mask: (seq_len, seq_len)에서 upper triangle이 -inf
+        if tgt_mask.dtype == torch.float and torch.any(tgt_mask == float('-inf')):
+            # -inf를 False로, 0을 True로 변환
+            converted_mask = (tgt_mask != float('-inf'))
             return converted_mask
         
-        return mask
+        return tgt_mask
 
 
 def load_t5_embeddings(model_name: str = "t5-base"):
@@ -535,25 +520,25 @@ def transplant_encoder_layer(scs_layer, t5_layer):
     
     with torch.no_grad():
         # Self-Attention weights
-        scs_layer.layer[0].SelfAttention.q.weight.copy_(t5_self_attn.q.weight.data)
-        scs_layer.layer[0].SelfAttention.k.weight.copy_(t5_self_attn.k.weight.data)
-        scs_layer.layer[0].SelfAttention.v.weight.copy_(t5_self_attn.v.weight.data)
-        scs_layer.layer[0].SelfAttention.o.weight.copy_(t5_self_attn.o.weight.data)
+        scs_layer.layer[0].SelfAttention.q.weight.data.copy_(t5_self_attn.q.weight.data)
+        scs_layer.layer[0].SelfAttention.k.weight.data.copy_(t5_self_attn.k.weight.data)
+        scs_layer.layer[0].SelfAttention.v.weight.data.copy_(t5_self_attn.v.weight.data)
+        scs_layer.layer[0].SelfAttention.o.weight.data.copy_(t5_self_attn.o.weight.data)
         
         # Relative attention bias (첫 번째 레이어만)
         if hasattr(scs_layer.layer[0].SelfAttention, 'relative_attention_bias') and \
            hasattr(t5_self_attn, 'relative_attention_bias'):
-            scs_layer.layer[0].SelfAttention.relative_attention_bias.weight.copy_(
+            scs_layer.layer[0].SelfAttention.relative_attention_bias.weight.data.copy_(
                 t5_self_attn.relative_attention_bias.weight.data
             )
         
         # LayerNorms
-        scs_layer.layer[0].layer_norm.scale.copy_(t5_layer.layer[0].layer_norm.weight.data)
-        scs_layer.layer[-1].layer_norm.scale.copy_(t5_layer.layer[1].layer_norm.weight.data)
+        scs_layer.layer[0].layer_norm.scale.data.copy_(t5_layer.layer[0].layer_norm.weight.data)
+        scs_layer.layer[-1].layer_norm.scale.data.copy_(t5_layer.layer[1].layer_norm.weight.data)
         
         # Feed Forward
-        scs_layer.layer[-1].wi.weight.copy_(t5_ff.wi.weight.data)
-        scs_layer.layer[-1].wo.weight.copy_(t5_ff.wo.weight.data)
+        scs_layer.layer[-1].wi.weight.data.copy_(t5_ff.wi.weight.data)
+        scs_layer.layer[-1].wo.weight.data.copy_(t5_ff.wo.weight.data)
 
 
 def transplant_decoder_layer(scs_layer, t5_layer, include_cross_attention=False):
@@ -567,31 +552,31 @@ def transplant_decoder_layer(scs_layer, t5_layer, include_cross_attention=False)
     
     with torch.no_grad():
         # Self-Attention
-        scs_layer.layer[0].SelfAttention.q.weight.copy_(t5_self_attn.q.weight.data)
-        scs_layer.layer[0].SelfAttention.k.weight.copy_(t5_self_attn.k.weight.data)
-        scs_layer.layer[0].SelfAttention.v.weight.copy_(t5_self_attn.v.weight.data)
-        scs_layer.layer[0].SelfAttention.o.weight.copy_(t5_self_attn.o.weight.data)
-        scs_layer.layer[0].layer_norm.scale.copy_(t5_layer.layer[0].layer_norm.weight.data)
+        scs_layer.layer[0].SelfAttention.q.weight.data.copy_(t5_self_attn.q.weight.data)
+        scs_layer.layer[0].SelfAttention.k.weight.data.copy_(t5_self_attn.k.weight.data)
+        scs_layer.layer[0].SelfAttention.v.weight.data.copy_(t5_self_attn.v.weight.data)
+        scs_layer.layer[0].SelfAttention.o.weight.data.copy_(t5_self_attn.o.weight.data)
+        scs_layer.layer[0].layer_norm.scale.data.copy_(t5_layer.layer[0].layer_norm.weight.data)
         
         # Relative attention bias (첫 번째 레이어만)
         if hasattr(scs_layer.layer[0].SelfAttention, 'relative_attention_bias') and \
            hasattr(t5_self_attn, 'relative_attention_bias'):
-            scs_layer.layer[0].SelfAttention.relative_attention_bias.weight.copy_(
+            scs_layer.layer[0].SelfAttention.relative_attention_bias.weight.data.copy_(
                 t5_self_attn.relative_attention_bias.weight.data
             )
         
         # Cross-Attention
         if include_cross_attention and len(scs_layer.layer) > 2:
-            scs_layer.layer[1].EncDecAttention.q.weight.copy_(t5_cross_attn.q.weight.data)
-            scs_layer.layer[1].EncDecAttention.k.weight.copy_(t5_cross_attn.k.weight.data)
-            scs_layer.layer[1].EncDecAttention.v.weight.copy_(t5_cross_attn.v.weight.data)
-            scs_layer.layer[1].EncDecAttention.o.weight.copy_(t5_cross_attn.o.weight.data)
-            scs_layer.layer[1].layer_norm.scale.copy_(t5_layer.layer[1].layer_norm.weight.data)
+            scs_layer.layer[1].EncDecAttention.q.weight.data.copy_(t5_cross_attn.q.weight.data)
+            scs_layer.layer[1].EncDecAttention.k.weight.data.copy_(t5_cross_attn.k.weight.data)
+            scs_layer.layer[1].EncDecAttention.v.weight.data.copy_(t5_cross_attn.v.weight.data)
+            scs_layer.layer[1].EncDecAttention.o.weight.data.copy_(t5_cross_attn.o.weight.data)
+            scs_layer.layer[1].layer_norm.scale.data.copy_(t5_layer.layer[1].layer_norm.weight.data)
         
         # Feed Forward
-        scs_layer.layer[-1].wi.weight.copy_(t5_ff.wi.weight.data)
-        scs_layer.layer[-1].wo.weight.copy_(t5_ff.wo.weight.data)
-        scs_layer.layer[-1].layer_norm.scale.copy_(t5_layer.layer[2].layer_norm.weight.data)
+        scs_layer.layer[-1].wi.weight.data.copy_(t5_ff.wi.weight.data)
+        scs_layer.layer[-1].wo.weight.data.copy_(t5_ff.wo.weight.data)
+        scs_layer.layer[-1].layer_norm.scale.data.copy_(t5_layer.layer[2].layer_norm.weight.data)
 
 
 class InputInterface(nn.Module):
@@ -655,7 +640,7 @@ class InputInterface(nn.Module):
         else:
             self.position_embedding = None
         
-        # T5 스타일 Transformer Encoder
+        # T5 스타일 Transformer Encoder (기존 PyTorch TransformerEncoder 인터페이스와 동일)
         self.transformer_encoder = CustomT5Encoder(
             d_model=self.embedding_dim,
             n_heads=encoder_heads,
@@ -696,7 +681,7 @@ class InputInterface(nn.Module):
             
             # Final layer norm 이식
             if hasattr(t5_encoder, 'final_layer_norm'):
-                self.transformer_encoder.final_layer_norm.scale.copy_(
+                self.transformer_encoder.final_layer_norm.scale.data.copy_(
                     t5_encoder.final_layer_norm.weight.data
                 )
             
@@ -740,7 +725,7 @@ class InputInterface(nn.Module):
         # Dropout 적용
         windowed_input = self.dropout(windowed_input)
         
-        # T5 Encoder 적용 (relative position bias는 내부에서 처리)
+        # T5 Encoder 적용 (기존 PyTorch TransformerEncoder와 동일한 인터페이스)
         encoder_output = self.transformer_encoder(windowed_input)
         context_vector = encoder_output[:, -1, :]  # 마지막 토큰
         
@@ -840,7 +825,7 @@ class OutputInterface(nn.Module):
         else:
             self.position_embedding = None
         
-        # T5 스타일 Transformer Decoder
+        # T5 스타일 Transformer Decoder (기존 PyTorch TransformerDecoder 인터페이스와 동일)
         self.transformer_decoder = CustomT5Decoder(
             d_model=self.embedding_dim,
             n_heads=decoder_heads,
@@ -858,7 +843,7 @@ class OutputInterface(nn.Module):
         if t5_model_name is not None:
             self._transplant_t5_decoder(t5_data['full_model'])
             with torch.no_grad():
-                self.final_projection.weight.copy_(t5_data['lm_head_weights'])
+                self.final_projection.weight.data.copy_(t5_data['lm_head_weights'])
             print(f"Loaded T5 LM head: {self.final_projection.weight.shape}")
         
         self.layer_norm = RMSNorm(self.embedding_dim)
@@ -878,7 +863,7 @@ class OutputInterface(nn.Module):
             
             # Final layer norm 이식
             if hasattr(t5_decoder, 'final_layer_norm'):
-                self.transformer_decoder.final_layer_norm.scale.copy_(
+                self.transformer_decoder.final_layer_norm.scale.data.copy_(
                     t5_decoder.final_layer_norm.weight.data
                 )
             
@@ -972,13 +957,12 @@ class OutputInterface(nn.Module):
         # 순환 버퍼를 시간 순서로 재정렬 (기존과 동일)
         rolled_window = torch.roll(self.hidden_window, shifts=-self.window_ptr, dims=1)
 
-        # T5 Decoder 실행 (relative position bias는 내부에서 처리)
+        # T5 Decoder 실행 (기존 PyTorch TransformerDecoder와 동일한 인터페이스)
         decoder_output = self.transformer_decoder(
-            tgt=target_embeds.transpose(0, 1),  # (seq_len, batch_size, d_model)
-            memory=rolled_window.transpose(0, 1),  # (window_size, batch_size, d_model)
-            tgt_mask=tgt_mask
+            tgt=target_embeds,           # [B, seq_len, d_model] - 기존과 동일
+            memory=rolled_window,        # [B, window_size, d_model] - 기존과 동일
+            tgt_mask=tgt_mask            # causal mask - 기존과 동일
         )
-        decoder_output = decoder_output.transpose(0, 1)  # (batch_size, seq_len, d_model)
 
         # 최종 로짓 계산 (기존과 동일)
         output_logits = self.final_projection(decoder_output)

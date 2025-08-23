@@ -51,9 +51,9 @@ task:
 
 # === 학습 설정 오버라이드 ===
 learning:
-  epochs: 31
+  epochs: 101
   learning_rate: 1e-3
-  eta_min: 5e-4
+  eta_min: 2e-4
   max_clk_training: 128
   optimizer: "adamw"
   weight_decay: 1e-4
@@ -66,6 +66,25 @@ learning:
   curriculum_schedule:
     0: 50
     50: 128
+
+  gradual_unfreezing:
+    enabled: true
+    initial_frozen_patterns: # 시작할 때 동결할 파라미터들
+      - "input_interface.token_embedding"
+      - "input_interface.pattern_mapper"
+      - "input_interface.transformer_encoder"
+
+      - "output_interface.token_embedding"
+      - "output_interface.spatial_compressor"
+      - "output_interface.transformer_decoder.layers.0.self_attn"
+      - "output_interface.final_projection"
+      - "output_interface.layer_norm"
+    unfreeze_schedule: # 에포크별 해제 스케줄
+      30: # 에포크 30에 T5 임베딩 해제
+        - "input_interface.transformer_encoder"
+        - "output_interface.transformer_decoder.layers.0.self_attn"
+        - "output_interface.final_projection"
+        - "output_interface.layer_norm"
 
 timing_manager:
   sync_ema_alpha: 0.1 # EMA 필터링 강도
@@ -85,7 +104,7 @@ data_loading:
     max_length: 128
 
 data:
-  train_samples: 1000
+  train_samples: -1
   val_samples: -1
   test_samples: -1
 

@@ -103,7 +103,7 @@ learning:
   sync_target_start: 0.5 # 시작 시점 동기화 목표
   sync_target_end: 0.0 # 종료 시점 동기화 목표
 
-  use_temporal_weighting: false
+  use_temporal_weighting: true
   initial_temporal_weight: 5.0 # 초기 CLK에 높은 중요도
   final_temporal_weight: 1.0 # 나중 CLK에 기본 중요도
 
@@ -131,7 +131,7 @@ learning:
       - "output_interface.final_projection"
       - "output_interface.layer_norm"
     unfreeze_schedule: # 에포크별 해제 스케줄
-      40: # 에포크 40에 T5 임베딩 해제
+      1000: # 에포크 1000에 T5 임베딩 해제
         - "input_interface.transformer_encoder"
         - "output_interface.transformer_decoder.layers.0.self_attn"
         - "output_interface.final_projection"

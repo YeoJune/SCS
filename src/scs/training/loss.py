@@ -200,7 +200,7 @@ class SCSLoss(nn.Module):
             valid_mask = (trimmed_targets != self.base_loss.ignore_index).float()
             
             # Guide weight 적용
-            guide_weighted_loss = base_loss_unweighted #* trimmed_guide_mask
+            guide_weighted_loss = base_loss_unweighted * trimmed_guide_mask
             
             # 정규화된 temporal weights 적용
             temporal_weights = self._get_normalized_temporal_weights(actual_length, outputs.device)

@@ -8,10 +8,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 from typing import Optional, Tuple, Dict, Any, List, Union, Callable
+from transformers import T5ForConditionalGeneration
 import math
 import warnings
-
-
 
 # ============================================================================
 # functional.py에서 가져온 헬퍼 함수들 (multi_head_attention_forward가 사용하는 함수)
@@ -71,6 +70,84 @@ def _in_projection(q: Tensor, k: Tensor, v: Tensor, w_q: Tensor, w_k: Tensor, w_
     return F.linear(q, w_q, b_q), F.linear(k, w_k, b_k), F.linear(v, w_v, b_v)
 
 # ============================================================================
+# T5 Relative Position Bias Module
+# ============================================================================
+class T5RelativePositionBias(nn.Module):
+    """
+    T5 스타일의 Relative Position Bias를 계산하는 모듈.
+    `forward` 메소드는 어텐션 스코어에 더해질 bias 텐서를 반환합니다.
+    """
+    def __init__(self, num_heads: int, is_decoder: bool = False,
+                 num_buckets: int = 32, max_distance: int = 128):
+        super().__init__()
+        self.is_decoder = is_decoder
+        self.num_heads = num_heads
+        self.num_buckets = num_buckets
+        self.max_distance = max_distance
+        # 각 헤드에 대한 편향 값을 학습하는 임베딩 레이어
+        self.relative_attention_bias = nn.Embedding(self.num_buckets, self.num_heads)
+
+    @staticmethod
+    def _relative_position_bucket(relative_position, bidirectional=True, num_buckets=32, max_distance=128):
+        """
+        T5의 버킷 계산 로직. 상대 거리를 이산적인 버킷 인덱스로 변환합니다.
+        """
+        ret = 0
+        n = -relative_position
+        if bidirectional:
+            num_buckets //= 2
+            ret += (n < 0).to(torch.long) * num_buckets
+            n = torch.abs(n)
+        else:
+            n = torch.max(n, torch.zeros_like(n))
+
+        max_exact = num_buckets // 2
+        is_small = n < max_exact
+
+        val_if_large = max_exact + (
+            torch.log(n.float() / max_exact) / math.log(max_distance / max_exact) * (num_buckets - max_exact)
+        ).to(torch.long)
+        val_if_large = torch.min(val_if_large, torch.full_like(n, num_buckets - 1))
+
+        ret += torch.where(is_small, n, val_if_large)
+        return ret
+
+    def forward(self, query_len: int, key_len: int, device: torch.device) -> torch.Tensor:
+        """
+        쿼리/키 시퀀스 길이를 기반으로 position_bias 텐서를 계산합니다.
+
+        Args:
+            query_len (int): 타겟(쿼리) 시퀀스 길이
+            key_len (int): 소스(키) 시퀀스 길이
+            device: 텐서를 생성할 디바이스
+
+        Returns:
+            torch.Tensor: (1, num_heads, query_len, key_len) 형태의 bias 텐서
+        """
+        # 1. 상대 위치 행렬 계산
+        context_position = torch.arange(query_len, dtype=torch.long, device=device)[:, None]
+        memory_position = torch.arange(key_len, dtype=torch.long, device=device)[None, :]
+        relative_position = memory_position - context_position
+
+        # 2. 버킷 인덱스 계산
+        rp_bucket = self._relative_position_bucket(
+            relative_position,
+            bidirectional=(not self.is_decoder),
+            num_buckets=self.num_buckets,
+            max_distance=self.max_distance
+        )
+
+        # 3. 임베딩 레이어에서 bias 값 조회 및 reshape
+        # rp_bucket: (q_len, k_len) -> bias: (q_len, k_len, num_heads)
+        bias = self.relative_attention_bias(rp_bucket)
+        
+        # (q_len, k_len, num_heads) -> (1, num_heads, q_len, k_len)
+        # 배치 차원(1)을 추가하여 브로드캐스팅이 가능하도록 함
+        bias = bias.permute(2, 0, 1).unsqueeze(0)
+        return bias
+
+
+# ============================================================================
 # MultiheadAttention Class (functional.py 기반 재구성)
 # ============================================================================
 class MultiheadAttention(nn.Module):
@@ -127,7 +204,7 @@ class MultiheadAttention(nn.Module):
 
     def forward(self, query: Tensor, key: Tensor, value: Tensor, key_padding_mask: Optional[Tensor] = None,
                 need_weights: bool = True, attn_mask: Optional[Tensor] = None, average_attn_weights: bool = True,
-                is_causal: bool = False) -> Tuple[Tensor, Optional[Tensor]]:
+                is_causal: bool = False, position_bias: Optional[Tensor] = None) -> Tuple[Tensor, Optional[Tensor]]:
 
         if self.batch_first:
             query, key, value = [x.transpose(1, 0) for x in (query, key, value)]
@@ -144,7 +221,8 @@ class MultiheadAttention(nn.Module):
             use_separate_proj_weight=not self._qkv_same_embed_dim,
             q_proj_weight=getattr(self, 'q_proj_weight', None),
             k_proj_weight=getattr(self, 'k_proj_weight', None),
-            v_proj_weight=getattr(self, 'v_proj_weight', None)
+            v_proj_weight=getattr(self, 'v_proj_weight', None),
+            position_bias=position_bias
         )
         
         if self.batch_first:
@@ -164,7 +242,7 @@ class MultiheadAttention(nn.Module):
         q_proj_weight: Optional[Tensor] = None, k_proj_weight: Optional[Tensor] = None,
         v_proj_weight: Optional[Tensor] = None, static_k: Optional[Tensor] = None,
         static_v: Optional[Tensor] = None, average_attn_weights: bool = True,
-        is_causal: bool = False
+        is_causal: bool = False, position_bias: Optional[Tensor] = None
     ) -> Tuple[Tensor, Optional[Tensor]]:
 
         # === START: functional.py의 multi_head_attention_forward 본체 (거의 그대로 복사) ===
@@ -238,10 +316,15 @@ class MultiheadAttention(nn.Module):
         if not training:
             dropout_p = 0.0
 
-        # (★핵심★) 어텐션 계산. 아직 bias는 추가하지 않음.
-        # 여기가 T5 bias를 추가할 위치.
+        # (★핵심★) 어텐션 계산. 여기에 T5 bias 추가.
         attn_output_weights = torch.bmm(q, k.transpose(1, 2))
         attn_output_weights = attn_output_weights / math.sqrt(q.size(-1))
+        
+        # T5 Position Bias 추가
+        if position_bias is not None:
+            # position_bias: (1, H, L, S) -> (B*H, L, S) 로 브로드캐스팅
+            position_bias_expanded = position_bias.repeat(bsz, 1, 1, 1).view(-1, attn_output_weights.size(1), attn_output_weights.size(2))
+            attn_output_weights += position_bias_expanded
         
         if attn_mask is not None:
             if attn_mask.dim() == 2: attn_mask = attn_mask.unsqueeze(0)
@@ -270,14 +353,25 @@ class MultiheadAttention(nn.Module):
         # === END: functional.py의 multi_head_attention_forward 본체 ===
 
 class TransformerEncoderLayer(nn.Module):
-    """PyTorch nn.TransformerEncoderLayer와 완전히 동일한 구현"""
+    """PyTorch nn.TransformerEncoderLayer와 완전히 동일한 구현 + T5 Position Bias"""
     
     def __init__(self, d_model: int, nhead: int, dim_feedforward: int = 2048, dropout: float = 0.1,
                  activation: Union[str, Callable[[Tensor], Tensor]] = F.relu, layer_norm_eps: float = 1e-5,
-                 batch_first: bool = False, norm_first: bool = False, bias: bool = True, device=None, dtype=None):
+                 batch_first: bool = False, norm_first: bool = False, bias: bool = True, device=None, dtype=None,
+                 use_t5_bias: bool = False, num_buckets: int = 32, max_distance: int = 128):
         super().__init__()
         
         self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout, bias=bias, batch_first=batch_first)
+        
+        # T5 Relative Position Bias (Encoder는 양방향)
+        self.use_t5_bias = use_t5_bias
+        if use_t5_bias:
+            self.t5_bias = T5RelativePositionBias(
+                num_heads=nhead, 
+                is_decoder=False,  # Encoder는 양방향(bidirectional)
+                num_buckets=num_buckets,
+                max_distance=max_distance
+            )
         
         # Feed forward network
         self.linear1 = nn.Linear(d_model, dim_feedforward, bias=bias)
@@ -346,8 +440,15 @@ class TransformerEncoderLayer(nn.Module):
     
     def _sa_block(self, x: Tensor, attn_mask: Optional[Tensor], key_padding_mask: Optional[Tensor],
                   is_causal: bool = False) -> Tensor:
+        # T5 Position Bias 계산
+        position_bias = None
+        if self.use_t5_bias:
+            # batch_first에 따른 시퀀스 길이 추출
+            seq_len = x.size(1) if self.self_attn.batch_first else x.size(0)
+            position_bias = self.t5_bias(seq_len, seq_len, device=x.device)
+        
         x = self.self_attn(x, x, x, attn_mask=attn_mask, key_padding_mask=key_padding_mask,
-                           need_weights=False, is_causal=is_causal)[0]
+                           need_weights=False, is_causal=is_causal, position_bias=position_bias)[0]
         return self.dropout1(x)
     
     def _ff_block(self, x: Tensor) -> Tensor:
@@ -417,15 +518,34 @@ class TransformerEncoder(nn.Module):
 
 
 class TransformerDecoderLayer(nn.Module):
-    """PyTorch nn.TransformerDecoderLayer와 완전히 동일한 구현"""
+    """PyTorch nn.TransformerDecoderLayer와 완전히 동일한 구현 + T5 Position Bias"""
     
     def __init__(self, d_model: int, nhead: int, dim_feedforward: int = 2048, dropout: float = 0.1,
                  activation: Union[str, Callable[[Tensor], Tensor]] = F.relu, layer_norm_eps: float = 1e-5,
-                 batch_first: bool = False, norm_first: bool = False, bias: bool = True, device=None, dtype=None):
+                 batch_first: bool = False, norm_first: bool = False, bias: bool = True, device=None, dtype=None,
+                 use_t5_bias: bool = False, num_buckets: int = 32, max_distance: int = 128):
         super().__init__()
         
         self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout, bias=bias, batch_first=batch_first)
         self.multihead_attn = MultiheadAttention(d_model, nhead, dropout=dropout, bias=bias, batch_first=batch_first)
+        
+        # T5 Relative Position Bias
+        self.use_t5_bias = use_t5_bias
+        if use_t5_bias:
+            # self-attention은 단방향(causal)이므로 is_decoder=True
+            self.sa_t5_bias = T5RelativePositionBias(
+                num_heads=nhead, 
+                is_decoder=True,  # Decoder self-attention은 단방향
+                num_buckets=num_buckets,
+                max_distance=max_distance
+            )
+            # cross-attention은 양방향이므로 is_decoder=False
+            self.mha_t5_bias = T5RelativePositionBias(
+                num_heads=nhead, 
+                is_decoder=False,  # Cross-attention은 양방향
+                num_buckets=num_buckets,
+                max_distance=max_distance
+            )
         
         # Feed forward network
         self.linear1 = nn.Linear(d_model, dim_feedforward, bias=bias)
@@ -493,14 +613,29 @@ class TransformerDecoderLayer(nn.Module):
     
     def _sa_block(self, x: Tensor, attn_mask: Optional[Tensor], key_padding_mask: Optional[Tensor],
                   is_causal: bool = False) -> Tensor:
+        # T5 Self-Attention Position Bias 계산
+        position_bias = None
+        if self.use_t5_bias:
+            # batch_first에 따른 시퀀스 길이 추출
+            seq_len = x.size(1) if self.self_attn.batch_first else x.size(0)
+            position_bias = self.sa_t5_bias(seq_len, seq_len, device=x.device)
+        
         x = self.self_attn(x, x, x, attn_mask=attn_mask, key_padding_mask=key_padding_mask,
-                           need_weights=False, is_causal=is_causal)[0]
+                           need_weights=False, is_causal=is_causal, position_bias=position_bias)[0]
         return self.dropout1(x)
     
     def _mha_block(self, x: Tensor, mem: Tensor, attn_mask: Optional[Tensor],
                    key_padding_mask: Optional[Tensor], is_causal: bool = False) -> Tensor:
+        # T5 Cross-Attention Position Bias 계산
+        position_bias = None
+        if self.use_t5_bias:
+            # batch_first에 따른 시퀀스 길이 추출
+            q_len = x.size(1) if self.multihead_attn.batch_first else x.size(0)
+            k_len = mem.size(1) if self.multihead_attn.batch_first else mem.size(0)
+            position_bias = self.mha_t5_bias(q_len, k_len, device=x.device)
+        
         x = self.multihead_attn(x, mem, mem, attn_mask=attn_mask, key_padding_mask=key_padding_mask,
-                               need_weights=False, is_causal=is_causal)[0]
+                               need_weights=False, is_causal=is_causal, position_bias=position_bias)[0]
         return self.dropout2(x)
     
     def _ff_block(self, x: Tensor) -> Tensor:
@@ -644,18 +779,28 @@ class RMSNorm(nn.Module):
 def load_t5_embeddings(model_name: str = "t5-base"):
     """T5 체크포인트에서 임베딩 로드"""
     print(f"Loading T5 embeddings from {model_name}...")
-    from transformers import T5ForConditionalGeneration
-    t5_model = T5ForConditionalGeneration.from_pretrained(model_name)
-    t5_config = t5_model.config
-    
-    return {
-        'token_embedding_weights': t5_model.shared.weight.data.clone(),
-        'lm_head_weights': t5_model.lm_head.weight.data.clone() if hasattr(t5_model, 'lm_head') else t5_model.shared.weight.data.clone(),
-        'vocab_size': t5_config.vocab_size,
-        'd_model': t5_config.d_model,
-        'model_name': model_name,
-        'full_model': t5_model
-    }
+    try:
+        t5_model = T5ForConditionalGeneration.from_pretrained(model_name)
+        t5_config = t5_model.config
+        
+        return {
+            'token_embedding_weights': t5_model.shared.weight.data.clone(),
+            'lm_head_weights': t5_model.lm_head.weight.data.clone() if hasattr(t5_model, 'lm_head') else t5_model.shared.weight.data.clone(),
+            'vocab_size': t5_config.vocab_size,
+            'd_model': t5_config.d_model,
+            'model_name': model_name,
+            'full_model': t5_model
+        }
+    except ImportError:
+        print("Warning: transformers library not available. Using random initialization.")
+        return {
+            'token_embedding_weights': torch.randn(32128, 512),  # T5-base default
+            'lm_head_weights': torch.randn(32128, 512),
+            'vocab_size': 32128,
+            'd_model': 512,
+            'model_name': model_name,
+            'full_model': None
+        }
 
 
 # ============================================================================
@@ -718,14 +863,17 @@ class InputInterface(nn.Module):
         if self.use_positional_encoding:
             self.position_embedding = nn.Embedding(window_size, self.embedding_dim)
         
-        # 손 구현 Transformer Encoder (PyTorch와 완전히 동일)
+        # 손 구현 Transformer Encoder (PyTorch와 완전히 동일) + T5 Position Bias
         encoder_layer = TransformerEncoderLayer(
             d_model=self.embedding_dim,
             nhead=encoder_heads,
             dim_feedforward=dim_feedforward,
             dropout=encoder_dropout,
             norm_first=True,  # T5 스타일
-            batch_first=True
+            batch_first=True,
+            use_t5_bias=True,  # T5 Position Bias 활성화
+            num_buckets=32,
+            max_distance=128
         )
         self.transformer_encoder = TransformerEncoder(
             encoder_layer,
@@ -941,13 +1089,16 @@ class OutputInterface(nn.Module):
         if self.use_positional_encoding:
             self.position_embedding = nn.Embedding(window_size, self.embedding_dim)
         
-        # 손 구현 Transformer Decoder (PyTorch와 완전히 동일)
+        # 손 구현 Transformer Decoder (PyTorch와 완전히 동일) + T5 Position Bias
         decoder_layer = TransformerDecoderLayer(
             d_model=self.embedding_dim,
             nhead=decoder_heads,
             dim_feedforward=dim_feedforward,
             dropout=dropout,
-            batch_first=True
+            batch_first=True,
+            use_t5_bias=True,  # T5 Position Bias 활성화
+            num_buckets=32,
+            max_distance=128
         )
         self.transformer_decoder = TransformerDecoder(
             decoder_layer,
@@ -1154,6 +1305,103 @@ class OutputInterface(nn.Module):
 # 검증 함수 (PyTorch 공식과의 등가성 확인)
 # ============================================================================
 
+def test_t5_position_bias():
+    """T5 Position Bias 구현 테스트"""
+    print("=== Testing T5 Relative Position Bias Implementation ===")
+    
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # 테스트 파라미터
+    num_heads = 8
+    seq_len = 16
+    batch_size = 2
+    
+    print("\n1. Testing T5RelativePositionBias module...")
+    
+    # Encoder용 (양방향)
+    encoder_bias = T5RelativePositionBias(num_heads=num_heads, is_decoder=False).to(device)
+    encoder_position_bias = encoder_bias(seq_len, seq_len, device)
+    
+    print(f"   Encoder Position Bias Shape: {encoder_position_bias.shape}")
+    print(f"   Expected: (1, {num_heads}, {seq_len}, {seq_len})")
+    assert encoder_position_bias.shape == (1, num_heads, seq_len, seq_len)
+    
+    # Decoder용 (단방향)
+    decoder_bias = T5RelativePositionBias(num_heads=num_heads, is_decoder=True).to(device)
+    decoder_position_bias = decoder_bias(seq_len, seq_len, device)
+    
+    print(f"   Decoder Position Bias Shape: {decoder_position_bias.shape}")
+    assert decoder_position_bias.shape == (1, num_heads, seq_len, seq_len)
+    
+    print("\n2. Testing MultiheadAttention with Position Bias...")
+    
+    # 테스트 데이터
+    d_model = 512
+    src = torch.randn(batch_size, seq_len, d_model, device=device)
+    
+    # Position Bias가 있는 MultiheadAttention
+    mha_with_bias = MultiheadAttention(d_model, num_heads, batch_first=True).to(device)
+    mha_with_bias.eval()
+    
+    # Position Bias 없이 실행
+    with torch.no_grad():
+        out_without_bias, _ = mha_with_bias(src, src, src)
+    
+    # Position Bias와 함께 실행
+    with torch.no_grad():
+        out_with_bias, _ = mha_with_bias(src, src, src, position_bias=encoder_position_bias)
+    
+    print(f"   Output without bias shape: {out_without_bias.shape}")
+    print(f"   Output with bias shape: {out_with_bias.shape}")
+    
+    # Position Bias가 적용되면 출력이 달라져야 함
+    diff = torch.max(torch.abs(out_without_bias - out_with_bias)).item()
+    print(f"   Max difference with/without bias: {diff:.6f}")
+    assert diff > 1e-6, "Position bias should change the output"
+    
+    print("\n3. Testing TransformerEncoderLayer with T5 Bias...")
+    
+    # T5 Bias가 있는 EncoderLayer
+    encoder_layer_with_bias = TransformerEncoderLayer(
+        d_model=d_model, 
+        nhead=num_heads, 
+        batch_first=True,
+        use_t5_bias=True
+    ).to(device)
+    encoder_layer_with_bias.eval()
+    
+    # T5 Bias가 없는 EncoderLayer
+    encoder_layer_without_bias = TransformerEncoderLayer(
+        d_model=d_model, 
+        nhead=num_heads, 
+        batch_first=True,
+        use_t5_bias=False
+    ).to(device)
+    encoder_layer_without_bias.eval()
+    
+    # 가중치를 동일하게 만들기 (T5 bias 제외)
+    with torch.no_grad():
+        encoder_layer_without_bias.load_state_dict(
+            {k: v for k, v in encoder_layer_with_bias.state_dict().items() 
+             if not k.startswith('t5_bias')}, 
+            strict=False
+        )
+    
+    with torch.no_grad():
+        out_with_t5_bias = encoder_layer_with_bias(src)
+        out_without_t5_bias = encoder_layer_without_bias(src)
+    
+    print(f"   Output with T5 bias shape: {out_with_t5_bias.shape}")
+    print(f"   Output without T5 bias shape: {out_without_t5_bias.shape}")
+    
+    # T5 bias가 적용되면 출력이 달라져야 함
+    diff = torch.max(torch.abs(out_with_t5_bias - out_without_t5_bias)).item()
+    print(f"   Max difference with/without T5 bias: {diff:.6f}")
+    assert diff > 1e-6, "T5 bias should change the output"
+    
+    print("\n✅ T5 Position Bias implementation tests passed!")
+
+
 def test_transformer_equivalence():
     """손 구현과 PyTorch 공식 구현의 등가성 검증"""
     print("=== Testing Hand-Implemented Transformer Equivalence ===")
@@ -1234,3 +1482,51 @@ def test_transformer_equivalence():
     assert max_diff < 1e-5, f"Encoder not equivalent! Diff: {max_diff}"
     
     print("\n✅ All equivalence tests passed! Hand-implemented transformers are line-by-line equivalent!")
+
+
+# ============================================================================
+# T5 Relative Position Bias Implementation Summary
+# ============================================================================
+"""
+T5 Relative Position Bias 구현 요약:
+
+1. **T5RelativePositionBias 모듈**:
+   - T5의 상대 위치 편향을 계산하는 독립적인 모듈
+   - `is_decoder` 파라미터로 단방향(Decoder) vs 양방향(Encoder) 구분
+   - 버킷 기반 상대 위치 계산으로 메모리 효율적
+   - 출력: (1, num_heads, query_len, key_len) 형태의 bias 텐서
+
+2. **MultiheadAttention 확장**:
+   - `forward` 메소드에 `position_bias: Optional[Tensor] = None` 인자 추가
+   - `_mha_forward` 메소드에서 어텐션 스코어 계산 후 position_bias 더하기
+   - 기존 PyTorch 호환성 유지 (position_bias=None이면 기본 동작)
+
+3. **TransformerEncoderLayer 통합**:
+   - `use_t5_bias=True`로 T5 Position Bias 활성화
+   - Encoder는 양방향이므로 `is_decoder=False`
+   - `_sa_block`에서 position_bias 계산 후 MultiheadAttention에 전달
+
+4. **TransformerDecoderLayer 통합**:
+   - Self-attention: `is_decoder=True` (단방향/causal)
+   - Cross-attention: `is_decoder=False` (양방향)
+   - 각각 별도의 T5RelativePositionBias 인스턴스 사용
+
+5. **핵심 장점**:
+   - 관심사 분리: 어텐션 로직과 위치 편향 로직 분리
+   - 모듈성: T5 bias를 독립적인 모듈로 캡슐화
+   - 유연성: position_bias 인자로 다양한 bias 방식 실험 가능
+   - 호환성: 기존 PyTorch Transformer와 완전 호환
+
+사용 예시:
+```python
+# T5 Position Bias가 적용된 Encoder
+encoder_layer = TransformerEncoderLayer(
+    d_model=512, nhead=8, use_t5_bias=True
+)
+
+# T5 Position Bias가 적용된 Decoder
+decoder_layer = TransformerDecoderLayer(
+    d_model=512, nhead=8, use_t5_bias=True
+)
+```
+"""

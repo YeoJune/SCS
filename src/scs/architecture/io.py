@@ -873,7 +873,6 @@ class OutputInterface(nn.Module):
             nhead=decoder_heads,
             dim_feedforward=dim_feedforward,
             dropout=dropout,
-            norm_first=True,
             batch_first=True
         )
         self.transformer_decoder = TransformerDecoder(
@@ -893,6 +892,7 @@ class OutputInterface(nn.Module):
             print(f"Loaded T5 LM head: {self.final_projection.weight.shape}")
         
         self.layer_norm = RMSNorm(self.embedding_dim)
+        self.dropout = nn.Dropout(dropout)
     
     def _transplant_t5_decoder(self, t5_model):
         """T5 decoder 가중치를 손 구현 decoder로 이식"""
@@ -1061,7 +1061,7 @@ class OutputInterface(nn.Module):
             combined_embeds = token_embeds
         
         # 정규화
-        return self.layer_norm(combined_embeds)
+        return self.dropout(combined_embeds)
     
     def _generate_causal_mask(self, size: int) -> torch.Tensor:
         """자기회귀를 위한 causal mask 생성 (현재 사용 안함 - is_causal=True로 대체)"""

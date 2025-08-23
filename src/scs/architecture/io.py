@@ -12,49 +12,50 @@ import math
 import warnings
 
 class MultiheadAttention(nn.Module):
-    """PyTorch nn.MultiheadAttention과 완전히 동일한 구현"""
-    
+    # __init__과 _reset_parameters는 기존 io.py의 것을 그대로 사용합니다.
+    # PyTorch 공식 nn.MultiheadAttention의 __init__과 동일하므로 문제가 없습니다.
     def __init__(self, embed_dim, num_heads, dropout=0., bias=True, add_bias_kv=False, add_zero_attn=False,
                  kdim=None, vdim=None, batch_first=False, device=None, dtype=None):
         super().__init__()
+        factory_kwargs = {'device': device, 'dtype': dtype}
         self.embed_dim = embed_dim
         self.kdim = kdim if kdim is not None else embed_dim
         self.vdim = vdim if vdim is not None else embed_dim
         self._qkv_same_embed_dim = self.kdim == embed_dim and self.vdim == embed_dim
-        
+
         self.num_heads = num_heads
         self.dropout = dropout
         self.batch_first = batch_first
         self.head_dim = embed_dim // num_heads
         assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
-        
+
         if self._qkv_same_embed_dim:
-            self.in_proj_weight = nn.Parameter(torch.empty((3 * embed_dim, embed_dim)))
+            self.in_proj_weight = nn.Parameter(torch.empty((3 * embed_dim, embed_dim), **factory_kwargs))
             self.register_parameter('q_proj_weight', None)
-            self.register_parameter('k_proj_weight', None) 
+            self.register_parameter('k_proj_weight', None)
             self.register_parameter('v_proj_weight', None)
         else:
-            self.q_proj_weight = nn.Parameter(torch.empty((embed_dim, embed_dim)))
-            self.k_proj_weight = nn.Parameter(torch.empty((embed_dim, self.kdim)))
-            self.v_proj_weight = nn.Parameter(torch.empty((embed_dim, self.vdim)))
+            self.q_proj_weight = nn.Parameter(torch.empty((embed_dim, embed_dim), **factory_kwargs))
+            self.k_proj_weight = nn.Parameter(torch.empty((embed_dim, self.kdim), **factory_kwargs))
+            self.v_proj_weight = nn.Parameter(torch.empty((embed_dim, self.vdim), **factory_kwargs))
             self.register_parameter('in_proj_weight', None)
-        
+
         if bias:
-            self.in_proj_bias = nn.Parameter(torch.empty(3 * embed_dim))
+            self.in_proj_bias = nn.Parameter(torch.empty(3 * embed_dim, **factory_kwargs))
         else:
             self.register_parameter('in_proj_bias', None)
-            
-        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
-        
+        # NonDynamicallyQuantizableLinear 대신 일반 Linear 사용해도 무방합니다.
+        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias, **factory_kwargs)
+
         if add_bias_kv:
-            self.bias_k = nn.Parameter(torch.empty((1, 1, embed_dim)))
-            self.bias_v = nn.Parameter(torch.empty((1, 1, embed_dim)))
+            self.bias_k = nn.Parameter(torch.empty((1, 1, embed_dim), **factory_kwargs))
+            self.bias_v = nn.Parameter(torch.empty((1, 1, embed_dim), **factory_kwargs))
         else:
             self.bias_k = self.bias_v = None
-            
+
         self.add_zero_attn = add_zero_attn
         self._reset_parameters()
-    
+
     def _reset_parameters(self):
         if self._qkv_same_embed_dim:
             nn.init.xavier_uniform_(self.in_proj_weight)
@@ -62,7 +63,7 @@ class MultiheadAttention(nn.Module):
             nn.init.xavier_uniform_(self.q_proj_weight)
             nn.init.xavier_uniform_(self.k_proj_weight)
             nn.init.xavier_uniform_(self.v_proj_weight)
-        
+
         if self.in_proj_bias is not None:
             nn.init.constant_(self.in_proj_bias, 0.)
             nn.init.constant_(self.out_proj.bias, 0.)
@@ -71,149 +72,56 @@ class MultiheadAttention(nn.Module):
             nn.init.xavier_normal_(self.bias_k)
         if self.bias_v is not None:
             nn.init.xavier_normal_(self.bias_v)
-    
+
     def forward(self, query: Tensor, key: Tensor, value: Tensor, key_padding_mask: Optional[Tensor] = None,
                 need_weights: bool = True, attn_mask: Optional[Tensor] = None, average_attn_weights: bool = True,
                 is_causal: bool = False) -> Tuple[Tensor, Optional[Tensor]]:
         
+        # === START: PyTorch 공식 로직 ===
         is_batched = query.dim() == 3
-        
-        # PyTorch 공식 구현과 똑같이: batch_first 처리
+        # batch_first가 True이면 (S, B, E) -> (B, S, E)로 바꿔서 F.m_h_a_f에 전달해야 함
+        # 하지만 F.m_h_a_f는 내부적으로 (S, B, E)를 기준으로 동작하므로, 여기서는 그에 맞춰줌
         if self.batch_first and is_batched:
-            if query is key and key is value:
-                query = key = value = query.transpose(1, 0)
+            # make sure that the transpose op does not affect the "is" property
+            if key is value:
+                if query is key:
+                    query = key = value = query.transpose(1, 0)
+                else:
+                    query, key = (x.transpose(1, 0) for x in (query, key))
+                    value = key
             else:
-                query, key, value = [x.transpose(1, 0) for x in (query, key, value)]
-        
-        if not is_batched:
-            query = query.unsqueeze(1)
-            key = key.unsqueeze(1) 
-            value = value.unsqueeze(1)
-            if key_padding_mask is not None:
-                key_padding_mask = key_padding_mask.unsqueeze(0)
-        
-        # PyTorch 공식과 똑같이: 차원 추출
-        tgt_len, bsz, embed_dim = query.shape
-        src_len, _, _ = key.shape
-        
-        # PyTorch 공식과 똑같이: Q, K, V 계산
-        if self._qkv_same_embed_dim:
-            q, k, v = F.linear(query, self.in_proj_weight, self.in_proj_bias).chunk(3, dim=-1)
+                query, key, value = (x.transpose(1, 0) for x in (query, key, value))
+
+        # F.multi_head_attention_forward 호출
+        if not self._qkv_same_embed_dim:
+            attn_output, attn_output_weights = F.multi_head_attention_forward(
+                query, key, value, self.embed_dim, self.num_heads,
+                self.in_proj_weight, self.in_proj_bias,
+                self.bias_k, self.bias_v, self.add_zero_attn,
+                self.dropout, self.out_proj.weight, self.out_proj.bias,
+                training=self.training,
+                key_padding_mask=key_padding_mask, need_weights=need_weights,
+                attn_mask=attn_mask, use_separate_proj_weight=True,
+                q_proj_weight=self.q_proj_weight, k_proj_weight=self.k_proj_weight,
+                v_proj_weight=self.v_proj_weight, average_attn_weights=average_attn_weights,
+                is_causal=is_causal)
         else:
-            if self.in_proj_bias is not None:
-                b_q, b_k, b_v = self.in_proj_bias.chunk(3)
-            else:
-                b_q = b_k = b_v = None
-            q = F.linear(query, self.q_proj_weight, b_q)
-            k = F.linear(key, self.k_proj_weight, b_k)
-            v = F.linear(value, self.v_proj_weight, b_v)
-        
-        # PyTorch 공식과 똑같이: bias_k, bias_v 처리
-        if self.bias_k is not None and self.bias_v is not None:
-            k = torch.cat([k, self.bias_k.repeat(1, bsz, 1)])
-            v = torch.cat([v, self.bias_v.repeat(1, bsz, 1)])
-            if attn_mask is not None:
-                attn_mask = F.pad(attn_mask, (0, 1))
-            if key_padding_mask is not None:
-                key_padding_mask = F.pad(key_padding_mask, (0, 1))
+            attn_output, attn_output_weights = F.multi_head_attention_forward(
+                query, key, value, self.embed_dim, self.num_heads,
+                self.in_proj_weight, self.in_proj_bias,
+                self.bias_k, self.bias_v, self.add_zero_attn,
+                self.dropout, self.out_proj.weight, self.out_proj.bias,
+                training=self.training,
+                key_padding_mask=key_padding_mask, need_weights=need_weights,
+                attn_mask=attn_mask, average_attn_weights=average_attn_weights,
+                is_causal=is_causal)
 
-        # PyTorch 공식과 똑같이: zero attention 처리  
-        if self.add_zero_attn:
-            # src_len 업데이트 전 zero_attn을 추가해야 함.
-            zero_attn_shape = (1, bsz, self.head_dim * self.num_heads)
-            k = torch.cat([k, torch.zeros(zero_attn_shape, dtype=k.dtype, device=k.device)], dim=0)
-            v = torch.cat([v, torch.zeros(zero_attn_shape, dtype=v.dtype, device=v.device)], dim=0)
-            if attn_mask is not None:
-                attn_mask = F.pad(attn_mask, (0, 1))
-            if key_padding_mask is not None:
-                key_padding_mask = F.pad(key_padding_mask, (0, 1))
-        
-        # PyTorch 공식과 똑같이: multi-head reshape
-        q = q.contiguous().view(tgt_len, bsz * self.num_heads, self.head_dim).transpose(0, 1)
-        k = k.contiguous().view(-1, bsz * self.num_heads, self.head_dim).transpose(0, 1)
-        v = v.contiguous().view(-1, bsz * self.num_heads, self.head_dim).transpose(0, 1)
-        
-        # src_len 최종 업데이트
-        src_len = k.size(1)
-
-        # =========================================================================
-        # START: 마스크 처리 로직 수정 (functional.py 기반)
-        # =========================================================================
-        
-        # functional.py의 _canonical_mask 동작 모사
-        def to_float_mask(mask: Optional[Tensor], dtype: torch.dtype) -> Optional[Tensor]:
-            if mask is not None and mask.dtype == torch.bool:
-                return torch.zeros_like(mask, dtype=dtype).masked_fill_(mask, float("-inf"))
-            return mask
-
-        attn_mask = to_float_mask(attn_mask, q.dtype)
-        key_padding_mask = to_float_mask(key_padding_mask, q.dtype)
-
-        # is_causal 힌트가 있고, 다른 마스크가 없으면 Causal 마스크를 생성
-        if is_causal and attn_mask is None and key_padding_mask is None:
-            # PyTorch 2.0부터는 is_causal=True이면 attn_mask가 None이어야 함
-            if tgt_len == src_len:
-                attn_mask = torch.triu(
-                    torch.full((tgt_len, src_len), float("-inf"), device=q.device, dtype=q.dtype),
-                    diagonal=1,
-                )
-            else:
-                # is_causal은 tgt_len == src_len일 때만 의미가 있으므로, 아닐 경우 경고
-                warnings.warn(f"is_causal=True is not supported when tgt_len({tgt_len}) != src_len({src_len}).")
-        
-        # key_padding_mask와 attn_mask 병합
-        if key_padding_mask is not None:
-            # key_padding_mask: (bsz, src_len) -> (bsz, 1, 1, src_len) -> (bsz * num_heads, 1, src_len)
-            merged_mask = key_padding_mask.view(bsz, 1, 1, src_len).expand(-1, self.num_heads, -1, -1).reshape(bsz * self.num_heads, 1, src_len)
-            if attn_mask is None:
-                attn_mask = merged_mask
-            else:
-                # attn_mask: (bsz * num_heads, tgt_len, src_len) 또는 (tgt_len, src_len)
-                # 브로드캐스팅을 위해 차원을 맞춰줌
-                if attn_mask.dim() == 2:
-                    attn_mask = attn_mask.unsqueeze(0)
-                attn_mask = attn_mask + merged_mask
-
-        # =========================================================================
-        # END: 마스크 처리 로직 수정
-        # =========================================================================
-
-        # PyTorch 공식과 똑같이: attention weights 계산
-        attn_output_weights = torch.bmm(q, k.transpose(1, 2))
-        attn_output_weights = attn_output_weights / math.sqrt(self.head_dim)
-        
-        # 통합된 마스크를 한 번에 적용
-        if attn_mask is not None:
-            attn_output_weights += attn_mask
-
-        # PyTorch 공식과 똑같이: softmax + dropout
-        attn_output_weights = F.softmax(attn_output_weights, dim=-1)
-        attn_output_weights = F.dropout(attn_output_weights, p=self.dropout, training=self.training)
-        
-        # PyTorch 공식과 똑같이: value와 곱셈 + output projection
-        attn_output = torch.bmm(attn_output_weights, v)
-        attn_output = attn_output.transpose(0, 1).contiguous().view(tgt_len, bsz, embed_dim)
-        attn_output = self.out_proj(attn_output)
-        
-        # PyTorch 공식과 똑같이: batch_first 복원
+        # batch_first가 True였으면 다시 (B, S, E) 형태로 복원
         if self.batch_first and is_batched:
-            attn_output = attn_output.transpose(1, 0)
-        
-        if not is_batched:
-            attn_output = attn_output.squeeze(1)
-        
-        # PyTorch 공식과 똑같이: attention weights 반환
-        if need_weights:
-            attn_output_weights = attn_output_weights.view(bsz, self.num_heads, tgt_len, src_len)
-            if average_attn_weights:
-                attn_output_weights = attn_output_weights.sum(dim=1) / self.num_heads
-            
-            if not is_batched:
-                attn_output_weights = attn_output_weights.squeeze(0)
-            
+            return attn_output.transpose(1, 0), attn_output_weights
+        else:
             return attn_output, attn_output_weights
-        else:
-            return attn_output, None
+        # === END: PyTorch 공식 로직 ===
 
 class TransformerEncoderLayer(nn.Module):
     """PyTorch nn.TransformerEncoderLayer와 완전히 동일한 구현"""

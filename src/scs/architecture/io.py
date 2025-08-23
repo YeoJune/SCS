@@ -152,14 +152,20 @@ class T5Attention(nn.Module):
         # Apply attention mask
         if attention_mask is not None:
             if attention_mask.dim() == 2:
-                # (batch_size, seq_length) -> (batch_size, 1, 1, seq_length)
-                attention_mask = attention_mask.unsqueeze(1).unsqueeze(1)
+                # Key padding mask: (batch_size, key_length) -> (batch_size, 1, 1, key_length)
+                attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+            elif attention_mask.dim() == 3:
+                # Sequence mask: (batch_size, seq_length, seq_length) -> (batch_size, 1, seq_length, seq_length)
+                attention_mask = attention_mask.unsqueeze(1)
             
-            # Convert to additive mask (PyTorch style: True = attend, False = mask)
+            # Convert to additive mask
             if attention_mask.dtype == torch.bool:
-                attention_mask = attention_mask.masked_fill(~attention_mask, float('-inf'))
+                # True = attend, False = mask
+                attention_mask = attention_mask.masked_fill(~attention_mask, float('-inf')).masked_fill(attention_mask, 0.0)
             else:
+                # 1 = attend, 0 = mask
                 attention_mask = (1.0 - attention_mask) * -1e9
+            
             scores = scores + attention_mask
         
         # Softmax and dropout

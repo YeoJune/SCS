@@ -344,46 +344,90 @@ class SCSSystem(nn.Module):
         """출력 저장 및 디코더 시퀀스 업데이트 - 명확한 인덱싱"""
         
         batch_size = logits.shape[0]
-        active_mask = self.timing_manager.get_active_mask()
-        current_generated_length = self.timing_manager.generated_length
+        active_mask = self.timing_manager.get_active_mask()  # [B]
+        current_generated_length = self.timing_manager.generated_length  # [B]
         
-        for sample_idx in range(batch_size):
-            if not active_mask[sample_idx]:
-                continue
+        if not active_mask.any():
+            return
+        
+        # 1. 저장할 위치 계산 (generated_length - 1, 0-based indexing)
+        current_positions = current_generated_length - 1  # [B]
+        
+        # 2. 유효한 위치와 활성 상태를 모두 만족하는 샘플들 필터링
+        valid_pos_mask = (current_positions >= 0) & (current_positions < all_logits.shape[1])
+        valid_mask = active_mask & valid_pos_mask  # [B]
+        
+        if not valid_mask.any():
+            return
+        
+        # 3. 유효한 샘플들의 인덱스와 위치 추출
+        valid_indices = torch.where(valid_mask)[0]  # [num_valid]
+        valid_positions = current_positions[valid_indices]  # [num_valid]
+        
+        # 4. 벡터화된 로짓 저장
+        all_logits[valid_indices, valid_positions] = logits[valid_indices]
+        
+        # 5. 다음 토큰 결정 - 벡터화
+        if training and target_tokens is not None:
+            # Teacher forcing 확률을 배치 전체에 적용
+            use_teacher_forcing = torch.rand(len(valid_indices), device=logits.device) < scheduled_sampling_prob
             
-            # *** 핵심: current_generated_length는 이미 증가된 상태 ***
-            # 저장할 위치는 generated_length - 1 (0부터 시작하는 인덱스)
-            current_pos = current_generated_length[sample_idx].item() - 1
+            # Teacher forcing용 토큰 준비 (기본값: EOS)
+            teacher_tokens = torch.full(
+                (len(valid_indices),), 
+                self.eos_token_id, 
+                device=logits.device, 
+                dtype=torch.long
+            )
             
-            # 시퀀스 길이 체크
-            if current_pos < 0 or current_pos >= all_logits.shape[1]:
-                continue
+            # 타겟 토큰이 존재하는 위치들 찾기
+            target_available_mask = valid_positions < target_tokens.shape[1]
+            if target_available_mask.any():
+                # 유효한 타겟 위치에서 토큰 가져오기
+                available_valid_indices = valid_indices[target_available_mask]
+                available_positions = valid_positions[target_available_mask]
+                teacher_tokens[target_available_mask] = target_tokens[available_valid_indices, available_positions]
             
-            # 로짓 저장
-            all_logits[sample_idx, current_pos] = logits[sample_idx]
+            # 모델 예측 토큰
+            predicted_tokens = torch.argmax(logits[valid_indices], dim=-1)
             
-            # 다음 토큰 결정
-            if training and target_tokens is not None:
-                if torch.rand(1).item() < scheduled_sampling_prob:
-                    if current_pos < target_tokens.shape[1]:
-                        next_token = target_tokens[sample_idx, current_pos].item()
-                    else:
-                        next_token = self.eos_token_id
-                else:
-                    next_token = torch.argmax(logits[sample_idx]).item()
-            else:
-                next_token = torch.argmax(logits[sample_idx]).item()
+            # Teacher forcing 적용하여 최종 토큰 선택
+            next_tokens = torch.where(use_teacher_forcing, teacher_tokens, predicted_tokens)
+        else:
+            # 추론 모드: 항상 모델 예측 사용
+            next_tokens = torch.argmax(logits[valid_indices], dim=-1)
+        
+        # 6. 디코더 시퀀스 업데이트 - 벡터화
+        decoder_positions = current_generated_length[valid_indices]  # 다음에 저장할 디코더 위치
+        
+        # 윈도우 시프트가 필요한 샘플들과 그렇지 않은 샘플들 분리
+        need_shift_mask = decoder_positions >= self.decoder_window_size
+        
+        # 6a. 윈도우 시프트가 필요한 샘플들 처리
+        if need_shift_mask.any():
+            shift_indices = valid_indices[need_shift_mask]
+            shift_tokens = next_tokens[need_shift_mask]
             
-            # 디코더 시퀀스 업데이트
-            decoder_pos = current_generated_length[sample_idx].item()  # 다음에 저장할 디코더 위치
-            if decoder_pos >= self.decoder_window_size:
-                # 윈도우 시프트
-                decoder_sequences[sample_idx, :-1] = decoder_sequences[sample_idx, 1:].clone()
-                decoder_sequences[sample_idx, -1] = next_token
-            else:
-                # 윈도우 내에 추가
-                if decoder_pos < decoder_sequences.shape[1]:
-                    decoder_sequences[sample_idx, decoder_pos] = next_token
+            # 벡터화된 윈도우 시프트: 한 번에 모든 해당 샘플들 처리
+            decoder_sequences[shift_indices, :-1] = decoder_sequences[shift_indices, 1:].clone()
+            decoder_sequences[shift_indices, -1] = shift_tokens
+        
+        # 6b. 윈도우 내 추가가 가능한 샘플들 처리
+        no_shift_mask = ~need_shift_mask
+        if no_shift_mask.any():
+            no_shift_indices = valid_indices[no_shift_mask]
+            no_shift_positions = decoder_positions[no_shift_mask]
+            no_shift_tokens = next_tokens[no_shift_mask]
+            
+            # 디코더 시퀀스 경계 내에 있는 위치들만 필터링
+            within_bounds_mask = no_shift_positions < decoder_sequences.shape[1]
+            if within_bounds_mask.any():
+                final_indices = no_shift_indices[within_bounds_mask]
+                final_positions = no_shift_positions[within_bounds_mask]
+                final_tokens = no_shift_tokens[within_bounds_mask]
+                
+                # 벡터화된 업데이트: advanced indexing 사용
+                decoder_sequences[final_indices, final_positions] = final_tokens
     
     def _get_external_input_at_clk(
         self,

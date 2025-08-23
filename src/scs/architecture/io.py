@@ -541,10 +541,10 @@ class CustomT5Decoder(nn.Module):
         # causal mask: (seq_len, seq_len)에서 upper triangle이 -inf
         if tgt_mask.dtype == torch.float and torch.any(tgt_mask == float('-inf')):
             # -inf를 False로, 0을 True로 변환
-            converted_mask = (tgt_mask != float('-inf'))
+            converted_mask = (tgt_mask != float('-inf')).bool()
             return converted_mask
         
-        return tgt_mask
+        return tgt_mask.bool() if tgt_mask.dtype != torch.bool else tgt_mask
 
 
 def load_t5_embeddings(model_name: str = "t5-base"):
@@ -783,7 +783,7 @@ class InputInterface(nn.Module):
         windowed_input = self.dropout(windowed_input)
         
         # 패딩 마스크 생성 (PAD 토큰을 구분)
-        padding_mask = (token_window != self.pad_token_id)  # PAD가 아닌 곳이 True
+        padding_mask = (token_window != self.pad_token_id).bool()  # PAD가 아닌 곳이 True
         
         # T5 Encoder 적용 (패딩 마스크 포함)
         encoder_output = self.transformer_encoder(windowed_input, src_key_padding_mask=padding_mask)
@@ -1016,10 +1016,10 @@ class OutputInterface(nn.Module):
         
         # 패딩 마스크 생성
         # 디코더 입력의 패딩 마스크 (PAD 토큰이 아닌 곳이 True)
-        tgt_padding_mask = (decoder_input_ids != self.pad_token_id)
+        tgt_padding_mask = (decoder_input_ids != self.pad_token_id).bool()
         
         # 히든 윈도우의 패딩 마스크 (초기 0 벡터를 PAD로 간주)
-        memory_padding_mask = (torch.abs(self.hidden_window).sum(dim=-1) > 1e-6)
+        memory_padding_mask = (torch.abs(self.hidden_window).sum(dim=-1) > 1e-6).bool()
         
         # 순환 버퍼를 시간 순서로 재정렬 (기존과 동일)
         rolled_window = torch.roll(self.hidden_window, shifts=-self.window_ptr, dims=1)

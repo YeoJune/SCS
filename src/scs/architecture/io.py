@@ -147,7 +147,7 @@ class T5Attention(nn.Module):
             else:
                 position_bias = self.compute_bias(real_seq_length, key_length)
         
-        scores += position_bias
+        #scores += position_bias
         
         # Apply attention mask
         if attention_mask is not None:

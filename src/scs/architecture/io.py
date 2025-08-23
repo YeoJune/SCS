@@ -400,8 +400,6 @@ class CustomT5Encoder(nn.Module):
         """
         # 기존 코드에서는 batch_first=True를 사용하므로 (N, S, E) 형태로 가정
         hidden_states = src
-        
-        hidden_states = self.dropout(hidden_states)
         position_bias = None
         
         for layer in self.layers:

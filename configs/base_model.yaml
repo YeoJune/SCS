@@ -110,8 +110,8 @@ learning:
   guide_sep_token_id: 32057
   guide_weight: 1.0
 
-  gate_pruning_weight: 0 # 패치 게이트 L1 정규화 가중치
-  inner_pruning_weight: 0 # 내부 연결 L1 정규화 가중치
+  gate_pruning_weight: 1e-5 # 패치 게이트 L1 정규화 가중치
+  inner_pruning_weight: 1e-5 # 내부 연결 L1 정규화 가중치
 
   # 점진적 커리큘럼 학습
   use_curriculum_learning: false

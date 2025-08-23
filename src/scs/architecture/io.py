@@ -12,54 +12,27 @@ import math
 import warnings
 
 
+
 # ============================================================================
-# functional.py에서 가져온 헬퍼 함수들
+# functional.py에서 가져온 헬퍼 함수들 (multi_head_attention_forward가 사용하는 함수)
 # ============================================================================
 def _mha_shape_check(query: Tensor, key: Tensor, value: Tensor, key_padding_mask: Optional[Tensor], attn_mask: Optional[Tensor], num_heads: int):
-    # Verifies the expected shape for `query, `key`, `value`, `key_padding_mask` and `attn_mask`
-    # and returns if the input is batched or not.
-    # Raises an error if `query` is not 2-D (unbatched) or 3-D (batched) tensor.
     if query.dim() == 3:
         is_batched = True
-        assert key.dim() == 3 and value.dim() == 3, (
-            "For batched (3-D) `query`, expected `key` and `value` to be 3-D"
-            f" but found {key.dim()}-D and {value.dim()}-D tensors respectively"
-        )
+        assert key.dim() == 3 and value.dim() == 3, "For batched (3-D) `query`, expected `key` and `value` to be 3-D"
         if key_padding_mask is not None:
-            assert key_padding_mask.dim() == 2, (
-                "For batched (3-D) `query`, expected `key_padding_mask` to be `None` or 2-D"
-                f" but found {key_padding_mask.dim()}-D tensor instead"
-            )
+            assert key_padding_mask.dim() == 2, "For batched (3-D) `query`, expected `key_padding_mask` to be `None` or 2-D"
         if attn_mask is not None:
-            assert attn_mask.dim() in (2, 3), (
-                "For batched (3-D) `query`, expected `attn_mask` to be `None`, 2-D or 3-D"
-                f" but found {attn_mask.dim()}-D tensor instead"
-            )
+            assert attn_mask.dim() in (2, 3), "For batched (3-D) `query`, expected `attn_mask` to be `None`, 2-D or 3-D"
     elif query.dim() == 2:
         is_batched = False
-        assert key.dim() == 2 and value.dim() == 2, (
-            "For unbatched (2-D) `query`, expected `key` and `value` to be 2-D"
-            f" but found {key.dim()}-D and {value.dim()}-D tensors respectively"
-        )
+        assert key.dim() == 2 and value.dim() == 2, "For unbatched (2-D) `query`, expected `key` and `value` to be 2-D"
         if key_padding_mask is not None:
-            assert key_padding_mask.dim() == 1, (
-                "For unbatched (2-D) `query`, expected `key_padding_mask` to be `None` or 1-D"
-                f" but found {key_padding_mask.dim()}-D tensor instead"
-            )
+            assert key_padding_mask.dim() == 1, "For unbatched (2-D) `query`, expected `key_padding_mask` to be `None` or 1-D"
         if attn_mask is not None:
-            assert attn_mask.dim() in (2, 3), (
-                "For unbatched (2-D) `query`, expected `attn_mask` to be `None`, 2-D or 3-D"
-                f" but found {attn_mask.dim()}-D tensor instead"
-            )
-            if attn_mask.dim() == 3:
-                expected_shape = (num_heads, query.shape[0], key.shape[0])
-                assert attn_mask.shape == expected_shape, (
-                    f"Expected `attn_mask` shape to be {expected_shape} but got {attn_mask.shape}"
-                )
+            assert attn_mask.dim() in (2, 3), "For unbatched (2-D) `query`, expected `attn_mask` to be `None`, 2-D or 3-D"
     else:
-        raise AssertionError(
-            f"query should be unbatched 2D or batched 3D tensor but received {query.dim()}-D query tensor"
-        )
+        raise AssertionError(f"query should be unbatched 2D or batched 3D tensor but received {query.dim()}-D query tensor")
     return is_batched
 
 def _canonical_mask(mask: Optional[Tensor], mask_name: str, other_type: Optional[torch.dtype], other_name: str, target_type: torch.dtype, check_other: bool = True) -> Optional[Tensor]:
@@ -68,18 +41,35 @@ def _canonical_mask(mask: Optional[Tensor], mask_name: str, other_type: Optional
         _mask_is_float = torch.is_floating_point(mask)
         if _mask_dtype != torch.bool and not _mask_is_float:
             raise AssertionError(f"only bool and floating types of {mask_name} are supported")
-        if check_other and other_type is not None:
-            if _mask_dtype != other_type:
-                warnings.warn(f"Support for mismatched {mask_name} and {other_name} is deprecated. Use same type for both instead.")
+        if check_other and other_type is not None and _mask_dtype != other_type:
+            warnings.warn(f"Support for mismatched {mask_name} and {other_name} is deprecated. Use same type for both instead.")
         if not _mask_is_float:
             mask = torch.zeros_like(mask, dtype=target_type).masked_fill_(mask, float("-inf"))
     return mask
 
 def _none_or_dtype(input: Optional[Tensor]) -> Optional[torch.dtype]:
     if input is None: return None
-    elif isinstance(input, torch.Tensor): return input.dtype
-    raise RuntimeError("input to _none_or_dtype() must be None or torch.Tensor")
-    
+    return input.dtype
+
+def _in_projection_packed(q: Tensor, k: Tensor, v: Tensor, w: Tensor, b: Optional[Tensor] = None) -> List[Tensor]:
+    E = q.size(-1)
+    if k is v:
+        if q is k:
+            return F.linear(q, w, b).chunk(3, dim=-1)
+        else:
+            w_q, w_kv = w.split([E, E * 2])
+            if b is None: b_q = b_kv = None
+            else: b_q, b_kv = b.split([E, E * 2])
+            return (F.linear(q, w_q, b_q),) + F.linear(k, w_kv, b_kv).chunk(2, dim=-1)
+    else:
+        w_q, w_k, w_v = w.chunk(3)
+        if b is None: b_q = b_k = b_v = None
+        else: b_q, b_k, b_v = b.chunk(3)
+        return F.linear(q, w_q, b_q), F.linear(k, w_k, b_k), F.linear(v, w_v, b_v)
+
+def _in_projection(q: Tensor, k: Tensor, v: Tensor, w_q: Tensor, w_k: Tensor, w_v: Tensor, b_q: Optional[Tensor] = None, b_k: Optional[Tensor] = None, b_v: Optional[Tensor] = None):
+    return F.linear(q, w_q, b_q), F.linear(k, w_k, b_k), F.linear(v, w_v, b_v)
+
 # ============================================================================
 # MultiheadAttention Class (functional.py 기반 재구성)
 # ============================================================================
@@ -139,12 +129,10 @@ class MultiheadAttention(nn.Module):
                 need_weights: bool = True, attn_mask: Optional[Tensor] = None, average_attn_weights: bool = True,
                 is_causal: bool = False) -> Tuple[Tensor, Optional[Tensor]]:
 
-        # batch_first 처리를 위해 F.m_h_a_f를 호출하기 전/후에 transpose를 수행.
         if self.batch_first:
             query, key, value = [x.transpose(1, 0) for x in (query, key, value)]
 
-        # F.multi_head_attention_forward 호출
-        attn_output, attn_output_weights = self.multi_head_attention_forward_unfolded(
+        attn_output, attn_output_weights = self._mha_forward(
             query, key, value, self.embed_dim, self.num_heads,
             self.in_proj_weight, self.in_proj_bias,
             self.bias_k, self.bias_v, self.add_zero_attn,
@@ -159,16 +147,14 @@ class MultiheadAttention(nn.Module):
             v_proj_weight=getattr(self, 'v_proj_weight', None)
         )
         
-        # batch_first가 True였으면 다시 (B, S, E) 형태로 복원
         if self.batch_first:
             attn_output = attn_output.transpose(1, 0)
         
         return attn_output, attn_output_weights
 
-# multi_head_attention_forward_unfolded 메소드만 교체
-
-    @staticmethod
-    def multi_head_attention_forward_unfolded(
+    # 이 메소드는 functional.py의 multi_head_attention_forward를 그대로 이식한 것입니다.
+    # self 참조를 위해 staticmethod가 아닌 인스턴스 메소드로 변경했습니다.
+    def _mha_forward(self,
         query: Tensor, key: Tensor, value: Tensor, embed_dim_to_check: int, num_heads: int,
         in_proj_weight: Optional[Tensor], in_proj_bias: Optional[Tensor],
         bias_k: Optional[Tensor], bias_v: Optional[Tensor], add_zero_attn: bool,
@@ -180,90 +166,95 @@ class MultiheadAttention(nn.Module):
         static_v: Optional[Tensor] = None, average_attn_weights: bool = True,
         is_causal: bool = False
     ) -> Tuple[Tensor, Optional[Tensor]]:
-        
+
+        # === START: functional.py의 multi_head_attention_forward 본체 (거의 그대로 복사) ===
         is_batched = _mha_shape_check(query, key, value, key_padding_mask, attn_mask, num_heads)
 
         if not is_batched:
-            query, key, value = [x.unsqueeze(1) for x in (query, key, value)]
+            query = query.unsqueeze(1)
+            key = key.unsqueeze(1)
+            value = value.unsqueeze(1)
             if key_padding_mask is not None:
                 key_padding_mask = key_padding_mask.unsqueeze(0)
 
         tgt_len, bsz, embed_dim = query.shape
         src_len, _, _ = key.shape
-        head_dim = embed_dim // num_heads
         
-        # In-projection
-        if not use_separate_proj_weight:
-            q, k, v = F.linear(query, in_proj_weight, in_proj_bias).chunk(3, dim=-1)
-        else:
-            if in_proj_bias is None: b_q = b_k = b_v = None
-            else: b_q, b_k, b_v = in_proj_bias.chunk(3)
-            q = F.linear(query, q_proj_weight, b_q)
-            k = F.linear(key, k_proj_weight, b_k)
-            v = F.linear(value, v_proj_weight, b_v)
+        key_padding_mask = _canonical_mask(
+            mask=key_padding_mask,
+            mask_name="key_padding_mask",
+            other_type=_none_or_dtype(attn_mask),
+            other_name="attn_mask",
+            target_type=query.dtype,
+        )
 
-        # Reshape q, k, v
-        q = q.contiguous().view(tgt_len, bsz * num_heads, head_dim).transpose(0, 1)
-        k = k.contiguous().view(-1, bsz * num_heads, head_dim).transpose(0, 1)
-        v = v.contiguous().view(-1, bsz * num_heads, head_dim).transpose(0, 1)
+        if is_causal and attn_mask is None:
+            raise RuntimeError("Need attn_mask if specifying the is_causal hint.")
+        
+        # SDPA fast path 로직은 복잡하므로, 일단은 수동 계산 경로로 통일합니다.
+        # functional.py에서도 need_weights=True이면 이 경로를 탑니다.
+        # if is_causal and key_padding_mask is None and not need_weights:
+        #     attn_mask = None
+        # else:
+        attn_mask = _canonical_mask(
+            mask=attn_mask,
+            mask_name="attn_mask",
+            other_type=None,
+            other_name="",
+            target_type=query.dtype,
+            check_other=False,
+        )
+        if key_padding_mask is not None:
+            is_causal = False
+        
+        if not use_separate_proj_weight:
+            q, k, v = _in_projection_packed(query, key, value, in_proj_weight, in_proj_bias)
+        else:
+            q, k, v = _in_projection(query, key, value, q_proj_weight, k_proj_weight, v_proj_weight, 
+                                     in_proj_bias.chunk(3)[0] if in_proj_bias is not None else None,
+                                     in_proj_bias.chunk(3)[1] if in_proj_bias is not None else None,
+                                     in_proj_bias.chunk(3)[2] if in_proj_bias is not None else None)
+
+        if bias_k is not None and bias_v is not None:
+            k = torch.cat([k, bias_k.repeat(1, bsz, 1)])
+            v = torch.cat([v, bias_v.repeat(1, bsz, 1)])
+            if attn_mask is not None: attn_mask = F.pad(attn_mask, (0, 1))
+            if key_padding_mask is not None: key_padding_mask = F.pad(key_padding_mask, (0, 1))
+
+        head_dim = embed_dim // num_heads
+        q = q.view(tgt_len, bsz * num_heads, head_dim).transpose(0, 1)
+        k = k.view(-1, bsz * num_heads, head_dim).transpose(0, 1)
+        v = v.view(-1, bsz * num_heads, head_dim).transpose(0, 1)
+
         src_len = k.size(1)
 
-        # =========================================================================
-        # START: `functional.py`의 마스크 처리 로직을 정확하게 반영
-        # =========================================================================
-        
-        # 1. is_causal과 attn_mask의 관계 처리
-        #    functional.py에서는 SDPA에 is_causal 힌트를 넘길지 말지를 결정한다.
-        #    우리는 수동 계산을 하므로, attn_mask 텐서 자체를 올바르게 만드는 데 집중한다.
-        #    Decoder에서 is_causal=True와 attn_mask(causal_mask)가 함께 들어오는 것은 정상이다.
-        #    이때는 제공된 attn_mask를 사용하면 된다. is_causal 힌트는 무시한다.
-        
-        # 2. key_padding_mask와 attn_mask를 float 타입으로 정규화 및 통합
-        final_attn_mask = attn_mask
-        if final_attn_mask is not None and final_attn_mask.dtype == torch.bool:
-             # PyTorch TransformerEncoder/DecoderLayer에서 _canonical_mask를 거치므로,
-             # 이곳으로 전달되는 attn_mask와 key_padding_mask는 float 타입일 것을 가정하는 것이 안전함.
-             # 하지만, 만약을 대비해 bool 타입 처리 로직을 남겨둠.
-             pass # boolean 마스크는 나중에 masked_fill로 처리
-        
         if key_padding_mask is not None:
-            # key_padding_mask는 항상 boolean (True=무시)
-            kpm_expanded = key_padding_mask.view(bsz, 1, 1, src_len).expand(-1, num_heads, tgt_len, -1).reshape(bsz * num_heads, tgt_len, src_len)
-            
-            if final_attn_mask is None:
-                final_attn_mask = torch.zeros_like(kpm_expanded, dtype=query.dtype).masked_fill_(kpm_expanded, float("-inf"))
-            elif final_attn_mask.dtype == torch.bool:
-                final_attn_mask = final_attn_mask.logical_or(kpm_expanded)
+            key_padding_mask = key_padding_mask.view(bsz, 1, 1, src_len).expand(-1, num_heads, -1, -1).reshape(bsz * num_heads, 1, src_len)
+            if attn_mask is None:
+                attn_mask = key_padding_mask
             else:
-                # float 마스크에 kpm을 반영 (True 위치에 -inf 더하기)
-                final_attn_mask = final_attn_mask.masked_fill(kpm_expanded, float("-inf"))
+                attn_mask = attn_mask + key_padding_mask
 
-        # =========================================================================
-        # END: 마스크 처리 로직 수정
-        # =========================================================================
+        if not training:
+            dropout_p = 0.0
 
-        # 어텐션 계산
+        # (★핵심★) 어텐션 계산. 아직 bias는 추가하지 않음.
+        # 여기가 T5 bias를 추가할 위치.
         attn_output_weights = torch.bmm(q, k.transpose(1, 2))
-        attn_output_weights /= math.sqrt(head_dim)
+        attn_output_weights = attn_output_weights / math.sqrt(q.size(-1))
         
-        if final_attn_mask is not None:
-            if final_attn_mask.dim() == 2:
-                 final_attn_mask = final_attn_mask.unsqueeze(0)
-            if final_attn_mask.dtype == torch.bool:
-                attn_output_weights.masked_fill_(final_attn_mask, float("-inf"))
-            else:
-                attn_output_weights += final_attn_mask
+        if attn_mask is not None:
+            if attn_mask.dim() == 2: attn_mask = attn_mask.unsqueeze(0)
+            attn_output_weights += attn_mask
 
         attn_output_weights = F.softmax(attn_output_weights, dim=-1)
-        if training and dropout_p > 0.0:
+        if dropout_p > 0.0:
             attn_output_weights = F.dropout(attn_output_weights, p=dropout_p)
-
+            
         attn_output = torch.bmm(attn_output_weights, v)
         attn_output = attn_output.transpose(0, 1).contiguous().view(tgt_len, bsz, embed_dim)
-        
-        # Out-projection
         attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
-        
+
         if not is_batched:
             attn_output = attn_output.squeeze(1)
 
@@ -276,6 +267,7 @@ class MultiheadAttention(nn.Module):
             return attn_output, attn_output_weights
         else:
             return attn_output, None
+        # === END: functional.py의 multi_head_attention_forward 본체 ===
 
 class TransformerEncoderLayer(nn.Module):
     """PyTorch nn.TransformerEncoderLayer와 완전히 동일한 구현"""

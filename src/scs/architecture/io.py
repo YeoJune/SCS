@@ -223,8 +223,6 @@ class T5LayerSelfAttention(nn.Module):
         
         # Residual connection
         hidden_states = hidden_states + self.dropout(attention_output[0])
-
-        hidden_states = self.layer_norm(hidden_states)
         
         outputs = (hidden_states,) + attention_output[1:]
         return outputs
@@ -1053,7 +1051,7 @@ class OutputInterface(nn.Module):
         else:
             combined_embeds = token_embeds
         
-        return combined_embeds
+        return self.layer_norm(combined_embeds)
     
     def _generate_causal_mask(self, size: int) -> torch.Tensor:
         """자기회귀를 위한 causal mask 생성 (기존 유지)"""

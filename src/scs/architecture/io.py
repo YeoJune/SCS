@@ -265,17 +265,46 @@ class TransformerEncoderLayer(nn.Module):
         if not hasattr(self, 'activation'):
             self.activation = F.relu
     
-    def forward(self, src: Tensor, src_mask: Optional[Tensor] = None, src_key_padding_mask: Optional[Tensor] = None,
-                is_causal: bool = False) -> Tensor:
+    def forward(
+        self,
+        src: Tensor,
+        src_mask: Optional[Tensor] = None,
+        src_key_padding_mask: Optional[Tensor] = None,
+        is_causal: bool = False,
+    ) -> Tensor:
+        """PyTorch 공식과 정확히 동일한 구현"""
         
+        # PyTorch 공식과 동일한 mask 정규화
+        src_key_padding_mask = F._canonical_mask(
+            mask=src_key_padding_mask,
+            mask_name="src_key_padding_mask",
+            other_type=F._none_or_dtype(src_mask),
+            other_name="src_mask",
+            target_type=src.dtype,
+        )
+
+        src_mask = F._canonical_mask(
+            mask=src_mask,
+            mask_name="src_mask",
+            other_type=None,
+            other_name="",
+            target_type=src.dtype,
+            check_other=False,
+        )
+
+        # PyTorch 공식과 동일한 forward (Fig. 1 of https://arxiv.org/pdf/2002.04745v1.pdf)
         x = src
         if self.norm_first:
-            x = x + self._sa_block(self.norm1(x), src_mask, src_key_padding_mask, is_causal)
+            x = x + self._sa_block(
+                self.norm1(x), src_mask, src_key_padding_mask, is_causal=is_causal
+            )
             x = x + self._ff_block(self.norm2(x))
         else:
-            x = self.norm1(x + self._sa_block(x, src_mask, src_key_padding_mask, is_causal))
+            x = self.norm1(
+                x + self._sa_block(x, src_mask, src_key_padding_mask, is_causal=is_causal)
+            )
             x = self.norm2(x + self._ff_block(x))
-        
+
         return x
     
     def _sa_block(self, x: Tensor, attn_mask: Optional[Tensor], key_padding_mask: Optional[Tensor],
@@ -301,28 +330,56 @@ class TransformerEncoder(nn.Module):
         self.enable_nested_tensor = enable_nested_tensor
         self.mask_check = mask_check
     
-    def forward(self, src: Tensor, mask: Optional[Tensor] = None, src_key_padding_mask: Optional[Tensor] = None,
-                is_causal: Optional[bool] = None) -> Tensor:
+    def forward(
+        self,
+        src: Tensor,
+        mask: Optional[Tensor] = None,
+        src_key_padding_mask: Optional[Tensor] = None,
+        is_causal: Optional[bool] = None,
+    ) -> Tensor:
+        """PyTorch 공식과 정확히 동일한 구현"""
         
+        # PyTorch 공식과 동일한 mask 정규화
+        src_key_padding_mask = F._canonical_mask(
+            mask=src_key_padding_mask,
+            mask_name="src_key_padding_mask",
+            other_type=F._none_or_dtype(mask),
+            other_name="mask",
+            target_type=src.dtype,
+        )
+
+        mask = F._canonical_mask(
+            mask=mask,
+            mask_name="mask",
+            other_type=None,
+            other_name="",
+            target_type=src.dtype,
+            check_other=False,
+        )
+
         output = src
         convert_to_nested = False
         first_layer = self.layers[0]
         src_key_padding_mask_for_layers = src_key_padding_mask
         
-        # PyTorch의 causal mask 자동 감지 로직
+        # PyTorch 공식과 동일한 causal mask 감지
         seq_len = _get_seq_len(src, first_layer.self_attn.batch_first)
         is_causal = _detect_is_causal_mask(mask, is_causal, seq_len)
-        
+
         for mod in self.layers:
-            output = mod(output, src_mask=mask, src_key_padding_mask=src_key_padding_mask_for_layers,
-                        is_causal=is_causal)
-        
+            output = mod(
+                output,
+                src_mask=mask,
+                is_causal=is_causal,
+                src_key_padding_mask=src_key_padding_mask_for_layers,
+            )
+
         if convert_to_nested:
-            output = output.to_padded_tensor(0., src.size())
-        
+            output = output.to_padded_tensor(0.0, src.size())
+
         if self.norm is not None:
             output = self.norm(output)
-        
+
         return output
 
 
@@ -362,21 +419,43 @@ class TransformerDecoderLayer(nn.Module):
         if not hasattr(self, 'activation'):
             self.activation = F.relu
     
-    def forward(self, tgt: Tensor, memory: Tensor, tgt_mask: Optional[Tensor] = None,
-                memory_mask: Optional[Tensor] = None, tgt_key_padding_mask: Optional[Tensor] = None,
-                memory_key_padding_mask: Optional[Tensor] = None, tgt_is_causal: bool = False,
-                memory_is_causal: bool = False) -> Tensor:
+    def forward(
+        self,
+        tgt: Tensor,
+        memory: Tensor,
+        tgt_mask: Optional[Tensor] = None,
+        memory_mask: Optional[Tensor] = None,
+        tgt_key_padding_mask: Optional[Tensor] = None,
+        memory_key_padding_mask: Optional[Tensor] = None,
+        tgt_is_causal: bool = False,
+        memory_is_causal: bool = False,
+    ) -> Tensor:
+        """PyTorch 공식과 정확히 동일한 구현 (Fig. 1 of https://arxiv.org/pdf/2002.04745v1.pdf)"""
         
         x = tgt
         if self.norm_first:
-            x = x + self._sa_block(self.norm1(x), tgt_mask, tgt_key_padding_mask, tgt_is_causal)
-            x = x + self._mha_block(self.norm2(x), memory, memory_mask, memory_key_padding_mask, memory_is_causal)
+            x = x + self._sa_block(
+                self.norm1(x), tgt_mask, tgt_key_padding_mask, tgt_is_causal
+            )
+            x = x + self._mha_block(
+                self.norm2(x),
+                memory,
+                memory_mask,
+                memory_key_padding_mask,
+                memory_is_causal,
+            )
             x = x + self._ff_block(self.norm3(x))
         else:
-            x = self.norm1(x + self._sa_block(x, tgt_mask, tgt_key_padding_mask, tgt_is_causal))
-            x = self.norm2(x + self._mha_block(x, memory, memory_mask, memory_key_padding_mask, memory_is_causal))
+            x = self.norm1(
+                x + self._sa_block(x, tgt_mask, tgt_key_padding_mask, tgt_is_causal)
+            )
+            x = self.norm2(
+                x + self._mha_block(
+                    x, memory, memory_mask, memory_key_padding_mask, memory_is_causal
+                )
+            )
             x = self.norm3(x + self._ff_block(x))
-        
+
         return x
     
     def _sa_block(self, x: Tensor, attn_mask: Optional[Tensor], key_padding_mask: Optional[Tensor],
@@ -406,26 +485,39 @@ class TransformerDecoder(nn.Module):
         self.num_layers = num_layers
         self.norm = norm
     
-    def forward(self, tgt: Tensor, memory: Tensor, tgt_mask: Optional[Tensor] = None,
-                memory_mask: Optional[Tensor] = None, tgt_key_padding_mask: Optional[Tensor] = None,
-                memory_key_padding_mask: Optional[Tensor] = None, tgt_is_causal: Optional[bool] = None,
-                memory_is_causal: bool = False) -> Tensor:
+    def forward(
+        self,
+        tgt: Tensor,
+        memory: Tensor,
+        tgt_mask: Optional[Tensor] = None,
+        memory_mask: Optional[Tensor] = None,
+        tgt_key_padding_mask: Optional[Tensor] = None,
+        memory_key_padding_mask: Optional[Tensor] = None,
+        tgt_is_causal: Optional[bool] = None,
+        memory_is_causal: bool = False,
+    ) -> Tensor:
+        """PyTorch 공식과 정확히 동일한 구현"""
         
         output = tgt
-        
-        # PyTorch의 causal mask 자동 감지 로직
+
         seq_len = _get_seq_len(tgt, self.layers[0].self_attn.batch_first)
         tgt_is_causal = _detect_is_causal_mask(tgt_mask, tgt_is_causal, seq_len)
-        
+
         for mod in self.layers:
-            output = mod(output, memory, tgt_mask=tgt_mask, memory_mask=memory_mask,
-                        tgt_key_padding_mask=tgt_key_padding_mask,
-                        memory_key_padding_mask=memory_key_padding_mask,
-                        tgt_is_causal=tgt_is_causal, memory_is_causal=memory_is_causal)
-        
+            output = mod(
+                output,
+                memory,
+                tgt_mask=tgt_mask,
+                memory_mask=memory_mask,
+                tgt_key_padding_mask=tgt_key_padding_mask,
+                memory_key_padding_mask=memory_key_padding_mask,
+                tgt_is_causal=tgt_is_causal,
+                memory_is_causal=memory_is_causal,
+            )
+
         if self.norm is not None:
             output = self.norm(output)
-        
+
         return output
 
 
@@ -434,33 +526,56 @@ class TransformerDecoder(nn.Module):
 # ============================================================================
 
 def _get_clones(module, N):
-    return nn.ModuleList([module for i in range(N)])
+    """PyTorch 공식과 정확히 동일 - copy.deepcopy 사용"""
+    import copy
+    return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
 
 
 def _get_activation_fn(activation):
+    """PyTorch 공식과 정확히 동일"""
     if activation == "relu":
         return F.relu
     elif activation == "gelu":
         return F.gelu
     else:
-        raise RuntimeError("activation should be relu/gelu, not {}".format(activation))
+        raise RuntimeError(f"activation should be relu/gelu, not {activation}")
 
 
-def _detect_is_causal_mask(mask: Optional[Tensor], is_causal: Optional[bool] = None, size: Optional[int] = None,) -> bool:
-    # Return False if no causal mask
+def _detect_is_causal_mask(
+    mask: Optional[Tensor],
+    is_causal: Optional[bool] = None,
+    size: Optional[int] = None,
+) -> bool:
+    """PyTorch 공식과 정확히 동일한 causal mask 감지"""
+    # Prevent type refinement
+    make_causal = is_causal is True
+
     if is_causal is None and mask is not None:
-        sz = size if size is not None else mask.size(-1)
-        causal_comparison = torch.triu(torch.ones(sz, sz, dtype=torch.bool, device=mask.device), diagonal=1).to(mask.device)
+        sz = size if size is not None else mask.size(-2)
+        causal_comparison = _generate_square_subsequent_mask(
+            sz, device=mask.device, dtype=mask.dtype
+        )
 
-        # Handle different mask types
-        if mask.size(-1) == sz and mask.size(-2) == sz:
-            if mask.dtype == torch.bool:
-                is_causal = torch.equal(mask, causal_comparison)
-            else:
-                causal_mask = torch.zeros_like(mask, dtype=mask.dtype)
-                causal_mask.masked_fill_(causal_comparison, float('-inf'))
-                is_causal = torch.equal(mask, causal_mask)
-    return is_causal if is_causal is not None else False
+        # Do not use `torch.equal` so we handle batched masks by
+        # broadcasting the comparison.
+        if mask.size() == causal_comparison.size():
+            make_causal = bool((mask == causal_comparison).all())
+        else:
+            make_causal = False
+
+    return make_causal
+
+
+def _generate_square_subsequent_mask(
+    sz: int,
+    device: Optional[torch.device] = None,
+    dtype: Optional[torch.dtype] = None,
+) -> Tensor:
+    """PyTorch 공식과 정확히 동일한 causal mask 생성"""
+    return torch.triu(
+        torch.full((sz, sz), float("-inf"), dtype=dtype, device=device),
+        diagonal=1,
+    )
 
 
 def _get_seq_len(src: Tensor, batch_first: bool) -> Optional[int]:

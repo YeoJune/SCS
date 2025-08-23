@@ -373,12 +373,6 @@ class SCSSystem(nn.Module):
                     next_token = torch.argmax(logits[sample_idx]).item()
             else:
                 next_token = torch.argmax(logits[sample_idx]).item()
-
-            # --- 디버깅 코드 ---
-            # 첫 번째 샘플, 처음 5개 토큰 생성 시에만 출력
-            if sample_idx == 0 and current_pos < 5:
-                print(f"  [DEBUG system.py] clk={self.timing_manager.current_clk}, sample=0, pos={current_pos}: Next token = {next_token}")
-            # --- 디버깅 코드 끝 ---
             
             # 디코더 시퀀스 업데이트
             decoder_pos = current_generated_length[sample_idx].item()  # 다음에 저장할 디코더 위치

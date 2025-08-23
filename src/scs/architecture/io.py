@@ -223,6 +223,8 @@ class T5LayerSelfAttention(nn.Module):
         
         # Residual connection
         hidden_states = hidden_states + self.dropout(attention_output[0])
+
+        hidden_states = self.layer_norm(hidden_states)
         
         outputs = (hidden_states,) + attention_output[1:]
         return outputs

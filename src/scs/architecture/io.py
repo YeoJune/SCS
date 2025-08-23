@@ -11,44 +11,6 @@ from typing import Optional, Tuple, Dict, Any, List, Union, Callable
 import math
 import warnings
 
-
-# ============================================================================
-# HAND-IMPLEMENTED PYTORCH TRANSFORMER COMPONENTS (LINE-BY-LINE EQUIVALENT)
-# ============================================================================
-
-def _scaled_dot_product_attention(
-    query: Tensor,
-    key: Tensor,
-    value: Tensor,
-    attn_mask: Optional[Tensor] = None,
-    dropout_p: float = 0.0,
-    is_causal: bool = False,
-) -> Tuple[Tensor, Tensor]:
-    """PyTorch F.scaled_dot_product_attention과 동일한 구현"""
-    B, Nt, E = query.shape
-    q = query / math.sqrt(E)
-    
-    # Compute attention scores
-    attn = torch.bmm(q, key.transpose(-2, -1))
-    
-    if is_causal:
-        L, S = query.size(-2), key.size(-2)
-        attn_mask = torch.ones(L, S, dtype=torch.bool, device=query.device).tril(diagonal=0).logical_not()
-    
-    if attn_mask is not None:
-        if attn_mask.dtype == torch.bool:
-            attn.masked_fill_(attn_mask, -float('inf'))
-        else:
-            attn += attn_mask
-    
-    attn = F.softmax(attn, dim=-1)
-    if dropout_p > 0.0:
-        attn = F.dropout(attn, p=dropout_p)
-    
-    output = torch.bmm(attn, value)
-    return output, attn
-
-
 class MultiheadAttention(nn.Module):
     """PyTorch nn.MultiheadAttention과 완전히 동일한 구현"""
     
@@ -181,13 +143,14 @@ class MultiheadAttention(nn.Module):
         attn_output_weights = torch.bmm(q, k.transpose(1, 2))
         attn_output_weights = attn_output_weights / math.sqrt(self.head_dim)
         
-        # PyTorch 공식과 똑같이: causal mask 처리
+        # PyTorch 공식과 똑같이: is_causal과 attn_mask를 모두 처리
+        # F.scaled_dot_product_attention의 내부 로직을 직접 구현
         if is_causal:
-            assert attn_mask is None, "attn_mask and is_causal cannot be both specified"
-            temp_mask = torch.ones(tgt_len, src_len, dtype=torch.bool, device=q.device).tril(diagonal=0)
-            attn_mask = temp_mask.logical_not()
+            # is_causal이 True이면, attn_mask가 있든 없든 causal mask를 먼저 적용합니다.
+            temp_mask = torch.ones(tgt_len, src_len, dtype=torch.bool, device=q.device).tril(diagonal=0).logical_not()
+            attn_output_weights.masked_fill_(temp_mask, float('-inf'))
         
-        # PyTorch 공식과 똑같이: attention mask 적용
+        # 사용자가 제공한 attn_mask가 있다면 추가로 적용합니다.
         if attn_mask is not None:
             if attn_mask.dtype == torch.bool:
                 attn_output_weights.masked_fill_(attn_mask, float('-inf'))
@@ -358,24 +321,20 @@ class TransformerEncoder(nn.Module):
         )
 
         output = src
-        convert_to_nested = False
-        first_layer = self.layers[0]
-        src_key_padding_mask_for_layers = src_key_padding_mask
         
         # PyTorch 공식과 동일한 causal mask 감지
-        seq_len = _get_seq_len(src, first_layer.self_attn.batch_first)
+        # for 루프 이전에 is_causal을 한 번만 계산합니다.
+        seq_len = _get_seq_len(src, self.layers[0].self_attn.batch_first)
         is_causal = _detect_is_causal_mask(mask, is_causal, seq_len)
-
+        
+        # for 루프에서는 계산된 is_causal 값을 계속 사용합니다.
         for mod in self.layers:
             output = mod(
                 output,
                 src_mask=mask,
+                src_key_padding_mask=src_key_padding_mask, # 변수 재할당 없이 직접 전달
                 is_causal=is_causal,
-                src_key_padding_mask=src_key_padding_mask_for_layers,
             )
-
-        if convert_to_nested:
-            output = output.to_padded_tensor(0.0, src.size())
 
         if self.norm is not None:
             output = self.norm(output)
@@ -623,52 +582,6 @@ def load_t5_embeddings(model_name: str = "t5-base"):
         'model_name': model_name,
         'full_model': t5_model
     }
-
-
-def transplant_encoder_layer(scs_layer, t5_layer):
-    """T5 encoder 레이어를 손 구현 TransformerEncoderLayer로 이식"""
-    t5_self_attn = t5_layer.layer[0].SelfAttention
-    t5_ff = t5_layer.layer[1].DenseReluDense
-    
-    with torch.no_grad():
-        # Self-Attention weights (MultiheadAttention 구조에 맞춤)
-        q_weight = t5_self_attn.q.weight.data
-        k_weight = t5_self_attn.k.weight.data  
-        v_weight = t5_self_attn.v.weight.data
-        in_proj_weight = torch.cat([q_weight, k_weight, v_weight], dim=0)
-        
-        scs_layer.self_attn.in_proj_weight.copy_(in_proj_weight)
-        scs_layer.self_attn.out_proj.weight.copy_(t5_self_attn.o.weight.data)
-        
-        # LayerNorms (EncoderLayer는 norm1, norm2만 존재)
-        scs_layer.norm1.weight.copy_(t5_layer.layer[0].layer_norm.weight.data)
-        scs_layer.norm2.weight.copy_(t5_layer.layer[1].layer_norm.weight.data)
-        
-        # Feed Forward
-        scs_layer.linear1.weight.copy_(t5_ff.wi.weight.data)
-        scs_layer.linear2.weight.copy_(t5_ff.wo.weight.data)
-        
-        # Bias 처리 (있는 경우에만)
-        if hasattr(t5_self_attn.q, 'bias') and t5_self_attn.q.bias is not None:
-            q_bias = t5_self_attn.q.bias.data
-            k_bias = t5_self_attn.k.bias.data
-            v_bias = t5_self_attn.v.bias.data
-            in_proj_bias = torch.cat([q_bias, k_bias, v_bias], dim=0)
-            if scs_layer.self_attn.in_proj_bias is not None:
-                scs_layer.self_attn.in_proj_bias.copy_(in_proj_bias)
-        
-        if hasattr(t5_self_attn.o, 'bias') and t5_self_attn.o.bias is not None:
-            if scs_layer.self_attn.out_proj.bias is not None:
-                scs_layer.self_attn.out_proj.bias.copy_(t5_self_attn.o.bias.data)
-        
-        if hasattr(t5_ff.wi, 'bias') and t5_ff.wi.bias is not None:
-            if scs_layer.linear1.bias is not None:
-                scs_layer.linear1.bias.copy_(t5_ff.wi.bias.data)
-                
-        if hasattr(t5_ff.wo, 'bias') and t5_ff.wo.bias is not None:
-            if scs_layer.linear2.bias is not None:
-                scs_layer.linear2.bias.copy_(t5_ff.wo.bias.data)
-        scs_layer.norm3.weight.copy_(t5_layer.layer[2].layer_norm.weight.data)
 
 
 # ============================================================================

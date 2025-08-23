@@ -520,13 +520,34 @@ def transplant_encoder_layer(scs_layer, t5_layer):
         scs_layer.self_attn.in_proj_weight.copy_(in_proj_weight)
         scs_layer.self_attn.out_proj.weight.copy_(t5_self_attn.o.weight.data)
         
-        # LayerNorms
+        # LayerNorms (EncoderLayer는 norm1, norm2만 존재)
         scs_layer.norm1.weight.copy_(t5_layer.layer[0].layer_norm.weight.data)
         scs_layer.norm2.weight.copy_(t5_layer.layer[1].layer_norm.weight.data)
         
         # Feed Forward
         scs_layer.linear1.weight.copy_(t5_ff.wi.weight.data)
         scs_layer.linear2.weight.copy_(t5_ff.wo.weight.data)
+        
+        # Bias 처리 (있는 경우에만)
+        if hasattr(t5_self_attn.q, 'bias') and t5_self_attn.q.bias is not None:
+            q_bias = t5_self_attn.q.bias.data
+            k_bias = t5_self_attn.k.bias.data
+            v_bias = t5_self_attn.v.bias.data
+            in_proj_bias = torch.cat([q_bias, k_bias, v_bias], dim=0)
+            if scs_layer.self_attn.in_proj_bias is not None:
+                scs_layer.self_attn.in_proj_bias.copy_(in_proj_bias)
+        
+        if hasattr(t5_self_attn.o, 'bias') and t5_self_attn.o.bias is not None:
+            if scs_layer.self_attn.out_proj.bias is not None:
+                scs_layer.self_attn.out_proj.bias.copy_(t5_self_attn.o.bias.data)
+        
+        if hasattr(t5_ff.wi, 'bias') and t5_ff.wi.bias is not None:
+            if scs_layer.linear1.bias is not None:
+                scs_layer.linear1.bias.copy_(t5_ff.wi.bias.data)
+                
+        if hasattr(t5_ff.wo, 'bias') and t5_ff.wo.bias is not None:
+            if scs_layer.linear2.bias is not None:
+                scs_layer.linear2.bias.copy_(t5_ff.wo.bias.data)
         scs_layer.norm3.weight.copy_(t5_layer.layer[2].layer_norm.weight.data)
 
 
@@ -1024,41 +1045,3 @@ def test_transformer_equivalence():
     assert max_diff < 1e-5, f"Encoder not equivalent! Diff: {max_diff}"
     
     print("\n✅ All equivalence tests passed! Hand-implemented transformers are line-by-line equivalent!")
-
-
-def transplant_decoder_layer(scs_layer, t5_layer, include_cross_attention=False):
-    """T5 decoder 레이어를 손 구현 TransformerDecoderLayer로 이식"""
-    t5_self_attn = t5_layer.layer[0].SelfAttention
-    t5_cross_attn = t5_layer.layer[1].EncDecAttention
-    t5_ff = t5_layer.layer[2].DenseReluDense
-    
-    with torch.no_grad():
-        # Self-Attention
-        q_weight = t5_self_attn.q.weight.data
-        k_weight = t5_self_attn.k.weight.data  
-        v_weight = t5_self_attn.v.weight.data
-        in_proj_weight = torch.cat([q_weight, k_weight, v_weight], dim=0)
-        
-        scs_layer.self_attn.in_proj_weight.copy_(in_proj_weight)
-        scs_layer.self_attn.out_proj.weight.copy_(t5_self_attn.o.weight.data)
-        scs_layer.norm1.weight.copy_(t5_layer.layer[0].layer_norm.weight.data)
-        
-        # Cross-Attention (optional)
-        if include_cross_attention:
-            q_weight = t5_cross_attn.q.weight.data
-            k_weight = t5_cross_attn.k.weight.data
-            v_weight = t5_cross_attn.v.weight.data
-            in_proj_weight = torch.cat([q_weight, k_weight, v_weight], dim=0)
-            
-            scs_layer.multihead_attn.in_proj_weight.copy_(in_proj_weight)
-            scs_layer.multihead_attn.out_proj.weight.copy_(t5_cross_attn.o.weight.data)
-            scs_layer.norm2.weight.copy_(t5_layer.layer[1].layer_norm.weight.data)
-        
-        # Feed Forward
-        scs_layer.linear1.weight.copy_(t5_ff.wi.weight.data)
-        scs_layer.linear2.weight.copy_(t5_ff.wo.weight.data)
-
-
-if __name__ == "__main__":
-    # 등가성 검증 실행
-    test_transformer_equivalence()

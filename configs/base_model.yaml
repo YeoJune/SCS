@@ -122,23 +122,20 @@ learning:
     enabled: true
     initial_frozen_patterns: # 시작할 때 동결할 파라미터들
       - "input_interface.token_embedding"
-      - "input_interface.transformer_encoder"
       - "input_interface.pattern_mapper"
-      - "input_interface.layer_norm"
+      - "input_interface.transformer_encoder"
 
       - "output_interface.token_embedding"
-      - "output_interface.final_projection"
-      - "output_interface.layer_norm"
       - "output_interface.spatial_compressor"
       - "output_interface.transformer_decoder.layers.0.self_attn"
-      - "output_interface.transformer_decoder.layers.0.layer.0.SelfAttention"
+      - "output_interface.final_projection"
+      - "output_interface.layer_norm"
     unfreeze_schedule: # 에포크별 해제 스케줄
-      10000: # 에포크 10000에 T5 임베딩 해제
-        - "input_interface.token_embedding"
-        - "output_interface.token_embedding"
+      40: # 에포크 40에 T5 임베딩 해제
+        - "input_interface.transformer_encoder"
+        - "output_interface.transformer_decoder.layers.0.self_attn"
         - "output_interface.final_projection"
-        - "input_interface.pattern_mapper"
-        - "output_interface.spatial_compressor"
+        - "output_interface.layer_norm"
 
 data:
   guide_sep_token: <extra_id_42>

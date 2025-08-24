@@ -321,39 +321,17 @@ class MultiheadAttention(nn.Module):
 
         # (★핵심★) 어텐션 계산. 여기에 T5 bias 추가.
         attn_output_weights = torch.bmm(q, k.transpose(1, 2))
-        
-        # <--- PRINT 위치 1: Raw 어텐션 스코어 확인
-        if attn_id:
-            print(f"\n--- MHA Debug ({attn_id}) ---")
-            print(f"  [1] Raw Scores      | mean: {attn_output_weights.mean():.4f}, std: {attn_output_weights.std():.4f}, min: {attn_output_weights.min():.4f}, max: {attn_output_weights.max():.4f}")
-
         attn_output_weights = attn_output_weights / math.sqrt(q.size(-1))
-        
-        # <--- PRINT 위치 2: 스케일링된 어텐션 스코어 확인
-        if attn_id:
-            print(f"  [2] Scaled Scores   | mean: {attn_output_weights.mean():.4f}, std: {attn_output_weights.std():.4f}, min: {attn_output_weights.min():.4f}, max: {attn_output_weights.max():.4f}")
         
         # T5 Position Bias 추가
         if position_bias is not None:
             # position_bias: (1, H, L, S) -> (B*H, L, S) 로 브로드캐스팅
             position_bias_expanded = position_bias.repeat(bsz, 1, 1, 1).view(-1, attn_output_weights.size(1), attn_output_weights.size(2))
-            # <--- PRINT 위치 3: Position Bias 스케일 확인
-            if attn_id:
-                print(f"  [3] Position Bias   | mean: {position_bias_expanded.mean():.4f}, std: {position_bias_expanded.std():.4f}, min: {position_bias_expanded.min():.4f}, max: {position_bias_expanded.max():.4f}")
             attn_output_weights += position_bias_expanded
         
         if attn_mask is not None:
             if attn_mask.dim() == 2: attn_mask = attn_mask.unsqueeze(0)
             attn_output_weights += attn_mask
-
-        # <--- PRINT 위치 4: 최종 스코어 (Softmax 직전) 확인
-        if attn_id:
-            final_scores_for_stats = attn_output_weights[torch.isfinite(attn_output_weights)]
-            if final_scores_for_stats.numel() > 0:
-                print(f"  [4] Final Scores    | mean: {final_scores_for_stats.mean():.4f}, std: {final_scores_for_stats.std():.4f}, min: {final_scores_for_stats.min():.4f}, max: {final_scores_for_stats.max():.4f}")
-            else:
-                print("  [4] Final Scores    | All values are -inf")
-            print(f"-----------------")
 
         attn_output_weights = F.softmax(attn_output_weights, dim=-1)
         if dropout_p > 0.0:

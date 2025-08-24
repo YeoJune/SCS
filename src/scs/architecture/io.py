@@ -1123,6 +1123,7 @@ class OutputInterface(nn.Module):
             nhead=decoder_heads,
             dim_feedforward=dim_feedforward,
             dropout=dropout,
+            norm_first=True,
             batch_first=True,
             use_t5_bias=True,  # T5 Position Bias 활성화
             num_buckets=32,
@@ -1320,7 +1321,7 @@ class OutputInterface(nn.Module):
             combined_embeds = token_embeds
         
         # 정규화
-        return self.layer_norm(combined_embeds)
+        return combined_embeds
     
     def _generate_causal_mask(self, size: int) -> torch.Tensor:
         """자기회귀를 위한 causal mask 생성 (현재 사용 안함 - is_causal=True로 대체)"""

@@ -204,7 +204,8 @@ class MultiheadAttention(nn.Module):
 
     def forward(self, query: Tensor, key: Tensor, value: Tensor, key_padding_mask: Optional[Tensor] = None,
                 need_weights: bool = True, attn_mask: Optional[Tensor] = None, average_attn_weights: bool = True,
-                is_causal: bool = False, position_bias: Optional[Tensor] = None) -> Tuple[Tensor, Optional[Tensor]]:
+                is_causal: bool = False, position_bias: Optional[Tensor] = None,
+                attn_id: Optional[str] = None) -> Tuple[Tensor, Optional[Tensor]]:
 
         if self.batch_first:
             query, key, value = [x.transpose(1, 0) for x in (query, key, value)]
@@ -222,7 +223,8 @@ class MultiheadAttention(nn.Module):
             q_proj_weight=getattr(self, 'q_proj_weight', None),
             k_proj_weight=getattr(self, 'k_proj_weight', None),
             v_proj_weight=getattr(self, 'v_proj_weight', None),
-            position_bias=position_bias
+            position_bias=position_bias,
+            attn_id=attn_id
         )
         
         if self.batch_first:
@@ -242,7 +244,8 @@ class MultiheadAttention(nn.Module):
         q_proj_weight: Optional[Tensor] = None, k_proj_weight: Optional[Tensor] = None,
         v_proj_weight: Optional[Tensor] = None, static_k: Optional[Tensor] = None,
         static_v: Optional[Tensor] = None, average_attn_weights: bool = True,
-        is_causal: bool = False, position_bias: Optional[Tensor] = None
+        is_causal: bool = False, position_bias: Optional[Tensor] = None,
+        attn_id: Optional[str] = None
     ) -> Tuple[Tensor, Optional[Tensor]]:
 
         # === START: functional.py의 multi_head_attention_forward 본체 (거의 그대로 복사) ===
@@ -320,18 +323,23 @@ class MultiheadAttention(nn.Module):
         attn_output_weights = torch.bmm(q, k.transpose(1, 2))
         
         # <--- PRINT 위치 1: Raw 어텐션 스코어 확인
-        print(f"\n--- MHA Debug ---")
-        print(f"  [1] Raw Scores      | mean: {attn_output_weights.mean():.4f}, std: {attn_output_weights.std():.4f}, min: {attn_output_weights.min():.4f}, max: {attn_output_weights.max():.4f}")
+        if attn_id:
+            print(f"\n--- MHA Debug ({attn_id}) ---")
+            print(f"  [1] Raw Scores      | mean: {attn_output_weights.mean():.4f}, std: {attn_output_weights.std():.4f}, min: {attn_output_weights.min():.4f}, max: {attn_output_weights.max():.4f}")
+
         attn_output_weights = attn_output_weights / math.sqrt(q.size(-1))
+        
         # <--- PRINT 위치 2: 스케일링된 어텐션 스코어 확인
-        print(f"  [2] Scaled Scores   | mean: {attn_output_weights.mean():.4f}, std: {attn_output_weights.std():.4f}, min: {attn_output_weights.min():.4f}, max: {attn_output_weights.max():.4f}")
+        if attn_id:
+            print(f"  [2] Scaled Scores   | mean: {attn_output_weights.mean():.4f}, std: {attn_output_weights.std():.4f}, min: {attn_output_weights.min():.4f}, max: {attn_output_weights.max():.4f}")
         
         # T5 Position Bias 추가
         if position_bias is not None:
             # position_bias: (1, H, L, S) -> (B*H, L, S) 로 브로드캐스팅
             position_bias_expanded = position_bias.repeat(bsz, 1, 1, 1).view(-1, attn_output_weights.size(1), attn_output_weights.size(2))
             # <--- PRINT 위치 3: Position Bias 스케일 확인
-            print(f"  [3] Position Bias   | mean: {position_bias_expanded.mean():.4f}, std: {position_bias_expanded.std():.4f}, min: {position_bias_expanded.min():.4f}, max: {position_bias_expanded.max():.4f}")
+            if attn_id:
+                print(f"  [3] Position Bias   | mean: {position_bias_expanded.mean():.4f}, std: {position_bias_expanded.std():.4f}, min: {position_bias_expanded.min():.4f}, max: {position_bias_expanded.max():.4f}")
             attn_output_weights += position_bias_expanded
         
         if attn_mask is not None:
@@ -339,11 +347,14 @@ class MultiheadAttention(nn.Module):
             attn_output_weights += attn_mask
 
         # <--- PRINT 위치 4: 최종 스코어 (Softmax 직전) 확인
-        # attn_mask가 적용된 후의 실제 값 분포를 확인하기 위해 masked_select 사용
-        final_scores_for_stats = attn_output_weights[attn_output_weights != float('-inf')]
-        print(f"  [4] Final Scores    | mean: {final_scores_for_stats.mean():.4f}, std: {final_scores_for_stats.std():.4f}, min: {final_scores_for_stats.min():.4f}, max: {final_scores_for_stats.max():.4f}")
-        print(f"-----------------")
-        
+        if attn_id:
+            final_scores_for_stats = attn_output_weights[torch.isfinite(attn_output_weights)]
+            if final_scores_for_stats.numel() > 0:
+                print(f"  [4] Final Scores    | mean: {final_scores_for_stats.mean():.4f}, std: {final_scores_for_stats.std():.4f}, min: {final_scores_for_stats.min():.4f}, max: {final_scores_for_stats.max():.4f}")
+            else:
+                print("  [4] Final Scores    | All values are -inf")
+            print(f"-----------------")
+
         attn_output_weights = F.softmax(attn_output_weights, dim=-1)
         if dropout_p > 0.0:
             attn_output_weights = F.dropout(attn_output_weights, p=dropout_p)
@@ -462,7 +473,8 @@ class TransformerEncoderLayer(nn.Module):
             position_bias = self.t5_bias(seq_len, seq_len, device=x.device)
         
         x = self.self_attn(x, x, x, attn_mask=attn_mask, key_padding_mask=key_padding_mask,
-                           need_weights=False, is_causal=is_causal, position_bias=position_bias)[0]
+                           need_weights=False, is_causal=is_causal, position_bias=position_bias,
+                           attn_id="Encoder Self-Attention")[0]
         return self.dropout1(x)
     
     def _ff_block(self, x: Tensor) -> Tensor:
@@ -635,7 +647,8 @@ class TransformerDecoderLayer(nn.Module):
             position_bias = self.sa_t5_bias(seq_len, seq_len, device=x.device)
         
         x = self.self_attn(x, x, x, attn_mask=attn_mask, key_padding_mask=key_padding_mask,
-                           need_weights=False, is_causal=is_causal, position_bias=position_bias)[0]
+                           need_weights=False, is_causal=is_causal, position_bias=position_bias,
+                           attn_id="Decoder Self-Attention")[0]
         return self.dropout1(x)
     
     def _mha_block(self, x: Tensor, mem: Tensor, attn_mask: Optional[Tensor],
@@ -649,7 +662,8 @@ class TransformerDecoderLayer(nn.Module):
             position_bias = self.mha_t5_bias(q_len, k_len, device=x.device)
         
         x = self.multihead_attn(x, mem, mem, attn_mask=attn_mask, key_padding_mask=key_padding_mask,
-                               need_weights=False, is_causal=is_causal, position_bias=position_bias)[0]
+                               need_weights=False, is_causal=is_causal, position_bias=position_bias,
+                               attn_id="Decoder Cross-Attention")[0]
         return self.dropout2(x)
     
     def _ff_block(self, x: Tensor) -> Tensor:

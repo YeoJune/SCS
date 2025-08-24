@@ -72,7 +72,6 @@ def _in_projection(q: Tensor, k: Tensor, v: Tensor, w_q: Tensor, w_k: Tensor, w_
 # ============================================================================
 # T5 Relative Position Bias Module
 # ============================================================================
-
 class T5RelativePositionBias(nn.Module):
     """
     T5 스타일의 Relative Position Bias를 계산하는 모듈.
@@ -87,20 +86,6 @@ class T5RelativePositionBias(nn.Module):
         self.max_distance = max_distance
         # 각 헤드에 대한 편향 값을 학습하는 임베딩 레이어
         self.relative_attention_bias = nn.Embedding(self.num_buckets, self.num_heads)
-
-    def load_t5_bias_weights(self, t5_bias_weight: torch.Tensor):
-        """
-        T5 모델에서 추출한 relative_attention_bias 가중치를 로드
-        
-        Args:
-            t5_bias_weight: T5의 relative_attention_bias.weight 텐서 [num_buckets, num_heads]
-        """
-        with torch.no_grad():
-            if t5_bias_weight.shape == self.relative_attention_bias.weight.shape:
-                self.relative_attention_bias.weight.copy_(t5_bias_weight)
-                print(f"Loaded T5 bias weights: {t5_bias_weight.shape}")
-            else:
-                print(f"Warning: T5 bias shape {t5_bias_weight.shape} != expected {self.relative_attention_bias.weight.shape}")
 
     @staticmethod
     def _relative_position_bucket(relative_position, bidirectional=True, num_buckets=32, max_distance=128):
@@ -333,41 +318,32 @@ class MultiheadAttention(nn.Module):
 
         # (★핵심★) 어텐션 계산. 여기에 T5 bias 추가.
         attn_output_weights = torch.bmm(q, k.transpose(1, 2))
+        
+        # <--- PRINT 위치 1: Raw 어텐션 스코어 확인
+        print(f"\n--- MHA Debug ---")
+        print(f"  [1] Raw Scores      | mean: {attn_output_weights.mean():.4f}, std: {attn_output_weights.std():.4f}, min: {attn_output_weights.min():.4f}, max: {attn_output_weights.max():.4f}")
         attn_output_weights = attn_output_weights / math.sqrt(q.size(-1))
+        # <--- PRINT 위치 2: 스케일링된 어텐션 스코어 확인
+        print(f"  [2] Scaled Scores   | mean: {attn_output_weights.mean():.4f}, std: {attn_output_weights.std():.4f}, min: {attn_output_weights.min():.4f}, max: {attn_output_weights.max():.4f}")
         
-        # --- 여기에 디버깅 코드 추가 ---
-        # 0번째 배치의 0번째 헤드만 샘플로 확인 (reshape 전 텐서 기준)
-        # bsz와 num_heads를 알아야 함
-        tgt_len, bsz, embed_dim = query.shape
-        
-        # 스케일링 전 스코어
-        scores_before_scaling = attn_output_weights.view(bsz, num_heads, tgt_len, -1)[0, 0, :, :]
-
-        # 스케일링
-        attn_output_weights = attn_output_weights / math.sqrt(q.size(-1))
-        
-        # 스케일링 후 스코어
-        scores_after_scaling = attn_output_weights.view(bsz, num_heads, tgt_len, -1)[0, 0, :, :]
-
         # T5 Position Bias 추가
         if position_bias is not None:
-            # position_bias도 샘플 확인
-            bias_sample = position_bias[0, 0, :, :]
-            
-            print("\n" + "-"*30)
-            print(f"[SCALE DEBUG] In MultiheadAttention")
-            print(f"  - Scores (Q @ K.T) Raw      | shape: {scores_before_scaling.shape} | std: {scores_before_scaling.std():.4f}")
-            print(f"  - Scores (Scaled)           | shape: {scores_after_scaling.shape} | std: {scores_after_scaling.std():.4f}")
-            print(f"  - Position Bias             | shape: {bias_sample.shape} | std: {bias_sample.std():.4f}")
-            print("-"*30)
-            
+            # position_bias: (1, H, L, S) -> (B*H, L, S) 로 브로드캐스팅
             position_bias_expanded = position_bias.repeat(bsz, 1, 1, 1).view(-1, attn_output_weights.size(1), attn_output_weights.size(2))
+            # <--- PRINT 위치 3: Position Bias 스케일 확인
+            print(f"  [3] Position Bias   | mean: {position_bias_expanded.mean():.4f}, std: {position_bias_expanded.std():.4f}, min: {position_bias_expanded.min():.4f}, max: {position_bias_expanded.max():.4f}")
             attn_output_weights += position_bias_expanded
         
         if attn_mask is not None:
             if attn_mask.dim() == 2: attn_mask = attn_mask.unsqueeze(0)
             attn_output_weights += attn_mask
 
+        # <--- PRINT 위치 4: 최종 스코어 (Softmax 직전) 확인
+        # attn_mask가 적용된 후의 실제 값 분포를 확인하기 위해 masked_select 사용
+        final_scores_for_stats = attn_output_weights[attn_output_weights != float('-inf')]
+        print(f"  [4] Final Scores    | mean: {final_scores_for_stats.mean():.4f}, std: {final_scores_for_stats.std():.4f}, min: {final_scores_for_stats.min():.4f}, max: {final_scores_for_stats.max():.4f}")
+        print(f"-----------------")
+        
         attn_output_weights = F.softmax(attn_output_weights, dim=-1)
         if dropout_p > 0.0:
             attn_output_weights = F.dropout(attn_output_weights, p=dropout_p)
@@ -416,8 +392,8 @@ class TransformerEncoderLayer(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.linear2 = nn.Linear(dim_feedforward, d_model, bias=bias)
         
-        self.norm1 = RMSNorm(d_model, eps=layer_norm_eps, bias=bias)
-        self.norm2 = RMSNorm(d_model, eps=layer_norm_eps, bias=bias)
+        self.norm1 = nn.LayerNorm(d_model, eps=layer_norm_eps, bias=bias)
+        self.norm2 = nn.LayerNorm(d_model, eps=layer_norm_eps, bias=bias)
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
         
@@ -428,12 +404,7 @@ class TransformerEncoderLayer(nn.Module):
             self.activation = activation
         
         self.norm_first = norm_first
-
-    def load_t5_bias_weights(self, bias_weight: torch.Tensor):
-        """T5의 relative position bias 가중치 로드"""
-        if self.use_t5_bias and hasattr(self, 't5_bias'):
-            self.t5_bias.load_t5_bias_weights(bias_weight)
-            
+    
     def __setstate__(self, state):
         super().__setstate__(state)
         if not hasattr(self, 'activation'):
@@ -595,9 +566,9 @@ class TransformerDecoderLayer(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.linear2 = nn.Linear(dim_feedforward, d_model, bias=bias)
         
-        self.norm1 = RMSNorm(d_model, eps=layer_norm_eps, bias=bias)
-        self.norm2 = RMSNorm(d_model, eps=layer_norm_eps, bias=bias)
-        self.norm3 = RMSNorm(d_model, eps=layer_norm_eps, bias=bias)
+        self.norm1 = nn.LayerNorm(d_model, eps=layer_norm_eps, bias=bias)
+        self.norm2 = nn.LayerNorm(d_model, eps=layer_norm_eps, bias=bias)
+        self.norm3 = nn.LayerNorm(d_model, eps=layer_norm_eps, bias=bias)
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
         self.dropout3 = nn.Dropout(dropout)
@@ -610,15 +581,6 @@ class TransformerDecoderLayer(nn.Module):
         
         self.norm_first = norm_first
     
-    def load_t5_bias_weights(self, sa_bias_weight: torch.Tensor = None, mha_bias_weight: torch.Tensor = None):
-        """T5의 relative position bias 가중치 로드"""
-        if self.use_t5_bias:
-            if sa_bias_weight is not None and hasattr(self, 'sa_t5_bias'):
-                self.sa_t5_bias.load_t5_bias_weights(sa_bias_weight)
-            if mha_bias_weight is not None and hasattr(self, 'mha_t5_bias'):
-                self.mha_t5_bias.load_t5_bias_weights(mha_bias_weight)
-    
-
     def __setstate__(self, state):
         super().__setstate__(state)
         if not hasattr(self, 'activation'):
@@ -818,7 +780,7 @@ def _get_seq_len(src: Tensor, batch_first: bool) -> Optional[int]:
 
 class RMSNorm(nn.Module):
     """RMS Normalization (T5 스타일)"""
-    def __init__(self, dim, eps=1e-6, bias=None):
+    def __init__(self, dim, eps=1e-6):
         super().__init__()
         self.scale = nn.Parameter(torch.ones(dim))
         self.eps = eps
@@ -829,36 +791,11 @@ class RMSNorm(nn.Module):
 
 
 def load_t5_embeddings(model_name: str = "t5-base"):
-    """T5 체크포인트에서 임베딩 및 position bias 로드"""
-    print(f"Loading T5 embeddings and bias from {model_name}...")
+    """T5 체크포인트에서 임베딩 로드"""
+    print(f"Loading T5 embeddings from {model_name}...")
     try:
         t5_model = T5ForConditionalGeneration.from_pretrained(model_name)
         t5_config = t5_model.config
-        
-        # Position bias 가중치들 추출
-        encoder_bias_weights = {}
-        decoder_bias_weights = {}
-        
-        # Encoder의 첫 번째 레이어에서 relative_attention_bias 추출
-        if hasattr(t5_model.encoder.block[0].layer[0], 'SelfAttention'):
-            encoder_self_attn = t5_model.encoder.block[0].layer[0].SelfAttention
-            if hasattr(encoder_self_attn, 'relative_attention_bias'):
-                encoder_bias_weights['self_attention'] = encoder_self_attn.relative_attention_bias.weight.data.clone()
-                print(f"Extracted encoder self-attention bias: {encoder_bias_weights['self_attention'].shape}")
-        
-        # Decoder의 첫 번째 레이어에서 relative_attention_bias 추출
-        if hasattr(t5_model.decoder.block[0].layer[0], 'SelfAttention'):
-            decoder_self_attn = t5_model.decoder.block[0].layer[0].SelfAttention
-            if hasattr(decoder_self_attn, 'relative_attention_bias'):
-                decoder_bias_weights['self_attention'] = decoder_self_attn.relative_attention_bias.weight.data.clone()
-                print(f"Extracted decoder self-attention bias: {decoder_bias_weights['self_attention'].shape}")
-        
-        # Cross-attention bias (T5에서는 보통 첫 번째 레이어에만 있음)
-        if len(t5_model.decoder.block[0].layer) > 1 and hasattr(t5_model.decoder.block[0].layer[1], 'EncDecAttention'):
-            decoder_cross_attn = t5_model.decoder.block[0].layer[1].EncDecAttention
-            if hasattr(decoder_cross_attn, 'relative_attention_bias'):
-                decoder_bias_weights['cross_attention'] = decoder_cross_attn.relative_attention_bias.weight.data.clone()
-                print(f"Extracted decoder cross-attention bias: {decoder_bias_weights['cross_attention'].shape}")
         
         return {
             'token_embedding_weights': t5_model.shared.weight.data.clone(),
@@ -866,13 +803,7 @@ def load_t5_embeddings(model_name: str = "t5-base"):
             'vocab_size': t5_config.vocab_size,
             'd_model': t5_config.d_model,
             'model_name': model_name,
-            'full_model': t5_model,
-            'encoder_bias_weights': encoder_bias_weights,
-            'decoder_bias_weights': decoder_bias_weights,
-            # T5 config 정보도 포함
-            'num_heads': t5_config.num_heads,
-            'relative_attention_num_buckets': getattr(t5_config, 'relative_attention_num_buckets', 32),
-            'relative_attention_max_distance': getattr(t5_config, 'relative_attention_max_distance', 128)
+            'full_model': t5_model
         }
     except ImportError:
         print("Warning: transformers library not available. Using random initialization.")
@@ -882,12 +813,7 @@ def load_t5_embeddings(model_name: str = "t5-base"):
             'vocab_size': 32128,
             'd_model': 512,
             'model_name': model_name,
-            'full_model': None,
-            'encoder_bias_weights': {},
-            'decoder_bias_weights': {},
-            'num_heads': 8,
-            'relative_attention_num_buckets': 32,
-            'relative_attention_max_distance': 128
+            'full_model': None
         }
 
 
@@ -943,15 +869,10 @@ class InputInterface(nn.Module):
                 t5_data['token_embedding_weights'], 
                 freeze=False
             )
-            
-            num_buckets = t5_data.get('relative_attention_num_buckets', 32)
-            max_distance = t5_data.get('relative_attention_max_distance', 128)
             print(f"Loaded T5 token embedding: {self.token_embedding.weight.shape}")
         else:
             self.token_embedding = nn.Embedding(vocab_size, embedding_dim)
-            num_buckets = 32
-            max_distance = 128
-
+        
         # 위치 임베딩
         if self.use_positional_encoding:
             self.position_embedding = nn.Embedding(window_size, self.embedding_dim)
@@ -965,8 +886,8 @@ class InputInterface(nn.Module):
             norm_first=True,  # T5 스타일
             batch_first=True,
             use_t5_bias=True,  # T5 Position Bias 활성화
-            num_buckets=num_buckets,
-            max_distance=max_distance
+            num_buckets=32,
+            max_distance=128
         )
         self.transformer_encoder = TransformerEncoder(
             encoder_layer,
@@ -977,7 +898,6 @@ class InputInterface(nn.Module):
         # T5 Encoder 이식
         if t5_model_name is not None:
             self._transplant_t5_encoder(t5_data['full_model'])
-            self._load_t5_bias_weights(t5_data)
         
         # Linear 매핑 레이어
         self.pattern_mapper = nn.Linear(
@@ -991,18 +911,6 @@ class InputInterface(nn.Module):
         # Dropout
         self.dropout = nn.Dropout(encoder_dropout)
     
-    def _load_t5_bias_weights(self, t5_data: dict):
-        """T5 bias 가중치를 encoder layer들에 로드"""
-        encoder_bias = t5_data['encoder_bias_weights'].get('self_attention')
-        
-        if encoder_bias is not None:
-            # 모든 encoder layer에 동일한 bias 가중치 적용 (T5는 첫 번째 layer에만 bias가 있음)
-            for i, layer in enumerate(self.transformer_encoder.layers):
-                if hasattr(layer, 'load_t5_bias_weights'):
-                    layer.load_t5_bias_weights(encoder_bias)
-                    if i == 0:  # 첫 번째 레이어에만 메시지 출력
-                        print(f"Loaded T5 encoder bias to all {len(self.transformer_encoder.layers)} layers")
-
     def _transplant_t5_encoder(self, t5_model):
         """T5 encoder 가중치를 손 구현 encoder로 이식"""
         try:
@@ -1174,8 +1082,6 @@ class OutputInterface(nn.Module):
                 freeze=False,
                 padding_idx=self.pad_token_id
             )
-            num_buckets = t5_data.get('relative_attention_num_buckets', 32)
-            max_distance = t5_data.get('relative_attention_max_distance', 128)
             print(f"Loaded T5 token embedding: {self.token_embedding.weight.shape}")
         else:
             self.token_embedding = nn.Embedding(
@@ -1183,8 +1089,6 @@ class OutputInterface(nn.Module):
                 embedding_dim, 
                 padding_idx=self.pad_token_id
             )
-            num_buckets = 32
-            max_distance = 128
         
         # Linear 공간 압축 (히든 벡터 생성용)
         self.spatial_compressor = nn.Linear(
@@ -1205,11 +1109,10 @@ class OutputInterface(nn.Module):
             nhead=decoder_heads,
             dim_feedforward=dim_feedforward,
             dropout=dropout,
-            norm_first=True,
             batch_first=True,
             use_t5_bias=True,  # T5 Position Bias 활성화
-            num_buckets=num_buckets,
-            max_distance=max_distance
+            num_buckets=32,
+            max_distance=128
         )
         self.transformer_decoder = TransformerDecoder(
             decoder_layer,
@@ -1225,7 +1128,6 @@ class OutputInterface(nn.Module):
             self._transplant_t5_decoder(t5_data['full_model'])
             with torch.no_grad():
                 self.final_projection.weight.copy_(t5_data['lm_head_weights'])
-            self._load_t5_bias_weights(t5_data)
             print(f"Loaded T5 LM head: {self.final_projection.weight.shape}")
         
         self.layer_norm = RMSNorm(self.embedding_dim)
@@ -1250,20 +1152,6 @@ class OutputInterface(nn.Module):
             print(f"Failed to transplant T5 decoder: {e}")
             warnings.warn(f"T5 decoder transplant failed: {e}")
     
-    def _load_t5_bias_weights(self, t5_data: dict):
-        """T5 bias 가중치를 decoder layer들에 로드"""
-        decoder_sa_bias = t5_data['decoder_bias_weights'].get('self_attention')
-        decoder_mha_bias = t5_data['decoder_bias_weights'].get('cross_attention')
-        
-        for i, layer in enumerate(self.transformer_decoder.layers):
-            if hasattr(layer, 'load_t5_bias_weights'):
-                layer.load_t5_bias_weights(
-                    sa_bias_weight=decoder_sa_bias,
-                    mha_bias_weight=decoder_mha_bias
-                )
-                if i == 0:  # 첫 번째 레이어에만 메시지 출력
-                    print(f"Loaded T5 decoder bias to all {len(self.transformer_decoder.layers)} layers")
-
     def _transplant_decoder_layer(self, scs_layer, t5_layer, include_cross_attention=False):
         """T5 decoder 레이어를 손 구현 TransformerDecoderLayer로 이식"""
         t5_self_attn = t5_layer.layer[0].SelfAttention

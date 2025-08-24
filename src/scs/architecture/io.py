@@ -335,9 +335,32 @@ class MultiheadAttention(nn.Module):
         attn_output_weights = torch.bmm(q, k.transpose(1, 2))
         attn_output_weights = attn_output_weights / math.sqrt(q.size(-1))
         
+        # --- 여기에 디버깅 코드 추가 ---
+        # 0번째 배치의 0번째 헤드만 샘플로 확인 (reshape 전 텐서 기준)
+        # bsz와 num_heads를 알아야 함
+        tgt_len, bsz, embed_dim = query.shape
+        
+        # 스케일링 전 스코어
+        scores_before_scaling = attn_output_weights.view(bsz, num_heads, tgt_len, -1)[0, 0, :, :]
+
+        # 스케일링
+        attn_output_weights = attn_output_weights / math.sqrt(q.size(-1))
+        
+        # 스케일링 후 스코어
+        scores_after_scaling = attn_output_weights.view(bsz, num_heads, tgt_len, -1)[0, 0, :, :]
+
         # T5 Position Bias 추가
         if position_bias is not None:
-            # position_bias: (1, H, L, S) -> (B*H, L, S) 로 브로드캐스팅
+            # position_bias도 샘플 확인
+            bias_sample = position_bias[0, 0, :, :]
+            
+            print("\n" + "-"*30)
+            print(f"[SCALE DEBUG] In MultiheadAttention")
+            print(f"  - Scores (Q @ K.T) Raw      | shape: {scores_before_scaling.shape} | std: {scores_before_scaling.std():.4f}")
+            print(f"  - Scores (Scaled)           | shape: {scores_after_scaling.shape} | std: {scores_after_scaling.std():.4f}")
+            print(f"  - Position Bias             | shape: {bias_sample.shape} | std: {bias_sample.std():.4f}")
+            print("-"*30)
+            
             position_bias_expanded = position_bias.repeat(bsz, 1, 1, 1).view(-1, attn_output_weights.size(1), attn_output_weights.size(2))
             attn_output_weights += position_bias_expanded
         
@@ -1183,6 +1206,7 @@ class OutputInterface(nn.Module):
             nhead=decoder_heads,
             dim_feedforward=dim_feedforward,
             dropout=dropout,
+            norm_first=True,
             batch_first=True,
             use_t5_bias=True,  # T5 Position Bias 활성화
             num_buckets=num_buckets,

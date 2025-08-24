@@ -1251,17 +1251,19 @@ class OutputInterface(nn.Module):
             warnings.warn(f"T5 decoder transplant failed: {e}")
     
     def _load_t5_bias_weights(self, t5_data: dict):
-        """T5 bias 가중치를 encoder layer들에 로드"""
-        encoder_bias = t5_data['encoder_bias_weights'].get('self_attention')
+        """T5 bias 가중치를 decoder layer들에 로드"""
+        decoder_sa_bias = t5_data['decoder_bias_weights'].get('self_attention')
+        decoder_mha_bias = t5_data['decoder_bias_weights'].get('cross_attention')
         
-        if encoder_bias is not None:
-            # 모든 encoder layer에 동일한 bias 가중치 적용 (T5는 첫 번째 layer에만 bias가 있음)
-            for i, layer in enumerate(self.transformer_encoder.layers):
-                if hasattr(layer, 'load_t5_bias_weights'):
-                    layer.load_t5_bias_weights(encoder_bias)
-                    if i == 0:  # 첫 번째 레이어에만 메시지 출력
-                        print(f"Loaded T5 encoder bias to all {len(self.transformer_encoder.layers)} layers")
-    
+        for i, layer in enumerate(self.transformer_decoder.layers):
+            if hasattr(layer, 'load_t5_bias_weights'):
+                layer.load_t5_bias_weights(
+                    sa_bias_weight=decoder_sa_bias,
+                    mha_bias_weight=decoder_mha_bias
+                )
+                if i == 0:  # 첫 번째 레이어에만 메시지 출력
+                    print(f"Loaded T5 decoder bias to all {len(self.transformer_decoder.layers)} layers")
+
     def _transplant_decoder_layer(self, scs_layer, t5_layer, include_cross_attention=False):
         """T5 decoder 레이어를 손 구현 TransformerDecoderLayer로 이식"""
         t5_self_attn = t5_layer.layer[0].SelfAttention

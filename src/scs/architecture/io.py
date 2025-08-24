@@ -943,7 +943,6 @@ class InputInterface(nn.Module):
                 t5_data['token_embedding_weights'], 
                 freeze=False
             )
-            self._load_t5_bias_weights(t5_data)
             
             num_buckets = t5_data.get('relative_attention_num_buckets', 32)
             max_distance = t5_data.get('relative_attention_max_distance', 128)
@@ -978,6 +977,7 @@ class InputInterface(nn.Module):
         # T5 Encoder 이식
         if t5_model_name is not None:
             self._transplant_t5_encoder(t5_data['full_model'])
+            self._load_t5_bias_weights(t5_data)
         
         # Linear 매핑 레이어
         self.pattern_mapper = nn.Linear(
@@ -1174,7 +1174,6 @@ class OutputInterface(nn.Module):
                 freeze=False,
                 padding_idx=self.pad_token_id
             )
-            self._load_t5_bias_weights(t5_data)
             num_buckets = t5_data.get('relative_attention_num_buckets', 32)
             max_distance = t5_data.get('relative_attention_max_distance', 128)
             print(f"Loaded T5 token embedding: {self.token_embedding.weight.shape}")
@@ -1226,6 +1225,7 @@ class OutputInterface(nn.Module):
             self._transplant_t5_decoder(t5_data['full_model'])
             with torch.no_grad():
                 self.final_projection.weight.copy_(t5_data['lm_head_weights'])
+            self._load_t5_bias_weights(t5_data)
             print(f"Loaded T5 LM head: {self.final_projection.weight.shape}")
         
         self.layer_norm = RMSNorm(self.embedding_dim)

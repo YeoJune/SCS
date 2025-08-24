@@ -818,7 +818,7 @@ def _get_seq_len(src: Tensor, batch_first: bool) -> Optional[int]:
 
 class RMSNorm(nn.Module):
     """RMS Normalization (T5 스타일)"""
-    def __init__(self, dim, eps=1e-6):
+    def __init__(self, dim, eps=1e-6, bias=None):
         super().__init__()
         self.scale = nn.Parameter(torch.ones(dim))
         self.eps = eps

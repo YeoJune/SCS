@@ -416,8 +416,8 @@ class TransformerEncoderLayer(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.linear2 = nn.Linear(dim_feedforward, d_model, bias=bias)
         
-        self.norm1 = nn.LayerNorm(d_model, eps=layer_norm_eps, bias=bias)
-        self.norm2 = nn.LayerNorm(d_model, eps=layer_norm_eps, bias=bias)
+        self.norm1 = RMSNorm(d_model, eps=layer_norm_eps, bias=bias)
+        self.norm2 = RMSNorm(d_model, eps=layer_norm_eps, bias=bias)
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
         
@@ -595,9 +595,9 @@ class TransformerDecoderLayer(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.linear2 = nn.Linear(dim_feedforward, d_model, bias=bias)
         
-        self.norm1 = nn.LayerNorm(d_model, eps=layer_norm_eps, bias=bias)
-        self.norm2 = nn.LayerNorm(d_model, eps=layer_norm_eps, bias=bias)
-        self.norm3 = nn.LayerNorm(d_model, eps=layer_norm_eps, bias=bias)
+        self.norm1 = RMSNorm(d_model, eps=layer_norm_eps, bias=bias)
+        self.norm2 = RMSNorm(d_model, eps=layer_norm_eps, bias=bias)
+        self.norm3 = RMSNorm(d_model, eps=layer_norm_eps, bias=bias)
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
         self.dropout3 = nn.Dropout(dropout)

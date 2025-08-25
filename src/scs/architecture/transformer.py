@@ -272,15 +272,19 @@ def transplant_t5_decoder_weights(scs_decoder: TransformerDecoder, t5_decoder, t
                 t5_sa, t5_ca, t5_ff = t5_layer.layer[0].SelfAttention, t5_layer.layer[1].EncDecAttention, t5_layer.layer[2].DenseReluDense
                 
                 # Self-Attention & LayerNorm1
-                q, k, v = t5_sa.q.weight, t5_sa.k.weight, t5_sa.v.weight
-                scs_layer.self_attn.in_proj.weight.copy_(torch.cat([q, k, v], dim=0))
+                scs_layer.self_attn.q_proj.weight.copy_(t5_sa.q.weight)
+                scs_layer.self_attn.k_proj.weight.copy_(t5_sa.k.weight)
+                scs_layer.self_attn.v_proj.weight.copy_(t5_sa.v.weight)
+
                 scs_layer.self_attn.out_proj.weight.copy_(t5_sa.o.weight)
                 scs_layer.norm1.weight.copy_(t5_layer.layer[0].layer_norm.weight)
                 
                 # Cross-Attention (optional) & LayerNorm2
                 if transplant_cross_attention:
-                    q, k, v = t5_ca.q.weight, t5_ca.k.weight, t5_ca.v.weight
-                    scs_layer.multihead_attn.in_proj.weight.copy_(torch.cat([q, k, v], dim=0))
+                    scs_layer.multihead_attn.q_proj.weight.copy_(t5_ca.q.weight)
+                    scs_layer.multihead_attn.k_proj.weight.copy_(t5_ca.k.weight)
+                    scs_layer.multihead_attn.v_proj.weight.copy_(t5_ca.v.weight)
+                    
                     scs_layer.multihead_attn.out_proj.weight.copy_(t5_ca.o.weight)
                     scs_layer.norm2.weight.copy_(t5_layer.layer[1].layer_norm.weight)
                 

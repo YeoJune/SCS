@@ -179,9 +179,11 @@ class OutputInterface(nn.Module):
         causal_mask = torch.triu(torch.ones(tgt_len, tgt_len, device=self.device, dtype=torch.bool), diagonal=1)
         # Convert boolean mask to float mask for addition
         causal_mask = causal_mask.masked_fill(causal_mask, float('-inf'))
-
-        decoder_output, _ = self.transformer_decoder.layers[0]._sa_block(target_embeds, causal_mask)
-        for layer in self.transformer_decoder.layers[1:]:
-             decoder_output = layer(decoder_output, rolled_window, tgt_mask=causal_mask)
+        
+        decoder_output = self.transformer_decoder(
+            tgt=target_embeds, 
+            memory=rolled_window, 
+            tgt_mask=causal_mask
+        )
 
         return self.final_projection(self.transformer_decoder.norm(decoder_output))

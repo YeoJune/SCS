@@ -149,14 +149,12 @@ def analyze_io_pipeline(model, test_loader, output_dir: Path, device: str):
                     
                     # 현재 히든 윈도우 상태 분석
                     current_hidden_window = model.output_interface.hidden_window  # [B, window_size, embedding_dim]
-                    compressor_power = model.output_interface.compressor_power.item()
                     
                     # 윈도우의 마지막 벡터 (가장 최근 업데이트된 것) 분석
                     latest_hidden = current_hidden_window[:, -1, :]  # [B, embedding_dim]
                     
                     traced_data["steps"].append({
                         "name": "output_hidden_window_analysis",
-                        "compressor_power": compressor_power,
                         "hidden_window_shape": list(current_hidden_window.shape),
                         "latest_hidden_vector": {
                             "shape": list(latest_hidden.shape),
@@ -169,25 +167,8 @@ def analyze_io_pipeline(model, test_loader, output_dir: Path, device: str):
                             "window_std": current_hidden_window.std().item(),
                             "window_l2_norm": torch.norm(current_hidden_window).item()
                         },
-                        "description": f"히든 윈도우 내부 관리, compressor_power={compressor_power:.3f}, 스파스 스파이크 업데이트 후 상태"
+                        "description": f"히든 윈도우 내부 관리, 스파스 스파이크 업데이트 후 상태"
                     })
-                    
-                    # 디코더 입력 임베딩 추적
-                    if target_tokens.shape[1] > 0:
-                        window_size = model.output_interface.window_size
-                        if target_tokens.shape[1] >= window_size:
-                            decoder_window = target_tokens[:, :window_size]
-                        else:
-                            decoder_window = target_tokens
-                        
-                        target_embeds = model.output_interface._prepare_target_embeddings(decoder_window)
-                        traced_data["steps"].append({
-                            "name": "output_target_embeddings",
-                            "shape": list(target_embeds.shape),
-                            "mean": target_embeds.mean().item(),
-                            "std": target_embeds.std().item(),
-                            "description": "T5 디코더 입력 임베딩 (RMSNorm 정규화됨)"
-                        })
             
             return traced_data
         

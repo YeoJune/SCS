@@ -136,7 +136,6 @@ class OutputInterface(nn.Module):
         self.spatial_compressor = nn.Linear(self.grid_height * self.grid_width, self.embedding_dim)
         torch.nn.init.orthogonal_(self.spatial_compressor.weight)
         
-        self.compressor_power = nn.Parameter(torch.tensor(0.1))
         self.hidden_norm = nn.LayerNorm(self.embedding_dim, eps=1e-6)
         
         decoder_layer = TransformerDecoderLayer(

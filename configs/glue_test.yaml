@@ -52,8 +52,8 @@ task:
 # === 학습 설정 오버라이드 ===
 learning:
   epochs: 101
-  learning_rate: 1e-3
-  eta_min: 2e-4
+  learning_rate: 5e-4
+  eta_min: 1e-4
   max_clk_training: 128
   optimizer: "adamw"
   weight_decay: 1e-4
@@ -79,8 +79,11 @@ learning:
       - "output_interface.transformer_decoder.layers.0.self_attn"
       - "output_interface.final_projection"
       - "output_interface.layer_norm"
+      - "output_interface.transformer_decoder.layers.0.cross_attn"
     unfreeze_schedule: # 에포크별 해제 스케줄
-      30: # 에포크 30에 T5 임베딩 해제
+      5:
+        - "output_interface.transformer_decoder.layers.0.cross_attn"
+      20: # 에포크 20에 T5 임베딩 해제
         - "input_interface.transformer_encoder"
         - "output_interface.transformer_decoder.layers.0.self_attn"
         - "output_interface.final_projection"

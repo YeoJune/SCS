@@ -55,7 +55,7 @@ io_system:
     encoder_dropout: 0.1
     dim_feedforward: 2048
     input_power: 0.05
-    softmax_temperature: 1.0
+    softmax_temperature: 0.1
     t5_model_name: "t5-small"
 
   output_interface:
@@ -84,7 +84,7 @@ learning:
   learning_rate: 2e-4
   eta_min: 1e-4
   weight_decay: 1e-4
-  gradient_clip_norm: 1.0
+  gradient_clip_norm: 3.0
   eval_every: 5
   save_every: 10
   early_stopping_patience: 20

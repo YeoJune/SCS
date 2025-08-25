@@ -85,7 +85,6 @@ class InputInterface(nn.Module):
         
         self.pattern_mapper = nn.Linear(self.embedding_dim, self.grid_height * self.grid_width)
         torch.nn.init.orthogonal_(self.pattern_mapper.weight)
-        self.mapper_norm = RMSNorm(grid_height * grid_width)
         self.dropout = nn.Dropout(encoder_dropout)
     
     def forward(self, token_window: Tensor) -> Optional[Tensor]:
@@ -97,7 +96,7 @@ class InputInterface(nn.Module):
         encoder_output = self.transformer_encoder(encoder_input)
         context_vector = encoder_output[:, -1, :]
         
-        membrane_logits = self.mapper_norm(self.pattern_mapper(context_vector))
+        membrane_logits = self.pattern_mapper(context_vector)
         pattern_probs = F.softmax(membrane_logits / self.softmax_temperature, dim=-1)
         
         total_energy = self.grid_height * self.grid_width * self.input_power
@@ -147,8 +146,6 @@ class OutputInterface(nn.Module):
         if t5_data.get('full_model'):
             transplant_t5_decoder_weights(
                 self.transformer_decoder, t5_data['full_model'].decoder, transplant_cross_attention)
-        
-        self.layer_norm = RMSNorm(self.embedding_dim)
     
     def reset_state(self, batch_size: int):
         self.hidden_window = torch.zeros(
@@ -158,7 +155,6 @@ class OutputInterface(nn.Module):
     def _create_hidden_vector(self, grid_spikes: Tensor) -> Tensor:
         spikes_flat = grid_spikes.view(grid_spikes.shape[0], -1)
         hidden_vector = self.spatial_compressor(spikes_flat)
-        hidden_vector = self.layer_norm(hidden_vector)
         return hidden_vector * self.compressor_power
     
     def update_hidden_window(self, grid_spikes: Tensor):

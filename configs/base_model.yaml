@@ -66,6 +66,7 @@ io_system:
     dim_feedforward: 2048
     dropout: 0.1
     t5_model_name: "t5-small"
+    transplant_cross_attention: true
 
 timing_manager:
   sync_ema_alpha: 0.1 # EMA 필터링 강도

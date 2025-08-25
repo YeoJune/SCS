@@ -77,7 +77,10 @@ class MultiheadAttention(nn.Module):
         self.head_dim = embed_dim // num_heads
         assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
 
-        self.in_proj = nn.Linear(embed_dim, 3 * embed_dim, bias=bias)
+        self.q_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
+        self.k_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
+        self.v_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
+
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
 
     def forward(self, query: Tensor, key: Tensor, value: Tensor, key_padding_mask: Optional[Tensor] = None,
@@ -86,7 +89,9 @@ class MultiheadAttention(nn.Module):
         batch_size, tgt_len, _ = query.shape
         _, src_len, _ = key.shape
 
-        q, k, v = self.in_proj(query).chunk(3, dim=-1)
+        q = self.q_proj(query)
+        k = self.k_proj(key)
+        v = self.v_proj(value)
         
         q = q.view(batch_size, tgt_len, self.num_heads, self.head_dim).transpose(1, 2)
         k = k.view(batch_size, src_len, self.num_heads, self.head_dim).transpose(1, 2)
@@ -243,8 +248,10 @@ def transplant_t5_encoder_weights(scs_encoder: TransformerEncoder, t5_encoder):
                 t5_sa, t5_ff = t5_layer.layer[0].SelfAttention, t5_layer.layer[1].DenseReluDense
                 
                 # Self-Attention & LayerNorm1
-                q, k, v = t5_sa.q.weight, t5_sa.k.weight, t5_sa.v.weight
-                scs_layer.self_attn.in_proj.weight.copy_(torch.cat([q, k, v], dim=0))
+                scs_layer.self_attn.q_proj.weight.copy_(t5_sa.q.weight)
+                scs_layer.self_attn.k_proj.weight.copy_(t5_sa.k.weight)
+                scs_layer.self_attn.v_proj.weight.copy_(t5_sa.v.weight)
+
                 scs_layer.self_attn.out_proj.weight.copy_(t5_sa.o.weight)
                 scs_layer.norm1.weight.copy_(t5_layer.layer[0].layer_norm.weight)
                 

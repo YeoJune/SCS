@@ -64,22 +64,8 @@ def analyze_io_pipeline(model, test_loader, output_dir: Path, device: str):
                         "max": token_embeds.max().item(),
                         "description": "T5 토큰 임베딩 (std≈23 예상)"
                     })
-                    
-                    # Step 2: 위치 임베딩 추가
+
                     windowed_input = token_embeds
-                    if model.input_interface.use_positional_encoding:
-                        seq_len = test_window.shape[1]
-                        positions = torch.arange(seq_len, device=device).unsqueeze(0)
-                        position_embeds = model.input_interface.position_embedding(positions)
-                        windowed_input = windowed_input + position_embeds
-                    
-                    traced_data["steps"].append({
-                        "name": "input_with_pos",
-                        "shape": list(windowed_input.shape),
-                        "mean": windowed_input.mean().item(),
-                        "std": windowed_input.std().item(),
-                        "description": "위치 임베딩 추가 후"
-                    })
                     
                     # Step 3: Dropout 적용
                     if hasattr(model.input_interface, 'dropout'):

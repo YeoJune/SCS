@@ -107,7 +107,6 @@ class ModelBuilder:
                 dim_feedforward=io_config.input_interface.dim_feedforward,
                 input_power=io_config.input_interface.input_power,
                 softmax_temperature=io_config.input_interface.softmax_temperature,
-                use_positional_encoding=io_config.input_interface.use_positional_encoding,
                 t5_model_name=io_config.input_interface.t5_model_name,
                 device=device
             )
@@ -124,7 +123,6 @@ class ModelBuilder:
                 decoder_heads=io_config.output_interface.decoder_heads,
                 dim_feedforward=io_config.output_interface.dim_feedforward,
                 dropout=io_config.output_interface.dropout,
-                use_positional_encoding=io_config.output_interface.use_positional_encoding,
                 t5_model_name=io_config.output_interface.t5_model_name,
                 transplant_cross_attention=io_config.output_interface.transplant_cross_attention,
                 device=device

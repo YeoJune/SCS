@@ -73,7 +73,6 @@ class InputInterfaceConfig(BaseModel):
     dim_feedforward: int = Field(default=2048)
     input_power: float = Field(default=0.5)
     softmax_temperature: float = Field(default=1.0)
-    use_positional_encoding: bool = Field(default=True)
     t5_model_name: str = Field(default="t5-base")
 
 
@@ -86,7 +85,6 @@ class OutputInterfaceConfig(BaseModel):
     decoder_heads: int = Field(default=8)
     dim_feedforward: int = Field(default=2048)
     dropout: float = Field(default=0.1)
-    use_positional_encoding: bool = Field(default=True)
     t5_model_name: str = Field(default="t5-base")
     transplant_cross_attention: bool = Field(default=False)
 

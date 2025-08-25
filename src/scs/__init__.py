@@ -7,6 +7,9 @@ from .architecture import (
     SpikeNode, LocalConnectivity,
     InputInterface, OutputInterface,
     SCSSystem, AxonalConnections, TimingManager,
+    TransformerEncoder, TransformerEncoderLayer,
+    TransformerDecoder, TransformerDecoderLayer,
+    transplant_t5_encoder_weights, transplant_t5_decoder_weights
 )
 
 # Training 모듈
@@ -53,7 +56,10 @@ __all__ = [
     "SpikeNode", "LocalConnectivity",
     "InputInterface", "OutputInterface", 
     "SCSSystem", "AxonalConnections", "TimingManager",
-    
+    "TransformerEncoder", "TransformerEncoderLayer",
+    "TransformerDecoder", "TransformerDecoderLayer",
+    "transplant_t5_encoder_weights", "transplant_t5_decoder_weights",
+
     # 학습 시스템
     "SCSTrainer", "GradualUnfreezingScheduler",
     "SpikingLoss", "NeuromodulationLoss", "MultiObjectiveLoss", "TimingLoss",

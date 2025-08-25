@@ -56,7 +56,6 @@ io_system:
     dim_feedforward: 2048
     input_power: 0.05
     softmax_temperature: 1.0
-    use_positional_encoding: false
     t5_model_name: "t5-small"
 
   output_interface:
@@ -66,8 +65,6 @@ io_system:
     decoder_heads: 8
     dim_feedforward: 2048
     dropout: 0.1
-    use_positional_encoding: false
-    use_clk_position_encoding: false
     t5_model_name: "t5-small"
 
 timing_manager:

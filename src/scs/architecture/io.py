@@ -157,7 +157,8 @@ class OutputInterface(nn.Module):
         torch.nn.init.orthogonal_(self.spatial_compressor.weight)
         
         self.compressor_power = nn.Parameter(torch.tensor(0.1))
-        
+        self.hidden_norm = nn.LayerNorm(self.embedding_dim, eps=1e-6)
+
         decoder_layer = TransformerDecoderLayer(
             d_model=self.embedding_dim, nhead=decoder_heads,
             dim_feedforward=dim_feedforward, dropout=dropout, layer_norm_eps=1e-6)
@@ -182,16 +183,12 @@ class OutputInterface(nn.Module):
         hidden_vector = self.spatial_compressor(spikes_flat)
         # 2. Spatial Compressor 출력 후
         print(f"2. Hidden Vector (raw):    mean={hidden_vector.mean():.4f}, std={hidden_vector.std():.4f}, shape={hidden_vector.shape}")
-        
-        scaled_hidden_vector = hidden_vector * self.compressor_power
-        # 3. compressor_power 적용 후 (최종 memory 요소)
-        # compressor_power 값 자체도 출력
-        print(f"   (compressor_power: {self.compressor_power.item():.4f})")
-        print(f"3. Hidden Vector (scaled): mean={scaled_hidden_vector.mean():.4f}, std={scaled_hidden_vector.std():.4f}, shape={scaled_hidden_vector.shape}")
-        print("--- End OutputInterface Spike Path Debug ---\n")
+
+        normalized_hidden_vector = self.hidden_norm(hidden_vector)
+        print(f"3. Hidden Vector (normalized): mean={normalized_hidden_vector.mean():.4f}, std={normalized_hidden_vector.std():.4f}, shape={normalized_hidden_vector.shape}")
         # --- 디버깅 끝 ---
-        return scaled_hidden_vector
-    
+        return normalized_hidden_vector
+
     def update_hidden_window(self, grid_spikes: Tensor):
         current_hidden = self._create_hidden_vector(grid_spikes)
         batch_size = current_hidden.shape[0]

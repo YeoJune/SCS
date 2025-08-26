@@ -6,12 +6,12 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 import os
-from transformers import T5Config, T5Tokenizer
+from transformers import T5Config, AutoTokenizer
 
 # io.py와 transformer.py가 이 스크립트와 같은 디렉토리에 있다고 가정합니다.
 try:
-    from .transformer import TransformerEncoder, TransformerEncoderLayer, TransformerDecoder, TransformerDecoderLayer
-    from .io import InputInterface, OutputInterface
+    from transformer import TransformerEncoder, TransformerEncoderLayer, TransformerDecoder, TransformerDecoderLayer
+    from io import InputInterface, OutputInterface
 except ImportError as e:
     print(f"Error: {e}")
     print("Please make sure 'io.py' and 'transformer.py' are in the same directory as this script.")
@@ -22,18 +22,26 @@ except ImportError as e:
 # ============================================================================
 T5_MODEL_NAME = "t5-small"
 WINDOW_SIZE = 16 # 시퀀스 길이
-# ... (다른 설정값들은 이전과 동일)
-ENCODER_LAYERS=1; DECODER_LAYERS=1; ENCODER_HEADS=8; DECODER_HEADS=8;
-ENCODER_DROPOUT=0.1; DECODER_DROPOUT=0.1; DIM_FEEDFORWARD=2048;
-INPUT_POWER=0.05; SOFTMAX_TEMPERATURE=0.1; TRANSPLANT_CROSS_ATTENTION=True;
-PAD_TOKEN_ID=0; GRID_SIZE=32
+ENCODER_LAYERS = 1
+DECODER_LAYERS = 1
+ENCODER_HEADS = 8
+DECODER_HEADS = 8
+ENCODER_DROPOUT = 0.1
+DECODER_DROPOUT = 0.1
+DIM_FEEDFORWARD = 2048
+INPUT_POWER = 0.05
+SOFTMAX_TEMPERATURE = 0.1
+TRANSPLANT_CROSS_ATTENTION = True
+GRID_SIZE = 32
+GRID_SPIKE_THRESHOLD = 1.0 # 그리드 스파이크 발화 임계값
 
 print(f"Loading configuration and tokenizer from '{T5_MODEL_NAME}'...")
 try:
     config = T5Config.from_pretrained(T5_MODEL_NAME)
-    tokenizer = T5Tokenizer.from_pretrained(T5_MODEL_NAME)
+    tokenizer = AutoTokenizer.from_pretrained(T5_MODEL_NAME)
     EMBEDDING_DIM = config.d_model
     VOCAB_SIZE = config.vocab_size
+    PAD_TOKEN_ID = config.pad_token_id
 except Exception as e:
     print(f"Could not load T5 config/tokenizer. Exiting. Error: {e}")
     exit()
@@ -41,9 +49,8 @@ except Exception as e:
 BATCH_SIZE = 128
 NUM_BATCHES = 200
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-OUTPUT_DIR = "simulation_results_real_data"
+OUTPUT_DIR = "simulation_results_real_data_final"
 VIS_SAMPLES = 5000
-GRID_SPIKE_THRESHOLD = 1.0 # 그리드 스파이크 발화 임계값
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 print(f"\nSimulation Environment:")
@@ -54,7 +61,6 @@ print(f"Results will be saved in '{OUTPUT_DIR}' directory.")
 # ============================================================================
 # 샘플 데이터 준비 (실제 텍스트)
 # ============================================================================
-# 간단한 예시 문장들. 실제로는 파일에서 대량으로 읽어오는 것이 좋습니다.
 sample_texts = [
     "The quick brown fox jumps over the lazy dog.",
     "A journey of a thousand miles begins with a single step.",
@@ -62,10 +68,12 @@ sample_texts = [
     "In the beginning God created the heaven and the earth.",
     "Machine learning is a subset of artificial intelligence.",
     "The transformer architecture has revolutionized natural language processing.",
-    "What is the capital of France?",
-    "Photosynthesis is the process used by plants to convert light energy into chemical energy.",
-    "Gravity is the force by which a planet or other body draws objects toward its center.",
-    "The theory of relativity was developed by Albert Einstein."
+    "What is the capital of France? The capital is Paris.",
+    "Photosynthesis is the process used by plants, algae and certain bacteria to convert light energy into chemical energy.",
+    "Gravity is the fundamental force of attraction that all matter exerts on all other matter.",
+    "The theory of relativity, developed by Albert Einstein, is one of the two pillars of modern physics.",
+    "Neuro-symbolic AI combines neural networks with symbolic reasoning.",
+    "The human brain is a complex network of billions of neurons and synapses.",
 ]
 
 # ============================================================================
@@ -103,16 +111,14 @@ stats = {name: {'sum': 0., 'sum_sq': 0., 'norm_sum': 0., 'norm_sum_sq': 0., 'cou
 samples = {name: torch.empty(VIS_SAMPLES, EMBEDDING_DIM) for name in VECTOR_NAMES}
 total_samples_seen = {name: 0 for name in samples}
 
-print("\nStarting simulation with real data...")
+print("\nStarting simulation with real tokenized data...")
 for i in tqdm(range(NUM_BATCHES), desc="Streaming Batches"):
     with torch.no_grad():
         # --- 1. 실제 데이터 기반 입력 생성 ---
-        # 매 배치마다 샘플 텍스트에서 무작위로 문장을 선택하여 사용
         batch_texts = np.random.choice(sample_texts, BATCH_SIZE).tolist()
         inputs = tokenizer(batch_texts, return_tensors="pt", padding="max_length", truncation=True, max_length=WINDOW_SIZE)
         token_window = inputs.input_ids.to(DEVICE)
         
-        # 디코더 입력은 teacher forcing을 모방하여 입력 시퀀스를 약간 변형
         decoder_input_ids = torch.roll(token_window, shifts=-1, dims=1)
         decoder_input_ids[:, -1] = PAD_TOKEN_ID
         
@@ -126,13 +132,9 @@ for i in tqdm(range(NUM_BATCHES), desc="Streaming Batches"):
         encoder_output_post_norm = input_interface.transformer_encoder.norm(encoder_output_pre_norm)
 
         # 3. 의미 있는 grid_spikes 생성
-        # InputInterface의 forward 로직을 사용하여 scaled_pattern 생성
         context_vector = encoder_output_post_norm[:, -1, :]
-        membrane_logits = input_interface.pattern_mapper(context_vector)
-        pattern_probs = F.softmax(membrane_logits / input_interface.softmax_temperature, dim=-1)
-        total_energy = input_interface.grid_height * input_interface.grid_width * input_interface.input_power
-        scaled_pattern = pattern_probs * total_energy
-        grid_spikes = (scaled_pattern.view(-1, GRID_SIZE, GRID_SIZE) > GRID_SPIKE_THRESHOLD).float()
+        scaled_pattern = input_interface.forward(token_window) # forward로 직접 생성
+        grid_spikes = (scaled_pattern > GRID_SPIKE_THRESHOLD).float()
 
         # Hidden Vector
         spikes_flat = grid_spikes.view(grid_spikes.shape[0], -1)
@@ -141,16 +143,7 @@ for i in tqdm(range(NUM_BATCHES), desc="Streaming Batches"):
         output_interface.update_hidden_window(grid_spikes)
 
         # Decoder
-        target_embeds = output_interface.token_embedding(decoder_input_ids)
-        rolled_window = torch.roll(output_interface.hidden_window, shifts=-output_interface.window_ptr, dims=1)
-        tgt_len = target_embeds.size(1)
-        causal_mask = torch.triu(torch.ones(tgt_len, tgt_len, device=DEVICE, dtype=torch.bool), diagonal=1)
-        causal_mask = causal_mask.masked_fill(causal_mask, float('-inf'))
-        
-        decoder_output = target_embeds
-        for layer in output_interface.transformer_decoder.layers:
-            decoder_output = layer(decoder_output, memory=rolled_window, tgt_mask=causal_mask)
-        decoder_output_pre_norm = decoder_output
+        decoder_output_pre_norm = output_interface(decoder_input_ids, return_pre_norm=True)
         decoder_output_post_norm = output_interface.transformer_decoder.norm(decoder_output_pre_norm)
         
         # 처리할 벡터들 딕셔너리
@@ -163,7 +156,7 @@ for i in tqdm(range(NUM_BATCHES), desc="Streaming Batches"):
             "decoder_output_post_norm": decoder_output_post_norm.reshape(-1, EMBEDDING_DIM)
         }
         
-        # --- 4. 통계량 및 샘플 업데이트 (이전과 동일) ---
+        # --- 4. 통계량 및 샘플 업데이트 ---
         for name, data in vectors_to_process.items():
             data_cpu = data.cpu()
             stats[name]['count'] += len(data_cpu)
@@ -184,45 +177,59 @@ for i in tqdm(range(NUM_BATCHES), desc="Streaming Batches"):
 print("Simulation finished.")
 
 # ============================================================================
-# 최종 통계량 계산 및 저장 (이전과 동일)
+# 최종 통계량 계산 및 저장 
 # ============================================================================
-stats_data = []; # ... (이전 코드와 완전히 동일)
+stats_data = []
 for name in VECTOR_NAMES:
     s = stats[name]
     if s['count'] == 0: continue
     n_elements = s['count'] * EMBEDDING_DIM
-    mean = s['sum'] / n_elements; std = np.sqrt(max(0, s['sum_sq'] / n_elements - mean**2))
+    mean = s['sum'] / n_elements
+    std = np.sqrt(max(0, s['sum_sq'] / n_elements - mean**2))
     n_vectors = s['count']
-    norm_mean = s['norm_sum'] / n_vectors; norm_std = np.sqrt(max(0, s['norm_sum_sq'] / n_vectors - norm_mean**2))
+    norm_mean = s['norm_sum'] / n_vectors
+    norm_std = np.sqrt(max(0, s['norm_sum_sq'] / n_vectors - norm_mean**2))
     stats_data.append({
         "Vector Type": name, "Total Samples": f"{s['count']}", "Mean (element-wise)": f"{mean:.4f}",
         "Std Dev (element-wise)": f"{std:.4f}", "Mean Norm (vector-wise)": f"{norm_mean:.4f}",
         "Std Dev Norm (vector-wise)": f"{norm_std:.4f}"
     })
-stats_df = pd.DataFrame(stats_data); stats_file = os.path.join(OUTPUT_DIR, "statistics_summary_real_data.csv")
-stats_df.to_csv(stats_file, index=False); print(f"\nStatistics saved to '{stats_file}':\n{stats_df.to_string()}")
+stats_df = pd.DataFrame(stats_data)
+stats_file = os.path.join(OUTPUT_DIR, "statistics_summary_real_data.csv")
+stats_df.to_csv(stats_file, index=False)
+print(f"\nStatistics saved to '{stats_file}':\n{stats_df.to_string()}")
 
 # ============================================================================
-# 분포 시각화 (이전과 동일)
+# 분포 시각화 (NO SKLEARN)
 # ============================================================================
 print(f"\nGenerating visualizations from up to {VIS_SAMPLES} samples...")
 
-def create_plots(name, data_tensor): # ... (이전 코드와 완전히 동일)
+def create_plots(name, data_tensor):
     num_actual_samples = min(total_samples_seen[name], VIS_SAMPLES)
-    if num_actual_samples == 0: print(f"  - No samples for '{name}', skipping plots."); return
+    if num_actual_samples == 0:
+        print(f"  - No samples for '{name}', skipping plots.")
+        return
+        
     data_np = data_tensor[:num_actual_samples].numpy()
+    
+    # Element Value Distribution
     plt.figure(figsize=(8, 6)); sns.histplot(data_np.flatten(), bins=100, kde=True, color='skyblue')
     plt.title(f"Distribution of Element Values\n({name})", fontsize=16); plt.xlabel("Value", fontsize=12); plt.ylabel("Density", fontsize=12)
     plt.grid(True, linestyle='--', alpha=0.6); plt.savefig(os.path.join(OUTPUT_DIR, f"dist_{name}_elements.png"), bbox_inches='tight'); plt.close()
+
+    # Vector L2 Norm Distribution
     plt.figure(figsize=(8, 6)); norms = np.linalg.norm(data_np, axis=1)
     sns.histplot(norms, bins=100, kde=True, color='salmon'); plt.title(f"Distribution of Vector L2 Norms\n({name})", fontsize=16)
     plt.xlabel("L2 Norm", fontsize=12); plt.ylabel("Density", fontsize=12); plt.grid(True, linestyle='--', alpha=0.6)
     plt.savefig(os.path.join(OUTPUT_DIR, f"dist_{name}_norms.png"), bbox_inches='tight'); plt.close()
+    
+    # 2D PCA Visualization
     try:
         sample_tensor = data_tensor[:num_actual_samples]
         centered_data = sample_tensor - sample_tensor.mean(dim=0, keepdim=True)
         U, S, V = torch.pca_lowrank(centered_data.to(DEVICE), q=2)
         data_pca = torch.matmul(centered_data.to(DEVICE), V).cpu().numpy()
+
         plt.figure(figsize=(8, 8)); plt.scatter(data_pca[:, 0], data_pca[:, 1], alpha=0.3, s=5, color='cornflowerblue')
         plt.title(f"2D PCA Visualization\n({name})", fontsize=16); plt.xlabel("Principal Component 1", fontsize=12)
         plt.ylabel("Principal Component 2", fontsize=12); plt.grid(True, linestyle='--', alpha=0.6); plt.axis('equal')

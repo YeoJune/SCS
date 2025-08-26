@@ -10,8 +10,8 @@ from transformers import T5Config, AutoTokenizer
 
 # io.py와 transformer.py가 이 스크립트와 같은 디렉토리에 있다고 가정합니다.
 try:
-    from transformer import TransformerEncoder, TransformerEncoderLayer, TransformerDecoder, TransformerDecoderLayer
-    from io import InputInterface, OutputInterface
+    from .transformer import TransformerEncoder, TransformerEncoderLayer, TransformerDecoder, TransformerDecoderLayer
+    from .io import InputInterface, OutputInterface
 except ImportError as e:
     print(f"Error: {e}")
     print("Please make sure 'io.py' and 'transformer.py' are in the same directory as this script.")

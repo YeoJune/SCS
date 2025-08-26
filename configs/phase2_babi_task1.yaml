@@ -83,7 +83,7 @@ learning:
       - "output_interface.transformer_decoder.layers.0.self_attn"
       - "output_interface.final_projection"
       - "output_interface.layer_norm"
-      - "output_interface.transformer_decoder.layers.0.cross_attn"
+      - "output_interface.transformer_decoder.layers.0.multihead_attn"
     unfreeze_schedule: # 에포크별 해제 스케줄
       100: # 에포크 20에 T5 임베딩 해제
         - "input_interface.transformer_encoder"

@@ -178,7 +178,7 @@ class TransformerDecoderLayer(nn.Module):
                  layer_norm_eps: float = 1e-6, norm_first: bool = True):
         super().__init__()
         self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
-        self.cross_attn = MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
+        self.multihead_attn = MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
         self.sa_t5_bias = T5RelativePositionBias(nhead, is_decoder=True)
         self.mha_t5_bias = T5RelativePositionBias(nhead, is_decoder=False)
         self.linear1 = nn.Linear(d_model, dim_feedforward)
@@ -215,7 +215,7 @@ class TransformerDecoderLayer(nn.Module):
     def _mha_block(self, x: Tensor, mem: Tensor, key_padding_mask: Optional[Tensor]) -> Tensor:
         q_len, k_len = x.size(1), mem.size(1)
         position_bias = self.mha_t5_bias(q_len, k_len)
-        x, _ = self.cross_attn(x, mem, mem, key_padding_mask=key_padding_mask, position_bias=position_bias)
+        x, _ = self.multihead_attn(x, mem, mem, key_padding_mask=key_padding_mask, position_bias=position_bias)
         return self.dropout2(x)
 
     def _ff_block(self, x: Tensor) -> Tensor:
@@ -281,11 +281,11 @@ def transplant_t5_decoder_weights(scs_decoder: TransformerDecoder, t5_decoder, t
                 
                 # Cross-Attention (optional) & LayerNorm2
                 if transplant_cross_attention:
-                    scs_layer.cross_attn.q_proj.weight.copy_(t5_ca.q.weight)
-                    scs_layer.cross_attn.k_proj.weight.copy_(t5_ca.k.weight)
-                    scs_layer.cross_attn.v_proj.weight.copy_(t5_ca.v.weight)
+                    scs_layer.multihead_attn.q_proj.weight.copy_(t5_ca.q.weight)
+                    scs_layer.multihead_attn.k_proj.weight.copy_(t5_ca.k.weight)
+                    scs_layer.multihead_attn.v_proj.weight.copy_(t5_ca.v.weight)
                     
-                    scs_layer.cross_attn.out_proj.weight.copy_(t5_ca.o.weight)
+                    scs_layer.multihead_attn.out_proj.weight.copy_(t5_ca.o.weight)
                     scs_layer.norm2.weight.copy_(t5_layer.layer[1].layer_norm.weight)
                 
                 # Feed Forward & LayerNorm3

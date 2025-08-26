@@ -78,7 +78,7 @@ learning:
       - "output_interface.transformer_decoder.layers.0.self_attn"
       - "output_interface.final_projection"
       - "output_interface.layer_norm"
-      - "output_interface.transformer_decoder.layers.0.cross_attn"
+      - "output_interface.transformer_decoder.layers.0.multihead_attn"
     unfreeze_schedule: # 에포크별 해제 스케줄
       500:
         - "output_interface.final_projection"

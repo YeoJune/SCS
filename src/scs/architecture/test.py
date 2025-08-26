@@ -8,14 +8,18 @@ from tqdm import tqdm
 import os
 from transformers import T5Config
 
-# io.py에서 실제 클래스들을 가져옵니다.
-# transformer.py가 같은 디렉토리에 있어야 합니다.
-from .transformer import (
-    TransformerEncoder, TransformerEncoderLayer,
-    TransformerDecoder, TransformerDecoderLayer
-)
-# 'transplant' 함수들은 io.py 내부에서만 사용되므로 여기서 직접 import할 필요는 없습니다.
-from .io import InputInterface, OutputInterface
+# io.py와 transformer.py가 이 스크립트와 같은 디렉토리에 있다고 가정합니다.
+# 경로가 다른 경우 sys.path.append() 등을 사용하여 경로를 추가해야 합니다.
+try:
+    from .transformer import (
+        TransformerEncoder, TransformerEncoderLayer,
+        TransformerDecoder, TransformerDecoderLayer
+    )
+    from .io import InputInterface, OutputInterface
+except ImportError as e:
+    print(f"Error: {e}")
+    print("Please make sure 'io.py' and 'transformer.py' are in the same directory as this script.")
+    exit()
 
 # ============================================================================
 # 시뮬레이션 설정 (CONFIGURATION FROM YAML)
@@ -51,21 +55,23 @@ GRID_SIZE = 32
 BATCH_SIZE = 128
 NUM_BATCHES = 200 # 샘플 수를 늘림 (총 128 * 200 = 25,600개 샘플)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-OUTPUT_DIR = "simulation_results_t5_small_v2"
+OUTPUT_DIR = "simulation_results_t5_small_safe"
+VIS_SAMPLES = 5000 # 시각화에 사용할 샘플 수
 
 # 시뮬레이션 결과 저장 디렉토리 생성
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 print(f"\nSimulation Environment:")
 print(f"  - Device: {DEVICE}")
 print(f"  - Total Batches: {NUM_BATCHES} (Batch Size: {BATCH_SIZE})")
-print(f"  - Total Samples: {NUM_BATCHES * BATCH_SIZE}")
+print(f"  - Total Vector Samples: {NUM_BATCHES * BATCH_SIZE * WINDOW_SIZE * 2 + NUM_BATCHES * BATCH_SIZE}")
 print(f"  - Embedding Dim: {EMBEDDING_DIM}")
 print(f"Results will be saved in '{OUTPUT_DIR}' directory.")
+
 
 # ============================================================================
 # 모델 초기화 및 가중치 이식 (MODEL SETUP & TRANSPLANT)
 # ============================================================================
-print("\nInitializing models and transplanting T5 weights (simulation)...")
+print("\nInitializing models and attempting to transplant T5 weights...")
 
 # InputInterface와 OutputInterface를 초기화합니다.
 # t5_model_name 인자를 전달하면 내부적으로 가중치 이식이 시도됩니다.
@@ -103,57 +109,97 @@ output_interface = OutputInterface(
 
 
 # ============================================================================
-# 데이터 생성 및 시뮬레이션 실행 (SIMULATION RUN)
+# 스트리밍 방식 시뮬레이션 (MEMORY-EFFICIENT SIMULATION)
 # ============================================================================
-results = {"encoder_output": [], "hidden_vector": [], "decoder_output": []}
-print("\nStarting simulation...")
-for _ in tqdm(range(NUM_BATCHES), desc="Simulating Batches"):
-    with torch.no_grad():
-        # --- InputInterface 시뮬레이션 ---
-        # 최신 io.py forward 로직과 정확히 일치시킴
-        token_window = torch.randint(1, VOCAB_SIZE, (BATCH_SIZE, WINDOW_SIZE), device=DEVICE)
-        
-        # InputInterface의 forward 로직을 직접 실행
-        token_embeds = input_interface.token_embedding(token_window)
-        encoder_output = input_interface.transformer_encoder(token_embeds)
-        
-        results["encoder_output"].append(encoder_output.reshape(-1, EMBEDDING_DIM).cpu())
 
-        # --- OutputInterface 시뮬레이션 ---
+# 1. 통계량 누적을 위한 변수 초기화
+stats = {
+    name: {'sum': 0.0, 'sum_sq': 0.0, 'norm_sum': 0.0, 'norm_sum_sq': 0.0, 'count': 0}
+    for name in ["encoder_output", "hidden_vector", "decoder_output"]
+}
+
+# 2. 시각화를 위한 데이터 샘플링 변수 초기화 (저수지 샘플링)
+samples = {
+    name: torch.empty(VIS_SAMPLES, EMBEDDING_DIM)
+    for name in ["encoder_output", "hidden_vector", "decoder_output"]
+}
+total_samples_seen = {name: 0 for name in samples}
+
+print("\nStarting memory-efficient simulation...")
+for i in tqdm(range(NUM_BATCHES), desc="Streaming Batches"):
+    with torch.no_grad():
+        # --- 데이터 생성 ---
+        token_window = torch.randint(1, VOCAB_SIZE, (BATCH_SIZE, WINDOW_SIZE), device=DEVICE)
         spike_prob = torch.rand(BATCH_SIZE, 1, 1, device=DEVICE) * 0.15 + 0.05
         grid_spikes = (torch.rand(BATCH_SIZE, GRID_SIZE, GRID_SIZE, device=DEVICE) < spike_prob).float()
-        
-        hidden_vector = output_interface._create_hidden_vector(grid_spikes)
-        results["hidden_vector"].append(hidden_vector.cpu())
-
-        output_interface.reset_state(BATCH_SIZE)
-        output_interface.hidden_window = hidden_vector.unsqueeze(1).repeat(1, WINDOW_SIZE, 1)
-        
         decoder_input_ids = torch.randint(1, VOCAB_SIZE, (BATCH_SIZE, WINDOW_SIZE), device=DEVICE)
-        
-        # OutputInterface의 forward 로직을 직접 실행
-        decoder_output = output_interface(decoder_input_ids)
-        
-        results["decoder_output"].append(decoder_output.reshape(-1, EMBEDDING_DIM).cpu())
 
-# 모든 배치 결과 합치기
-for key in results:
-    results[key] = torch.cat(results[key], dim=0)
+        # --- 모델 실행 ---
+        # InputInterface의 encoder_output 추출
+        token_embeds = input_interface.token_embedding(token_window)
+        encoder_output_vecs = input_interface.transformer_encoder(token_embeds)
+
+        # OutputInterface의 hidden_vector 및 decoder_output 추출
+        hidden_vector = output_interface._create_hidden_vector(grid_spikes)
+        output_interface.update_hidden_window(grid_spikes)
+        decoder_output_vecs = output_interface(decoder_input_ids)
+
+        # 처리할 벡터들 딕셔너리
+        vectors_to_process = {
+            "encoder_output": encoder_output_vecs.reshape(-1, EMBEDDING_DIM),
+            "hidden_vector": hidden_vector,
+            "decoder_output": decoder_output_vecs.reshape(-1, EMBEDDING_DIM)
+        }
+
+        # --- 각 벡터에 대해 통계량 및 샘플 업데이트 ---
+        for name, data in vectors_to_process.items():
+            data_cpu = data.cpu()
+
+            # 온라인 통계량 업데이트
+            stats[name]['count'] += len(data_cpu)
+            stats[name]['sum'] += data_cpu.sum().item()
+            stats[name]['sum_sq'] += torch.sum(data_cpu**2).item()
+            norms = torch.linalg.norm(data_cpu.float(), dim=1) # linalg.norm은 float을 선호
+            stats[name]['norm_sum'] += norms.sum().item()
+            stats[name]['norm_sum_sq'] += torch.sum(norms**2).item()
+
+            # 저수지 샘플링 (Reservoir Sampling)
+            for item in data_cpu:
+                total_samples_seen[name] += 1
+                if total_samples_seen[name] <= VIS_SAMPLES:
+                    samples[name][total_samples_seen[name] - 1] = item
+                else:
+                    j = np.random.randint(0, total_samples_seen[name])
+                    if j < VIS_SAMPLES:
+                        samples[name][j] = item
+
 print("Simulation finished.")
 
 # ============================================================================
-# 통계량 계산 및 저장 (STATISTICS)
+# 최종 통계량 계산 및 저장 (FINAL STATISTICS)
 # ============================================================================
 stats_data = []
-for name, data_tensor in results.items():
-    data = data_tensor.numpy()
+for name, s in stats.items():
+    if s['count'] == 0: continue
+    
+    # Per-element stats
+    n_elements = s['count'] * EMBEDDING_DIM
+    mean = s['sum'] / n_elements
+    # 온라인 분산 계산 (더 안정적)
+    std = np.sqrt(max(0, s['sum_sq'] / n_elements - mean**2))
+
+    # Per-vector stats
+    n_vectors = s['count']
+    norm_mean = s['norm_sum'] / n_vectors
+    norm_std = np.sqrt(max(0, s['norm_sum_sq'] / n_vectors - norm_mean**2))
+
     stats_data.append({
         "Vector Type": name,
-        "Shape": str(data.shape),
-        "Mean (element-wise)": f"{np.mean(data):.4f}",
-        "Std Dev (element-wise)": f"{np.std(data):.4f}",
-        "Mean Norm (vector-wise)": f"{np.mean(np.linalg.norm(data, axis=1)):.4f}",
-        "Std Dev Norm (vector-wise)": f"{np.std(np.linalg.norm(data, axis=1)):.4f}"
+        "Total Samples": f"{s['count']}",
+        "Mean (element-wise)": f"{mean:.4f}",
+        "Std Dev (element-wise)": f"{std:.4f}",
+        "Mean Norm (vector-wise)": f"{norm_mean:.4f}",
+        "Std Dev Norm (vector-wise)": f"{norm_std:.4f}"
     })
 
 stats_df = pd.DataFrame(stats_data)
@@ -165,25 +211,20 @@ print(stats_df.to_string())
 # ============================================================================
 # 분포 시각화 (VISUALIZATION - NO SKLEARN)
 # ============================================================================
-print(f"\nGenerating visualizations (saved in '{OUTPUT_DIR}')...")
-SAMPLES_FOR_VIS = 5000 # 시각화에 사용할 샘플 수
+print(f"\nGenerating visualizations from up to {VIS_SAMPLES} samples...")
 
 # 공통 시각화 함수
 def create_plots(name, data_tensor):
-    data_np = data_tensor.numpy()
+    num_actual_samples = min(total_samples_seen[name], VIS_SAMPLES)
+    if num_actual_samples == 0:
+        print(f"  - No samples for '{name}', skipping plots.")
+        return
+        
+    data_np = data_tensor[:num_actual_samples].numpy()
     
-    # 데이터 샘플링
-    if len(data_np) > SAMPLES_FOR_VIS:
-        indices = np.random.choice(len(data_np), SAMPLES_FOR_VIS, replace=False)
-        sample = data_np[indices]
-        sample_tensor = data_tensor[indices]
-    else:
-        sample = data_np
-        sample_tensor = data_tensor
-
     # 1. Element Value Distribution
     plt.figure(figsize=(8, 6))
-    sns.histplot(sample.flatten(), bins=100, kde=True, color='skyblue')
+    sns.histplot(data_np.flatten(), bins=100, kde=True, color='skyblue')
     plt.title(f"Distribution of Element Values\n({name})", fontsize=16)
     plt.xlabel("Value", fontsize=12)
     plt.ylabel("Density", fontsize=12)
@@ -193,7 +234,7 @@ def create_plots(name, data_tensor):
 
     # 2. Vector L2 Norm Distribution
     plt.figure(figsize=(8, 6))
-    norms = np.linalg.norm(sample, axis=1)
+    norms = np.linalg.norm(data_np, axis=1)
     sns.histplot(norms, bins=100, kde=True, color='salmon')
     plt.title(f"Distribution of Vector L2 Norms\n({name})", fontsize=16)
     plt.xlabel("L2 Norm", fontsize=12)
@@ -204,11 +245,10 @@ def create_plots(name, data_tensor):
     
     # 3. 2D PCA Visualization (using torch.pca_lowrank)
     try:
-        # 데이터 센터링
+        sample_tensor = data_tensor[:num_actual_samples]
         centered_data = sample_tensor - sample_tensor.mean(dim=0, keepdim=True)
-        # PCA 수행
-        U, S, V = torch.pca_lowrank(centered_data, q=2)
-        data_pca = torch.matmul(centered_data, V).numpy()
+        U, S, V = torch.pca_lowrank(centered_data.to(DEVICE), q=2) # PCA는 GPU에서 더 빠를 수 있음
+        data_pca = torch.matmul(centered_data.to(DEVICE), V).cpu().numpy()
 
         plt.figure(figsize=(8, 8))
         plt.scatter(data_pca[:, 0], data_pca[:, 1], alpha=0.3, s=5, color='cornflowerblue')
@@ -224,7 +264,7 @@ def create_plots(name, data_tensor):
 
 
 # 각 벡터 타입에 대해 시각화 실행
-for name, data_tensor in tqdm(results.items(), desc="Creating Plots"):
+for name, data_tensor in tqdm(samples.items(), desc="Creating Plots"):
     create_plots(name, data_tensor)
 
-print("All tasks finished successfully.")
+print("\nAll tasks finished successfully.")

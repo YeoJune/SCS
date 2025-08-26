@@ -197,14 +197,12 @@ def analyze_io_pipeline(model, test_loader, output_dir: Path, device: str):
             elif step['name'] == 'membrane_logits':
                 key_metrics['membrane_logits_std'] = step['std']
             elif step['name'] == 'output_hidden_window_analysis':
-                key_metrics['compressor_power'] = step['compressor_power']
                 key_metrics['latest_hidden_std'] = step['latest_hidden_vector']['std']
         
         logger.info("🎯 핵심 지표 요약:")
         logger.info(f"   토큰 임베딩 std: {key_metrics.get('token_embed_std', 'N/A'):.3f} (목표: ~23)")
         logger.info(f"   마지막 토큰 std: {key_metrics.get('last_token_std', 'N/A'):.3f} (T5 encoder 출력)")
         logger.info(f"   막전위 로짓 std: {key_metrics.get('membrane_logits_std', 'N/A'):.3f} (직교 변환)")
-        logger.info(f"   압축 파워: {key_metrics.get('compressor_power', 'N/A'):.3f} (목표: ~0.1)")
         logger.info(f"   최신 히든 std: {key_metrics.get('latest_hidden_std', 'N/A'):.3f}")
         
     except Exception as e:

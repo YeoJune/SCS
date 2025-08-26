@@ -85,15 +85,13 @@ class InputInterface(nn.Module):
         
         self.pattern_mapper = nn.Linear(self.embedding_dim, self.grid_height * self.grid_width)
         torch.nn.init.orthogonal_(self.pattern_mapper.weight)
-        self.dropout = nn.Dropout(encoder_dropout)
     
     def forward(self, token_window: Tensor) -> Optional[Tensor]:
         if token_window is None or token_window.numel() == 0:
             return None
         
         token_embeds = self.token_embedding(token_window)
-        encoder_input = self.dropout(token_embeds)
-        encoder_output = self.transformer_encoder(encoder_input)
+        encoder_output = self.transformer_encoder(token_embeds)
         context_vector = encoder_output[:, -1, :]
         
         membrane_logits = self.pattern_mapper(context_vector)

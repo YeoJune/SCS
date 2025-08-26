@@ -6,15 +6,15 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 import os
-from transformers import T5Config, T5ForConditionalGeneration
+from transformers import T5Config
 
 # io.py에서 실제 클래스들을 가져옵니다.
 # transformer.py가 같은 디렉토리에 있어야 합니다.
 from .transformer import (
     TransformerEncoder, TransformerEncoderLayer,
-    TransformerDecoder, TransformerDecoderLayer,
-    transplant_t5_encoder_weights, transplant_t5_decoder_weights
+    TransformerDecoder, TransformerDecoderLayer
 )
+# 'transplant' 함수들은 io.py 내부에서만 사용되므로 여기서 직접 import할 필요는 없습니다.
 from .io import InputInterface, OutputInterface
 
 # ============================================================================
@@ -33,34 +33,25 @@ DIM_FEEDFORWARD = 2048
 INPUT_POWER = 0.05
 SOFTMAX_TEMPERATURE = 0.1
 TRANSPLANT_CROSS_ATTENTION = True
-PAD_TOKEN_ID = 0 # T5-small의 pad_token_id
+PAD_TOKEN_ID = 0
 
 # --- t5-small 모델에서 파라미터 자동 로드 ---
 print(f"Loading configuration from '{T5_MODEL_NAME}'...")
 try:
     config = T5Config.from_pretrained(T5_MODEL_NAME)
-    # YAML 설정이 t5-small과 다를 경우를 대비해, 명시된 값을 우선 사용
-    EMBEDDING_DIM = config.d_model if config.d_model == 512 else 512
+    EMBEDDING_DIM = config.d_model
     VOCAB_SIZE = config.vocab_size
-    # t5-small의 실제 헤드 수는 8개가 아닐 수 있으므로, 설정값을 존중
-    if ENCODER_HEADS != config.num_heads:
-        print(f"Warning: YAML encoder_heads ({ENCODER_HEADS}) != t5-small config ({config.num_heads}). Using YAML value.")
-    if DECODER_HEADS != config.num_heads:
-        print(f"Warning: YAML decoder_heads ({DECODER_HEADS}) != t5-small config ({config.num_heads}). Using YAML value.")
-    if DIM_FEEDFORWARD != config.d_ff:
-         print(f"Warning: YAML dim_feedforward ({DIM_FEEDFORWARD}) != t5-small config ({config.d_ff}). Using YAML value.")
 except Exception as e:
-    print(f"Could not load T5 config. Using YAML values. Error: {e}")
+    print(f"Could not load T5 config. Using default values. Error: {e}")
     EMBEDDING_DIM = 512
-    VOCAB_SIZE = 32128 # t5-small default
+    VOCAB_SIZE = 32128
 
 # --- 시뮬레이션 파라미터 ---
-GRID_SIZE = 32 # YAML에 없지만, 이전 코드 기준
+GRID_SIZE = 32
 BATCH_SIZE = 128
 NUM_BATCHES = 200 # 샘플 수를 늘림 (총 128 * 200 = 25,600개 샘플)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-OUTPUT_DIR = "simulation_results_t5_small"
-PCA_TSNE_SAMPLES = 5000 # 시각화에 사용할 샘플 수
+OUTPUT_DIR = "simulation_results_t5_small_v2"
 
 # 시뮬레이션 결과 저장 디렉토리 생성
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -74,9 +65,10 @@ print(f"Results will be saved in '{OUTPUT_DIR}' directory.")
 # ============================================================================
 # 모델 초기화 및 가중치 이식 (MODEL SETUP & TRANSPLANT)
 # ============================================================================
-print("\nInitializing models and transplanting T5 weights...")
+print("\nInitializing models and transplanting T5 weights (simulation)...")
 
-# 1. InputInterface 초기화
+# InputInterface와 OutputInterface를 초기화합니다.
+# t5_model_name 인자를 전달하면 내부적으로 가중치 이식이 시도됩니다.
 input_interface = InputInterface(
     vocab_size=VOCAB_SIZE,
     grid_height=GRID_SIZE,
@@ -89,11 +81,10 @@ input_interface = InputInterface(
     encoder_dropout=ENCODER_DROPOUT,
     input_power=INPUT_POWER,
     softmax_temperature=SOFTMAX_TEMPERATURE,
-    t5_model_name=T5_MODEL_NAME, # T5 가중치 이식
+    t5_model_name=T5_MODEL_NAME,
     device=DEVICE
 ).to(DEVICE).eval()
 
-# 2. OutputInterface 초기화
 output_interface = OutputInterface(
     vocab_size=VOCAB_SIZE,
     grid_height=GRID_SIZE,
@@ -105,7 +96,7 @@ output_interface = OutputInterface(
     decoder_heads=DECODER_HEADS,
     dim_feedforward=DIM_FEEDFORWARD,
     dropout=DECODER_DROPOUT,
-    t5_model_name=T5_MODEL_NAME, # T5 가중치 이식
+    t5_model_name=T5_MODEL_NAME,
     transplant_cross_attention=TRANSPLANT_CROSS_ATTENTION,
     device=DEVICE
 ).to(DEVICE).eval()
@@ -119,10 +110,13 @@ print("\nStarting simulation...")
 for _ in tqdm(range(NUM_BATCHES), desc="Simulating Batches"):
     with torch.no_grad():
         # --- InputInterface 시뮬레이션 ---
+        # 최신 io.py forward 로직과 정확히 일치시킴
         token_window = torch.randint(1, VOCAB_SIZE, (BATCH_SIZE, WINDOW_SIZE), device=DEVICE)
-        encoder_output = input_interface.transformer_encoder(
-            input_interface.token_embedding(token_window)
-        )
+        
+        # InputInterface의 forward 로직을 직접 실행
+        token_embeds = input_interface.token_embedding(token_window)
+        encoder_output = input_interface.transformer_encoder(token_embeds)
+        
         results["encoder_output"].append(encoder_output.reshape(-1, EMBEDDING_DIM).cpu())
 
         # --- OutputInterface 시뮬레이션 ---
@@ -136,27 +130,23 @@ for _ in tqdm(range(NUM_BATCHES), desc="Simulating Batches"):
         output_interface.hidden_window = hidden_vector.unsqueeze(1).repeat(1, WINDOW_SIZE, 1)
         
         decoder_input_ids = torch.randint(1, VOCAB_SIZE, (BATCH_SIZE, WINDOW_SIZE), device=DEVICE)
-        target_embeds = output_interface.token_embedding(decoder_input_ids)
         
-        tgt_len = target_embeds.size(1)
-        causal_mask = torch.triu(torch.ones(tgt_len, tgt_len, device=DEVICE), diagonal=1).bool()
-        causal_mask = causal_mask.masked_fill(causal_mask, float('-inf'))
-
-        decoder_output = output_interface.transformer_decoder(
-            tgt=target_embeds, memory=output_interface.hidden_window, tgt_mask=causal_mask
-        )
+        # OutputInterface의 forward 로직을 직접 실행
+        decoder_output = output_interface(decoder_input_ids)
+        
         results["decoder_output"].append(decoder_output.reshape(-1, EMBEDDING_DIM).cpu())
 
 # 모든 배치 결과 합치기
 for key in results:
-    results[key] = torch.cat(results[key], dim=0).numpy()
+    results[key] = torch.cat(results[key], dim=0)
 print("Simulation finished.")
 
 # ============================================================================
 # 통계량 계산 및 저장 (STATISTICS)
 # ============================================================================
 stats_data = []
-for name, data in results.items():
+for name, data_tensor in results.items():
+    data = data_tensor.numpy()
     stats_data.append({
         "Vector Type": name,
         "Shape": str(data.shape),
@@ -173,17 +163,27 @@ print(f"\nStatistics saved to '{stats_file}':")
 print(stats_df.to_string())
 
 # ============================================================================
-# 분포 시각화 (VISUALIZATION)
+# 분포 시각화 (VISUALIZATION - NO SKLEARN)
 # ============================================================================
 print(f"\nGenerating visualizations (saved in '{OUTPUT_DIR}')...")
-from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
+SAMPLES_FOR_VIS = 5000 # 시각화에 사용할 샘플 수
 
 # 공통 시각화 함수
-def create_plots(name, data):
+def create_plots(name, data_tensor):
+    data_np = data_tensor.numpy()
+    
+    # 데이터 샘플링
+    if len(data_np) > SAMPLES_FOR_VIS:
+        indices = np.random.choice(len(data_np), SAMPLES_FOR_VIS, replace=False)
+        sample = data_np[indices]
+        sample_tensor = data_tensor[indices]
+    else:
+        sample = data_np
+        sample_tensor = data_tensor
+
     # 1. Element Value Distribution
     plt.figure(figsize=(8, 6))
-    sns.histplot(data.flatten(), bins=100, kde=True, color='skyblue')
+    sns.histplot(sample.flatten(), bins=100, kde=True, color='skyblue')
     plt.title(f"Distribution of Element Values\n({name})", fontsize=16)
     plt.xlabel("Value", fontsize=12)
     plt.ylabel("Density", fontsize=12)
@@ -193,7 +193,7 @@ def create_plots(name, data):
 
     # 2. Vector L2 Norm Distribution
     plt.figure(figsize=(8, 6))
-    norms = np.linalg.norm(data, axis=1)
+    norms = np.linalg.norm(sample, axis=1)
     sns.histplot(norms, bins=100, kde=True, color='salmon')
     plt.title(f"Distribution of Vector L2 Norms\n({name})", fontsize=16)
     plt.xlabel("L2 Norm", fontsize=12)
@@ -201,42 +201,30 @@ def create_plots(name, data):
     plt.grid(True, linestyle='--', alpha=0.6)
     plt.savefig(os.path.join(OUTPUT_DIR, f"dist_{name}_norms.png"), bbox_inches='tight')
     plt.close()
-
-    # 데이터 샘플링 for PCA/t-SNE
-    if len(data) > PCA_TSNE_SAMPLES:
-        indices = np.random.choice(len(data), PCA_TSNE_SAMPLES, replace=False)
-        sample = data[indices]
-    else:
-        sample = data
     
-    # 3. 2D PCA Visualization
-    pca = PCA(n_components=2)
-    data_pca = pca.fit_transform(sample)
-    plt.figure(figsize=(8, 8))
-    plt.scatter(data_pca[:, 0], data_pca[:, 1], alpha=0.3, s=5, color='cornflowerblue')
-    plt.title(f"2D PCA Visualization\n({name})", fontsize=16)
-    plt.xlabel("Principal Component 1", fontsize=12)
-    plt.ylabel("Principal Component 2", fontsize=12)
-    plt.grid(True, linestyle='--', alpha=0.6)
-    plt.axis('equal')
-    plt.savefig(os.path.join(OUTPUT_DIR, f"pca_2d_{name}.png"), bbox_inches='tight')
-    plt.close()
+    # 3. 2D PCA Visualization (using torch.pca_lowrank)
+    try:
+        # 데이터 센터링
+        centered_data = sample_tensor - sample_tensor.mean(dim=0, keepdim=True)
+        # PCA 수행
+        U, S, V = torch.pca_lowrank(centered_data, q=2)
+        data_pca = torch.matmul(centered_data, V).numpy()
 
-    # 4. 2D t-SNE Visualization
-    tsne = TSNE(n_components=2, perplexity=30, n_iter=300, random_state=42)
-    data_tsne = tsne.fit_transform(sample)
-    plt.figure(figsize=(8, 8))
-    plt.scatter(data_tsne[:, 0], data_tsne[:, 1], alpha=0.3, s=5, color='mediumseagreen')
-    plt.title(f"2D t-SNE Visualization\n({name})", fontsize=16)
-    plt.xlabel("t-SNE Component 1", fontsize=12)
-    plt.ylabel("t-SNE Component 2", fontsize=12)
-    plt.grid(True, linestyle='--', alpha=0.6)
-    plt.axis('equal')
-    plt.savefig(os.path.join(OUTPUT_DIR, f"tsne_2d_{name}.png"), bbox_inches='tight')
-    plt.close()
+        plt.figure(figsize=(8, 8))
+        plt.scatter(data_pca[:, 0], data_pca[:, 1], alpha=0.3, s=5, color='cornflowerblue')
+        plt.title(f"2D PCA Visualization (using torch.pca_lowrank)\n({name})", fontsize=16)
+        plt.xlabel("Principal Component 1", fontsize=12)
+        plt.ylabel("Principal Component 2", fontsize=12)
+        plt.grid(True, linestyle='--', alpha=0.6)
+        plt.axis('equal')
+        plt.savefig(os.path.join(OUTPUT_DIR, f"pca_2d_{name}.png"), bbox_inches='tight')
+        plt.close()
+    except Exception as e:
+        print(f"  - Could not generate PCA plot for '{name}': {e}")
+
 
 # 각 벡터 타입에 대해 시각화 실행
-for name, data in tqdm(results.items(), desc="Creating Plots"):
-    create_plots(name, data)
+for name, data_tensor in tqdm(results.items(), desc="Creating Plots"):
+    create_plots(name, data_tensor)
 
 print("All tasks finished successfully.")

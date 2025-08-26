@@ -121,7 +121,7 @@ for _ in tqdm(range(NUM_BATCHES), desc="Simulating Batches"):
         # --- InputInterface 시뮬레이션 ---
         token_window = torch.randint(1, VOCAB_SIZE, (BATCH_SIZE, WINDOW_SIZE), device=DEVICE)
         encoder_output = input_interface.transformer_encoder(
-            input_interface.dropout(input_interface.token_embedding(token_window))
+            input_interface.token_embedding(token_window)
         )
         results["encoder_output"].append(encoder_output.reshape(-1, EMBEDDING_DIM).cpu())
 

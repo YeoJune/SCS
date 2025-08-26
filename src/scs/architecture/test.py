@@ -10,10 +10,7 @@ from transformers import T5Config
 
 # io.py와 transformer.py가 이 스크립트와 같은 디렉토리에 있다고 가정합니다.
 try:
-    from .transformer import (
-        TransformerEncoder, TransformerEncoderLayer,
-        TransformerDecoder, TransformerDecoderLayer
-    )
+    from .transformer import TransformerEncoder, TransformerEncoderLayer, TransformerDecoder, TransformerDecoderLayer
     from .io import InputInterface, OutputInterface
 except ImportError as e:
     print(f"Error: {e}")
@@ -51,7 +48,7 @@ GRID_SIZE = 32
 BATCH_SIZE = 128
 NUM_BATCHES = 200
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-OUTPUT_DIR = "simulation_results_pre_post_norm"
+OUTPUT_DIR = "simulation_results_all_pre_post_norm"
 VIS_SAMPLES = 5000
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -87,7 +84,7 @@ output_interface = OutputInterface(
 # ============================================================================
 VECTOR_NAMES = [
     "encoder_output_pre_norm", "encoder_output_post_norm",
-    "hidden_vector",
+    "hidden_vector_pre_norm", "hidden_vector_post_norm",
     "decoder_output_pre_norm", "decoder_output_post_norm"
 ]
 
@@ -105,22 +102,19 @@ for i in tqdm(range(NUM_BATCHES), desc="Streaming Batches"):
         decoder_input_ids = torch.randint(1, VOCAB_SIZE, (BATCH_SIZE, WINDOW_SIZE), device=DEVICE)
 
         # --- 모델 실행 및 벡터 추출 ---
-        
         # Encoder
         token_embeds = input_interface.token_embedding(token_window)
-        
-        # Norm 통과 전 출력 계산 (for 루프 사용)
         encoder_output = token_embeds
         for layer in input_interface.transformer_encoder.layers:
             encoder_output = layer(encoder_output)
         encoder_output_pre_norm = encoder_output
-        
-        # Norm 통과 후 출력 계산
         encoder_output_post_norm = input_interface.transformer_encoder.norm(encoder_output_pre_norm)
 
-        # Hidden Vector (이미 Norm 통과됨)
-        hidden_vector = output_interface._create_hidden_vector(grid_spikes)
-        output_interface.update_hidden_window(grid_spikes)
+        # Hidden Vector
+        spikes_flat = grid_spikes.view(grid_spikes.shape[0], -1)
+        hidden_vector_pre_norm = output_interface.spatial_compressor(spikes_flat)
+        hidden_vector_post_norm = output_interface.hidden_norm(hidden_vector_pre_norm)
+        output_interface.update_hidden_window(grid_spikes) # update_hidden_window는 원래 로직대로 호출
 
         # Decoder
         target_embeds = output_interface.token_embedding(decoder_input_ids)
@@ -129,20 +123,18 @@ for i in tqdm(range(NUM_BATCHES), desc="Streaming Batches"):
         causal_mask = torch.triu(torch.ones(tgt_len, tgt_len, device=DEVICE, dtype=torch.bool), diagonal=1)
         causal_mask = causal_mask.masked_fill(causal_mask, float('-inf'))
         
-        # Norm 통과 전 출력 계산 (for 루프 사용)
         decoder_output = target_embeds
         for layer in output_interface.transformer_decoder.layers:
             decoder_output = layer(decoder_output, memory=rolled_window, tgt_mask=causal_mask)
         decoder_output_pre_norm = decoder_output
-
-        # Norm 통과 후 출력 계산
         decoder_output_post_norm = output_interface.transformer_decoder.norm(decoder_output_pre_norm)
 
         # 처리할 벡터들 딕셔너리
         vectors_to_process = {
             "encoder_output_pre_norm": encoder_output_pre_norm.reshape(-1, EMBEDDING_DIM),
             "encoder_output_post_norm": encoder_output_post_norm.reshape(-1, EMBEDDING_DIM),
-            "hidden_vector": hidden_vector,
+            "hidden_vector_pre_norm": hidden_vector_pre_norm,
+            "hidden_vector_post_norm": hidden_vector_post_norm,
             "decoder_output_pre_norm": decoder_output_pre_norm.reshape(-1, EMBEDDING_DIM),
             "decoder_output_post_norm": decoder_output_post_norm.reshape(-1, EMBEDDING_DIM)
         }
@@ -173,7 +165,8 @@ print("Simulation finished.")
 # 최종 통계량 계산 및 저장
 # ============================================================================
 stats_data = []
-for name, s in stats.items():
+for name in VECTOR_NAMES:
+    s = stats[name]
     if s['count'] == 0: continue
     
     n_elements = s['count'] * EMBEDDING_DIM
@@ -191,7 +184,7 @@ for name, s in stats.items():
     })
 
 stats_df = pd.DataFrame(stats_data)
-stats_file = os.path.join(OUTPUT_DIR, "statistics_summary_pre_post_norm.csv")
+stats_file = os.path.join(OUTPUT_DIR, "statistics_summary_all_pre_post_norm.csv")
 stats_df.to_csv(stats_file, index=False)
 print(f"\nStatistics saved to '{stats_file}':")
 print(stats_df.to_string())
@@ -234,7 +227,7 @@ def create_plots(name, data_tensor):
     except Exception as e:
         print(f"  - Could not generate PCA plot for '{name}': {e}")
 
-for name, data_tensor in tqdm(samples.items(), desc="Creating Plots"):
-    create_plots(name, data_tensor)
+for name in tqdm(VECTOR_NAMES, desc="Creating Plots"):
+    create_plots(name, samples[name])
 
 print("\nAll tasks finished successfully.")

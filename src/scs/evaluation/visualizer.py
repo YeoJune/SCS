@@ -119,8 +119,7 @@ def _collect_spike_patterns(
                 acc_node_spikes=final_acc_spikes,
                 training=False,
                 input_seq_len=input_tokens.shape[1],
-                target_seq_len=input_tokens.shape[1],  # 추론 모드
-                last_token_ids=getattr(model, '_last_tokens', None)
+                target_seq_len=input_tokens.shape[1]  # 추론 모드
             )
             
             # 조기 종료 조건

@@ -146,6 +146,7 @@ class LearningConfig(BaseModel):
     
     # 손실 관련
     length_penalty_weight: float = Field(default=0.0)
+    orthogonal_reg_weight: float = Field(default=0.0)
     
     # 시간적 가중치
     use_temporal_weighting: bool = Field(default=False)

@@ -309,7 +309,8 @@ class SCSSystem(nn.Module):
             "convergence_achieved": final_clk < self.max_clk - 1,
             "final_acc_activity": final_acc_spikes.mean().item() if final_acc_spikes is not None else 0.0,
             "generation_clks": torch.arange(max_generated, device=self.device),
-            "axonal_parameters": self._get_axonal_parameters()
+            "axonal_parameters": self._get_axonal_parameters(),
+            "orthogonal_reg_loss": self._get_orthogonal_regularization()
         }
         
         # 처리 정보 로깅 (새로 추가)
@@ -563,6 +564,25 @@ class SCSSystem(nn.Module):
             })
         
         return axonal_params
+    
+    def _get_orthogonal_regularization(self) -> torch.Tensor:
+        """spatial_compressor와 pattern_mapper의 직교 정규화 손실 계산"""
+        device = next(self.parameters()).device
+        orthogonal_loss = torch.tensor(0.0, device=device)
+        
+        # spatial_compressor 직교 정규화
+        W_spatial = self.output_interface.spatial_compressor.weight  # [embedding_dim, grid_h*grid_w]
+        WTW = torch.mm(W_spatial.t(), W_spatial)
+        I_spatial = torch.eye(W_spatial.shape[1], device=device)
+        orthogonal_loss += torch.norm(WTW - I_spatial, 'fro') ** 2
+        
+        # pattern_mapper 직교 정규화  
+        W_pattern = self.input_interface.pattern_mapper.weight  # [grid_h*grid_w, embedding_dim]
+        WWT = torch.mm(W_pattern, W_pattern.t())
+        I_pattern = torch.eye(W_pattern.shape[0], device=device)
+        orthogonal_loss += torch.norm(WWT - I_pattern, 'fro') ** 2
+        
+        return orthogonal_loss
 
     def set_max_clk(self, max_clk: int):
         """최대 CLK 설정 (커리큘럼 학습용)"""

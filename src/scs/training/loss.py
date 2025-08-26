@@ -19,6 +19,7 @@ class SCSLoss(nn.Module):
         gate_pruning_weight: float = 0.0,
         inner_pruning_weight: float = 0.0,
         length_penalty_weight: float = 0.0,
+        orthogonal_reg_weight: float = 0.0,
         use_temporal_weighting: bool = False,
         initial_temporal_weight: float = 2.0,
         final_temporal_weight: float = 1.0
@@ -32,6 +33,7 @@ class SCSLoss(nn.Module):
         self.gate_pruning_weight = gate_pruning_weight
         self.inner_pruning_weight = inner_pruning_weight
         self.length_penalty_weight = length_penalty_weight
+        self.orthogonal_reg_weight = orthogonal_reg_weight  
         self.use_temporal_weighting = use_temporal_weighting
         self.initial_temporal_weight = initial_temporal_weight
         self.final_temporal_weight = final_temporal_weight
@@ -116,24 +118,30 @@ class SCSLoss(nn.Module):
             pruning_loss = self._compute_axon_pruning_loss(processing_info, outputs.device)
             total_loss += pruning_loss
         
-        # 길이 패널티
+        # 직교 정규화 손실 추가 (pruning_loss 계산 후에)
+        orthogonal_loss = torch.tensor(0.0, device=outputs.device)
+        if self.orthogonal_reg_weight > 0.0 and 'orthogonal_reg_loss' in processing_info:
+            orthogonal_loss = processing_info['orthogonal_reg_loss']
+            total_loss += self.orthogonal_reg_weight * orthogonal_loss
+        
+        # 길이 패널티 (기존 코드 유지)
         length_penalty = torch.tensor(0.0, device=outputs.device)
         if self.length_penalty_weight > 0.0:
             length_penalty = self._length_penalty(original_output_len, original_target_len, outputs.device)
             total_loss += self.length_penalty_weight * length_penalty
         
-        # TensorBoard 로깅 (새로 추가)
+        # TensorBoard 로깅 업데이트
         if hasattr(self, '_tb_logger') and self._tb_logger:
             try:
                 loss_components = {
                     'base_loss': base_loss.item() if hasattr(base_loss, 'item') else float(base_loss),
                     'axon_pruning_loss': pruning_loss.item() if hasattr(pruning_loss, 'item') else float(pruning_loss),
+                    'orthogonal_reg_loss': orthogonal_loss.item() if hasattr(orthogonal_loss, 'item') else float(orthogonal_loss),  # 이 줄 추가
                     'length_penalty': length_penalty.item() if hasattr(length_penalty, 'item') else float(length_penalty),
                     'total_loss': total_loss.item() if hasattr(total_loss, 'item') else float(total_loss)
                 }
                 self._tb_logger.log_loss_components(loss_components)
             except Exception as e:
-                # 로깅 실패는 무시하고 계속 진행
                 pass
         
         return total_loss

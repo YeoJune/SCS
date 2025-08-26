@@ -212,6 +212,7 @@ def train_mode(args: argparse.Namespace):
             max_clk=learning_config.max_clk_training,
             guide_weight=learning_config.guide_weight,
             length_penalty_weight=learning_config.length_penalty_weight,
+            orthogonal_reg_weight=learning_config.orthogonal_reg_weight,
             use_temporal_weighting=learning_config.use_temporal_weighting,
             initial_temporal_weight=learning_config.initial_temporal_weight,
             final_temporal_weight=learning_config.final_temporal_weight,

@@ -110,6 +110,9 @@ learning:
   guide_sep_token_id: 32057
   guide_weight: 1.0
 
+  length_penalty_weight: 0.0
+  orthogonal_reg_weight: 0.1
+
   gate_pruning_weight: 1e-5 # 패치 게이트 L1 정규화 가중치
   inner_pruning_weight: 1e-5 # 내부 연결 L1 정규화 가중치
 

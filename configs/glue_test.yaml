@@ -67,22 +67,6 @@ learning:
     0: 50
     50: 128
 
-  gradual_unfreezing:
-    enabled: true
-    initial_frozen_patterns: # 시작할 때 동결할 파라미터들
-      - "input_interface.token_embedding"
-      - "input_interface.pattern_mapper"
-      - "input_interface.transformer_encoder"
-
-      - "output_interface.token_embedding"
-      - "output_interface.transformer_decoder.layers.0.self_attn"
-      - "output_interface.final_projection"
-      - "output_interface.layer_norm"
-      - "output_interface.transformer_decoder.layers.0.multihead_attn"
-    unfreeze_schedule: # 에포크별 해제 스케줄
-      500:
-        - "output_interface.final_projection"
-
 timing_manager:
   train_fixed_ref: "start"
   train_fixed_offset: 2

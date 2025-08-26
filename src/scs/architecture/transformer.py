@@ -66,7 +66,7 @@ class T5RelativePositionBias(nn.Module):
 # Custom MultiheadAttention (SDPA-based)
 # =_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_
 class MultiheadAttention(nn.Module):
-    def __init__(self, embed_dim, num_heads, dropout=0., bias=True, batch_first=True):
+    def __init__(self, embed_dim, num_heads, dropout=0., bias=True, batch_first=True, attn_type=""):
         super().__init__()
         if not batch_first:
             raise NotImplementedError("This implementation exclusively supports batch_first=True")
@@ -82,6 +82,8 @@ class MultiheadAttention(nn.Module):
         self.v_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
 
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
+
+        self.attn_type = attn_type
 
     def forward(self, query: Tensor, key: Tensor, value: Tensor, key_padding_mask: Optional[Tensor] = None,
                 attn_mask: Optional[Tensor] = None, position_bias: Optional[Tensor] = None) -> Tuple[Tensor, Optional[Tensor]]:
@@ -106,9 +108,7 @@ class MultiheadAttention(nn.Module):
             # Manually compute attention with bias and masks
             
             # --- 디버깅 프린트 시작 ---
-            # 어텐션 타입을 모양(shape)으로 구분하여 출력
-            attn_type = "Cross-Attention" if query.shape[1] != key.shape[1] else "Self-Attention"
-            print(f"\n--- [{attn_type}] Signal Strength Debug ---")
+            print(f"\n--- [{self.attn_type}] Signal Strength Debug ---")
             
             # 1. 콘텐츠 기반 스코어 (QK^T / sqrt(d_k))
             content_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
@@ -144,7 +144,7 @@ class TransformerEncoderLayer(nn.Module):
     def __init__(self, d_model: int, nhead: int, dim_feedforward: int = 2048, dropout: float = 0.1,
                  layer_norm_eps: float = 1e-6, norm_first: bool = True):
         super().__init__()
-        self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
+        self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True, attn_type="Encoder Self-Attn")
         self.t5_bias = T5RelativePositionBias(num_heads=nhead, is_decoder=False)
         self.linear1 = nn.Linear(d_model, dim_feedforward)
         self.dropout = nn.Dropout(dropout)
@@ -193,8 +193,8 @@ class TransformerDecoderLayer(nn.Module):
     def __init__(self, d_model: int, nhead: int, dim_feedforward: int = 2048, dropout: float = 0.1,
                  layer_norm_eps: float = 1e-6, norm_first: bool = True):
         super().__init__()
-        self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
-        self.multihead_attn = MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
+        self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True, attn_type="Decoder Self-Attn")
+        self.multihead_attn = MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True, attn_type="Decoder Cross-Attn")
         self.sa_t5_bias = T5RelativePositionBias(nhead, is_decoder=True)
         self.mha_t5_bias = T5RelativePositionBias(nhead, is_decoder=False)
         self.linear1 = nn.Linear(d_model, dim_feedforward)

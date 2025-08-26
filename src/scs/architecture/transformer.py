@@ -66,7 +66,7 @@ class T5RelativePositionBias(nn.Module):
 # Custom MultiheadAttention (SDPA-based)
 # =_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_
 class MultiheadAttention(nn.Module):
-    def __init__(self, embed_dim, num_heads, dropout=0., bias=True, batch_first=True, attn_type=""):
+    def __init__(self, embed_dim, num_heads, dropout=0., bias=True, batch_first=True):
         super().__init__()
         if not batch_first:
             raise NotImplementedError("This implementation exclusively supports batch_first=True")
@@ -82,8 +82,6 @@ class MultiheadAttention(nn.Module):
         self.v_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
 
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
-
-        self.attn_type = attn_type
 
     def forward(self, query: Tensor, key: Tensor, value: Tensor, key_padding_mask: Optional[Tensor] = None,
                 attn_mask: Optional[Tensor] = None, position_bias: Optional[Tensor] = None) -> Tuple[Tensor, Optional[Tensor]]:
@@ -106,25 +104,11 @@ class MultiheadAttention(nn.Module):
             attn_weights = None # Not computed by default in SDPA
         else:
             # Manually compute attention with bias and masks
-            
-            # --- 디버깅 프린트 시작 ---
-            print(f"\n--- [{self.attn_type}] Signal Strength Debug ---")
-            
-            # 1. 콘텐츠 기반 스코어 (QK^T / sqrt(d_k))
-            content_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
-            print(f"1. Content Score (scaled QK^T): mean={content_scores.mean():.4f}, std={content_scores.std():.4f}")
-            
-            attn_scores = content_scores
-
-            # 2. 위치 기반 스코어 (position_bias)
+            attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
             if position_bias is not None:
-                print(f"2. Position Bias Score          : mean={position_bias.mean():.4f}, std={position_bias.std():.4f}")
                 attn_scores += position_bias
-                # 3. 두 스코어가 합쳐진 최종 스코어 (softmax 직전)
-                print(f"3. Final Attn Score (Combined)  : mean={attn_scores.mean():.4f}, std={attn_scores.std():.4f}")
-            
-            print("------------------------------------------")
-            # --- 디버깅 프린트 끝 ---
+            if attn_mask is not None:
+                attn_scores += attn_mask
             if key_padding_mask is not None:
                 attn_scores = attn_scores.masked_fill(key_padding_mask.unsqueeze(1).unsqueeze(2), float('-inf'))
             
@@ -144,7 +128,7 @@ class TransformerEncoderLayer(nn.Module):
     def __init__(self, d_model: int, nhead: int, dim_feedforward: int = 2048, dropout: float = 0.1,
                  layer_norm_eps: float = 1e-6, norm_first: bool = True):
         super().__init__()
-        self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True, attn_type="Encoder Self-Attn")
+        self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
         self.t5_bias = T5RelativePositionBias(num_heads=nhead, is_decoder=False)
         self.linear1 = nn.Linear(d_model, dim_feedforward)
         self.dropout = nn.Dropout(dropout)
@@ -193,8 +177,8 @@ class TransformerDecoderLayer(nn.Module):
     def __init__(self, d_model: int, nhead: int, dim_feedforward: int = 2048, dropout: float = 0.1,
                  layer_norm_eps: float = 1e-6, norm_first: bool = True):
         super().__init__()
-        self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True, attn_type="Decoder Self-Attn")
-        self.multihead_attn = MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True, attn_type="Decoder Cross-Attn")
+        self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
+        self.cross_attn = MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
         self.sa_t5_bias = T5RelativePositionBias(nhead, is_decoder=True)
         self.mha_t5_bias = T5RelativePositionBias(nhead, is_decoder=False)
         self.linear1 = nn.Linear(d_model, dim_feedforward)
@@ -231,7 +215,7 @@ class TransformerDecoderLayer(nn.Module):
     def _mha_block(self, x: Tensor, mem: Tensor, key_padding_mask: Optional[Tensor]) -> Tensor:
         q_len, k_len = x.size(1), mem.size(1)
         position_bias = self.mha_t5_bias(q_len, k_len)
-        x, _ = self.multihead_attn(x, mem, mem, key_padding_mask=key_padding_mask, position_bias=position_bias)
+        x, _ = self.cross_attn(x, mem, mem, key_padding_mask=key_padding_mask, position_bias=position_bias)
         return self.dropout2(x)
 
     def _ff_block(self, x: Tensor) -> Tensor:
@@ -297,11 +281,11 @@ def transplant_t5_decoder_weights(scs_decoder: TransformerDecoder, t5_decoder, t
                 
                 # Cross-Attention (optional) & LayerNorm2
                 if transplant_cross_attention:
-                    scs_layer.multihead_attn.q_proj.weight.copy_(t5_ca.q.weight)
-                    scs_layer.multihead_attn.k_proj.weight.copy_(t5_ca.k.weight)
-                    scs_layer.multihead_attn.v_proj.weight.copy_(t5_ca.v.weight)
+                    scs_layer.cross_attn.q_proj.weight.copy_(t5_ca.q.weight)
+                    scs_layer.cross_attn.k_proj.weight.copy_(t5_ca.k.weight)
+                    scs_layer.cross_attn.v_proj.weight.copy_(t5_ca.v.weight)
                     
-                    scs_layer.multihead_attn.out_proj.weight.copy_(t5_ca.o.weight)
+                    scs_layer.cross_attn.out_proj.weight.copy_(t5_ca.o.weight)
                     scs_layer.norm2.weight.copy_(t5_layer.layer[1].layer_norm.weight)
                 
                 # Feed Forward & LayerNorm3

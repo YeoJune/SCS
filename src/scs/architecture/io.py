@@ -164,21 +164,25 @@ class OutputInterface(nn.Module):
         
         self.hidden_window[:, self.window_ptr, :] = current_hidden
         self.window_ptr = (self.window_ptr + 1) % self.window_size
-    
-    def forward(self, decoder_input_ids: Tensor) -> Tensor:
+        
+    def forward(self, decoder_input_ids: Tensor, return_pre_norm: bool = False) -> Tensor:
         target_embeds = self.token_embedding(decoder_input_ids)
         
         rolled_window = torch.roll(self.hidden_window, shifts=-self.window_ptr, dims=1)
         tgt_len = target_embeds.size(1)
         
         causal_mask = torch.triu(torch.ones(tgt_len, tgt_len, device=self.device, dtype=torch.bool), diagonal=1)
-        # Convert boolean mask to float mask for addition
         causal_mask = causal_mask.masked_fill(causal_mask, float('-inf'))
         
-        decoder_output = self.transformer_decoder(
-            tgt=target_embeds, 
-            memory=rolled_window, 
-            tgt_mask=causal_mask
-        )
+        # Decoder의 for-loop 부분을 직접 실행 (transformer.py의 Decoder.forward와 동일)
+        decoder_output = target_embeds
+        for mod in self.transformer_decoder.layers:
+            decoder_output = mod(decoder_output, memory=rolled_window, tgt_mask=causal_mask)
+        
+        # 시뮬레이션을 위해 pre-norm 값을 반환하는 옵션 추가
+        if return_pre_norm:
+            return decoder_output
 
-        return self.final_projection(self.transformer_decoder.norm(decoder_output))
+        # 원래 로직
+        final_output = self.transformer_decoder.norm(decoder_output)
+        return self.final_projection(final_output)

@@ -10,12 +10,12 @@ from transformers import T5Config, T5ForConditionalGeneration
 
 # io.py에서 실제 클래스들을 가져옵니다.
 # transformer.py가 같은 디렉토리에 있어야 합니다.
-from transformer import (
+from .transformer import (
     TransformerEncoder, TransformerEncoderLayer,
     TransformerDecoder, TransformerDecoderLayer,
     transplant_t5_encoder_weights, transplant_t5_decoder_weights
 )
-from io import InputInterface, OutputInterface
+from .io import InputInterface, OutputInterface
 
 # ============================================================================
 # 시뮬레이션 설정 (CONFIGURATION FROM YAML)

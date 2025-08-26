@@ -87,14 +87,16 @@ learning:
   early_stopping_patience: 5
 
 timing_manager:
+  train_fixed_ref: "start"
+  train_fixed_offset: 3
+  evaluate_fixed_ref: "start"
+  evaluate_fixed_offset: 3
   sync_ema_alpha: 0.1 # EMA 필터링 강도
   sync_threshold_start: 0.6 # 시작 임계값
   sync_threshold_end: 0.2 # 종료 임계값
   min_processing_clk: 50 # 최소 처리 시간
   max_processing_clk: 500 # 최대 처리 시간
   min_output_length: 5 # 최소 출력 길이
-  fixed_len: 3 # -1: 적응 모드, >0: 고정 길이
-  fixed_delay: -1 # -1: 적응 모드, ≥0: 고정 지연
 
 # === 데이터 로딩 오버라이드 ===
 data_loading:

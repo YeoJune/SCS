@@ -131,14 +131,16 @@ class ModelBuilder:
             # TimingManager 생성
             timing_config = config.timing_manager
             timing_manager = TimingManager(
+                train_fixed_ref=timing_config.train_fixed_ref,
+                train_fixed_offset=timing_config.train_fixed_offset,
+                evaluate_fixed_ref=timing_config.evaluate_fixed_ref,
+                evaluate_fixed_offset=timing_config.evaluate_fixed_offset,
                 sync_ema_alpha=timing_config.sync_ema_alpha,
                 sync_threshold_start=timing_config.sync_threshold_start,
                 sync_threshold_end=timing_config.sync_threshold_end,
                 min_processing_clk=timing_config.min_processing_clk,
                 max_processing_clk=timing_config.max_processing_clk,
-                min_output_length=timing_config.min_output_length,
-                fixed_len=timing_config.fixed_len,
-                fixed_delay=timing_config.fixed_delay
+                min_output_length=timing_config.min_output_length
             )
             
             # SCSSystem 생성

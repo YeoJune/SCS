@@ -410,7 +410,7 @@ class SCSTrainer:
                 # 🚀 시스템이 완전한 추론 처리!
                 result = self.model(
                     input_tokens=input_tokens,
-                    target_tokens=None,  # 추론시에는 None
+                    target_tokens=target_tokens,
                     attention_mask=attention_mask,
                     training=False,
                     scheduled_sampling_prob=0.0,  # 완전 auto-regressive

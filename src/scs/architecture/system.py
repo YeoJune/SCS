@@ -264,8 +264,7 @@ class SCSSystem(nn.Module):
                 acc_node_spikes=final_acc_spikes,
                 training=training,
                 input_seq_len=input_seq_len,
-                target_seq_len=target_seq_len,
-                last_token_ids=getattr(self, '_last_tokens', None)
+                target_seq_len=target_seq_len
             )
             
             # Phase 3: 출력 생성 및 저장 (TimingManager 업데이트 후)
@@ -285,10 +284,6 @@ class SCSSystem(nn.Module):
                         logits, all_logits, self.decoder_sequences,
                         target_tokens, training, scheduled_sampling_prob
                     )
-                    
-                    # EOS 체크를 위한 last_tokens 저장
-                    if decoder_batch.shape[1] > 0:
-                        self._last_tokens = decoder_batch[:, -1]
             
             # 조기 종료 조건
             if self.timing_manager.all_ended:
@@ -552,9 +547,6 @@ class SCSSystem(nn.Module):
             dtype=torch.long, 
             device=self.device
         )
-        
-        # last_tokens 초기화
-        self._last_tokens = None
         
     def _get_axonal_parameters(self) -> List[Dict[str, torch.Tensor]]:
         """Loss가 사용할 수 있도록 axonal 파라미터들을 raw 형태로 반환"""

@@ -97,14 +97,16 @@ class IOSystemConfig(BaseModel):
 
 class TimingManagerConfig(BaseModel):
     """타이밍 매니저 설정"""
+    train_fixed_ref: str = Field(default='end')        # 'start' or 'end'
+    train_fixed_offset: int = Field(default=0)
+    evaluate_fixed_ref: str = Field(default='adaptive')  # 'start' or 'end' or 'adaptive'
+    evaluate_fixed_offset: int = Field(default=0)
     sync_ema_alpha: float = Field(default=0.1)
     sync_threshold_start: float = Field(default=0.6)
     sync_threshold_end: float = Field(default=0.2)
     min_processing_clk: int = Field(default=50)
     max_processing_clk: int = Field(default=500)
     min_output_length: int = Field(default=5)
-    fixed_len: int = Field(default=-1)
-    fixed_delay: int = Field(default=-1)
 
 
 class GradualUnfreezingConfig(BaseModel):

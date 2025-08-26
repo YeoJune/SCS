@@ -10,7 +10,10 @@ from transformers import T5Config
 
 # io.py와 transformer.py가 이 스크립트와 같은 디렉토리에 있다고 가정합니다.
 try:
-    from .transformer import TransformerEncoder, TransformerEncoderLayer, TransformerDecoder, TransformerDecoderLayer
+    from .transformer import (
+        TransformerEncoder, TransformerEncoderLayer,
+        TransformerDecoder, TransformerDecoderLayer
+    )
     from .io import InputInterface, OutputInterface
 except ImportError as e:
     print(f"Error: {e}")
@@ -84,7 +87,7 @@ output_interface = OutputInterface(
 # ============================================================================
 VECTOR_NAMES = [
     "encoder_output_pre_norm", "encoder_output_post_norm",
-    "hidden_vector", # hidden_vector is always post-norm
+    "hidden_vector",
     "decoder_output_pre_norm", "decoder_output_post_norm"
 ]
 
@@ -102,10 +105,18 @@ for i in tqdm(range(NUM_BATCHES), desc="Streaming Batches"):
         decoder_input_ids = torch.randint(1, VOCAB_SIZE, (BATCH_SIZE, WINDOW_SIZE), device=DEVICE)
 
         # --- 모델 실행 및 벡터 추출 ---
+        
         # Encoder
         token_embeds = input_interface.token_embedding(token_window)
-        encoder_output_pre_norm = input_interface.transformer_encoder.layers(token_embeds) # Norm 통과 전
-        encoder_output_post_norm = input_interface.transformer_encoder.norm(encoder_output_pre_norm) # Norm 통과 후
+        
+        # Norm 통과 전 출력 계산 (for 루프 사용)
+        encoder_output = token_embeds
+        for layer in input_interface.transformer_encoder.layers:
+            encoder_output = layer(encoder_output)
+        encoder_output_pre_norm = encoder_output
+        
+        # Norm 통과 후 출력 계산
+        encoder_output_post_norm = input_interface.transformer_encoder.norm(encoder_output_pre_norm)
 
         # Hidden Vector (이미 Norm 통과됨)
         hidden_vector = output_interface._create_hidden_vector(grid_spikes)
@@ -118,8 +129,14 @@ for i in tqdm(range(NUM_BATCHES), desc="Streaming Batches"):
         causal_mask = torch.triu(torch.ones(tgt_len, tgt_len, device=DEVICE, dtype=torch.bool), diagonal=1)
         causal_mask = causal_mask.masked_fill(causal_mask, float('-inf'))
         
-        decoder_output_pre_norm = output_interface.transformer_decoder.layers(target_embeds, rolled_window, tgt_mask=causal_mask) # Norm 통과 전
-        decoder_output_post_norm = output_interface.transformer_decoder.norm(decoder_output_pre_norm) # Norm 통과 후
+        # Norm 통과 전 출력 계산 (for 루프 사용)
+        decoder_output = target_embeds
+        for layer in output_interface.transformer_decoder.layers:
+            decoder_output = layer(decoder_output, memory=rolled_window, tgt_mask=causal_mask)
+        decoder_output_pre_norm = decoder_output
+
+        # Norm 통과 후 출력 계산
+        decoder_output_post_norm = output_interface.transformer_decoder.norm(decoder_output_pre_norm)
 
         # 처리할 벡터들 딕셔너리
         vectors_to_process = {
@@ -134,7 +151,6 @@ for i in tqdm(range(NUM_BATCHES), desc="Streaming Batches"):
         for name, data in vectors_to_process.items():
             data_cpu = data.cpu()
             
-            # 온라인 통계량 업데이트
             stats[name]['count'] += len(data_cpu)
             stats[name]['sum'] += data_cpu.sum().item()
             stats[name]['sum_sq'] += torch.sum(data_cpu**2).item()
@@ -142,7 +158,6 @@ for i in tqdm(range(NUM_BATCHES), desc="Streaming Batches"):
             stats[name]['norm_sum'] += norms.sum().item()
             stats[name]['norm_sum_sq'] += torch.sum(norms**2).item()
 
-            # 저수지 샘플링
             for item in data_cpu:
                 total_samples_seen[name] += 1
                 if total_samples_seen[name] <= VIS_SAMPLES:
@@ -170,12 +185,9 @@ for name, s in stats.items():
     norm_std = np.sqrt(max(0, s['norm_sum_sq'] / n_vectors - norm_mean**2))
 
     stats_data.append({
-        "Vector Type": name,
-        "Total Samples": f"{s['count']}",
-        "Mean (element-wise)": f"{mean:.4f}",
-        "Std Dev (element-wise)": f"{std:.4f}",
-        "Mean Norm (vector-wise)": f"{norm_mean:.4f}",
-        "Std Dev Norm (vector-wise)": f"{norm_std:.4f}"
+        "Vector Type": name, "Total Samples": f"{s['count']}",
+        "Mean (element-wise)": f"{mean:.4f}", "Std Dev (element-wise)": f"{std:.4f}",
+        "Mean Norm (vector-wise)": f"{norm_mean:.4f}", "Std Dev Norm (vector-wise)": f"{norm_std:.4f}"
     })
 
 stats_df = pd.DataFrame(stats_data)
@@ -189,7 +201,6 @@ print(stats_df.to_string())
 # ============================================================================
 print(f"\nGenerating visualizations from up to {VIS_SAMPLES} samples...")
 
-# 공통 시각화 함수
 def create_plots(name, data_tensor):
     num_actual_samples = min(total_samples_seen[name], VIS_SAMPLES)
     if num_actual_samples == 0:
@@ -198,48 +209,31 @@ def create_plots(name, data_tensor):
         
     data_np = data_tensor[:num_actual_samples].numpy()
     
-    # 1. Element Value Distribution
-    plt.figure(figsize=(8, 6))
-    sns.histplot(data_np.flatten(), bins=100, kde=True, color='skyblue')
-    plt.title(f"Distribution of Element Values\n({name})", fontsize=16)
-    plt.xlabel("Value", fontsize=12)
-    plt.ylabel("Density", fontsize=12)
-    plt.grid(True, linestyle='--', alpha=0.6)
-    plt.savefig(os.path.join(OUTPUT_DIR, f"dist_{name}_elements.png"), bbox_inches='tight')
-    plt.close()
+    # Element Value Distribution
+    plt.figure(figsize=(8, 6)); sns.histplot(data_np.flatten(), bins=100, kde=True, color='skyblue')
+    plt.title(f"Distribution of Element Values\n({name})", fontsize=16); plt.xlabel("Value", fontsize=12); plt.ylabel("Density", fontsize=12)
+    plt.grid(True, linestyle='--', alpha=0.6); plt.savefig(os.path.join(OUTPUT_DIR, f"dist_{name}_elements.png"), bbox_inches='tight'); plt.close()
 
-    # 2. Vector L2 Norm Distribution
-    plt.figure(figsize=(8, 6))
-    norms = np.linalg.norm(data_np, axis=1)
-    sns.histplot(norms, bins=100, kde=True, color='salmon')
-    plt.title(f"Distribution of Vector L2 Norms\n({name})", fontsize=16)
-    plt.xlabel("L2 Norm", fontsize=12)
-    plt.ylabel("Density", fontsize=12)
-    plt.grid(True, linestyle='--', alpha=0.6)
-    plt.savefig(os.path.join(OUTPUT_DIR, f"dist_{name}_norms.png"), bbox_inches='tight')
-    plt.close()
+    # Vector L2 Norm Distribution
+    plt.figure(figsize=(8, 6)); norms = np.linalg.norm(data_np, axis=1)
+    sns.histplot(norms, bins=100, kde=True, color='salmon'); plt.title(f"Distribution of Vector L2 Norms\n({name})", fontsize=16)
+    plt.xlabel("L2 Norm", fontsize=12); plt.ylabel("Density", fontsize=12); plt.grid(True, linestyle='--', alpha=0.6)
+    plt.savefig(os.path.join(OUTPUT_DIR, f"dist_{name}_norms.png"), bbox_inches='tight'); plt.close()
     
-    # 3. 2D PCA Visualization
+    # 2D PCA Visualization
     try:
         sample_tensor = data_tensor[:num_actual_samples]
         centered_data = sample_tensor - sample_tensor.mean(dim=0, keepdim=True)
         U, S, V = torch.pca_lowrank(centered_data.to(DEVICE), q=2)
         data_pca = torch.matmul(centered_data.to(DEVICE), V).cpu().numpy()
 
-        plt.figure(figsize=(8, 8))
-        plt.scatter(data_pca[:, 0], data_pca[:, 1], alpha=0.3, s=5, color='cornflowerblue')
-        plt.title(f"2D PCA Visualization\n({name})", fontsize=16)
-        plt.xlabel("Principal Component 1", fontsize=12)
-        plt.ylabel("Principal Component 2", fontsize=12)
-        plt.grid(True, linestyle='--', alpha=0.6)
-        plt.axis('equal')
-        plt.savefig(os.path.join(OUTPUT_DIR, f"pca_2d_{name}.png"), bbox_inches='tight')
-        plt.close()
+        plt.figure(figsize=(8, 8)); plt.scatter(data_pca[:, 0], data_pca[:, 1], alpha=0.3, s=5, color='cornflowerblue')
+        plt.title(f"2D PCA Visualization\n({name})", fontsize=16); plt.xlabel("Principal Component 1", fontsize=12)
+        plt.ylabel("Principal Component 2", fontsize=12); plt.grid(True, linestyle='--', alpha=0.6); plt.axis('equal')
+        plt.savefig(os.path.join(OUTPUT_DIR, f"pca_2d_{name}.png"), bbox_inches='tight'); plt.close()
     except Exception as e:
         print(f"  - Could not generate PCA plot for '{name}': {e}")
 
-
-# 각 벡터 타입에 대해 시각화 실행
 for name, data_tensor in tqdm(samples.items(), desc="Creating Plots"):
     create_plots(name, data_tensor)
 

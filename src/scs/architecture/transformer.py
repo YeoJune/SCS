@@ -104,11 +104,27 @@ class MultiheadAttention(nn.Module):
             attn_weights = None # Not computed by default in SDPA
         else:
             # Manually compute attention with bias and masks
-            attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+            
+            # --- 디버깅 프린트 시작 ---
+            # 어텐션 타입을 모양(shape)으로 구분하여 출력
+            attn_type = "Cross-Attention" if query.shape[1] != key.shape[1] else "Self-Attention"
+            print(f"\n--- [{attn_type}] Signal Strength Debug ---")
+            
+            # 1. 콘텐츠 기반 스코어 (QK^T / sqrt(d_k))
+            content_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+            print(f"1. Content Score (scaled QK^T): mean={content_scores.mean():.4f}, std={content_scores.std():.4f}")
+            
+            attn_scores = content_scores
+
+            # 2. 위치 기반 스코어 (position_bias)
             if position_bias is not None:
+                print(f"2. Position Bias Score          : mean={position_bias.mean():.4f}, std={position_bias.std():.4f}")
                 attn_scores += position_bias
-            if attn_mask is not None:
-                attn_scores += attn_mask
+                # 3. 두 스코어가 합쳐진 최종 스코어 (softmax 직전)
+                print(f"3. Final Attn Score (Combined)  : mean={attn_scores.mean():.4f}, std={attn_scores.std():.4f}")
+            
+            print("------------------------------------------")
+            # --- 디버깅 프린트 끝 ---
             if key_padding_mask is not None:
                 attn_scores = attn_scores.masked_fill(key_padding_mask.unsqueeze(1).unsqueeze(2), float('-inf'))
             

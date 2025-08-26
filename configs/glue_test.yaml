@@ -82,12 +82,7 @@ learning:
       - "output_interface.transformer_decoder.layers.0.cross_attn"
     unfreeze_schedule: # 에포크별 해제 스케줄
       5:
-        - "output_interface.transformer_decoder.layers.0.cross_attn"
-      20: # 에포크 20에 T5 임베딩 해제
-        - "input_interface.transformer_encoder"
-        - "output_interface.transformer_decoder.layers.0.self_attn"
         - "output_interface.final_projection"
-        - "output_interface.layer_norm"
 
 timing_manager:
   sync_ema_alpha: 0.1 # EMA 필터링 강도
@@ -107,7 +102,7 @@ data_loading:
     max_length: 128
 
 data:
-  train_samples: 10000
+  train_samples: 2000
   val_samples: -1
   test_samples: -1
 

@@ -566,21 +566,39 @@ class SCSSystem(nn.Module):
         return axonal_params
     
     def _get_orthogonal_regularization(self) -> torch.Tensor:
-        """spatial_compressor와 pattern_mapper의 직교 정규화 손실 계산"""
+        """
+        spatial_compressor와 pattern_mapper의 직교 정규화 손실 계산 (수정된 버전)
+        - 수학적으로 올바른 직교성 제약 적용
+        - 스케일링 문제를 해결하기 위해 정규화 및 불필요한 제곱 제거
+        """
         device = next(self.parameters()).device
         orthogonal_loss = torch.tensor(0.0, device=device)
         
-        # spatial_compressor 직교 정규화
-        W_spatial = self.output_interface.spatial_compressor.weight  # [embedding_dim, grid_h*grid_w]
-        WTW = torch.mm(W_spatial.t(), W_spatial)
-        I_spatial = torch.eye(W_spatial.shape[1], device=device)
-        orthogonal_loss += torch.norm(WTW - I_spatial, 'fro') ** 2
+        # 1. spatial_compressor 직교 정규화
+        # W_spatial: [E, N], 행(row)들이 직교하도록 강제 (보통 E < N 이므로)
+        W_spatial = self.output_interface.spatial_compressor.weight
+        E_spatial, N_spatial = W_spatial.shape
         
-        # pattern_mapper 직교 정규화  
-        W_pattern = self.input_interface.pattern_mapper.weight  # [grid_h*grid_w, embedding_dim]
-        WWT = torch.mm(W_pattern, W_pattern.t())
-        I_pattern = torch.eye(W_pattern.shape[0], device=device)
-        orthogonal_loss += torch.norm(WWT - I_pattern, 'fro') ** 2
+        # W @ W.T 가 단위행렬 I_E 에 가까워지도록 함 (결과: [E, E] 크기)
+        WW_T_spatial = torch.mm(W_spatial, W_spatial.t())
+        I_spatial = torch.eye(E_spatial, device=device)
+        
+        # 프로베니우스 노름을 사용하고, 행렬의 원소 개수로 나누어 스케일 정규화
+        loss_spatial = torch.norm(WW_T_spatial - I_spatial, 'fro') / (E_spatial * E_spatial)
+        orthogonal_loss += loss_spatial
+        
+        # 2. pattern_mapper 직교 정규화  
+        # W_pattern: [N, E], 열(column)들이 직교하도록 강제 (보통 E < N 이므로)
+        W_pattern = self.input_interface.pattern_mapper.weight
+        N_pattern, E_pattern = W_pattern.shape
+
+        # W.T @ W 가 단위행렬 I_E 에 가까워지도록 함 (결과: [E, E] 크기)
+        WT_W_pattern = torch.mm(W_pattern.t(), W_pattern)
+        I_pattern = torch.eye(E_pattern, device=device)
+
+        # 프로베니우스 노름을 사용하고, 행렬의 원소 개수로 나누어 스케일 정규화
+        loss_pattern = torch.norm(WT_W_pattern - I_pattern, 'fro') / (E_pattern * E_pattern)
+        orthogonal_loss += loss_pattern
         
         return orthogonal_loss
 

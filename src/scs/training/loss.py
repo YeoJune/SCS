@@ -6,6 +6,7 @@ SCS 손실 함수 - Axon Pruning 중심의 표준적 설계 + Guide Weight 지�
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 from typing import Dict, Any, List
 
 class SCSLoss(nn.Module):
@@ -17,7 +18,9 @@ class SCSLoss(nn.Module):
         max_clk: int = 512,
         guide_weight: float = 0.3,
         gate_pruning_weight: float = 0.0,
+        gate_temperature: float = 0.1,
         inner_pruning_weight: float = 0.0,
+        inner_temperature: float = 0.1,
         length_penalty_weight: float = 0.0,
         orthogonal_reg_weight: float = 0.0,
         use_temporal_weighting: bool = False,
@@ -32,6 +35,8 @@ class SCSLoss(nn.Module):
         # 모든 정규화 가중치를 Loss에서 관리 (표준적 접근법)
         self.gate_pruning_weight = gate_pruning_weight
         self.inner_pruning_weight = inner_pruning_weight
+        self.gate_temperature = gate_temperature
+        self.inner_temperature = inner_temperature
         self.length_penalty_weight = length_penalty_weight
         self.orthogonal_reg_weight = orthogonal_reg_weight  
         self.use_temporal_weighting = use_temporal_weighting
@@ -136,7 +141,7 @@ class SCSLoss(nn.Module):
                 loss_components = {
                     'base_loss': base_loss.item() if hasattr(base_loss, 'item') else float(base_loss),
                     'axon_pruning_loss': pruning_loss.item() if hasattr(pruning_loss, 'item') else float(pruning_loss),
-                    'orthogonal_reg_loss': orthogonal_loss.item() if hasattr(orthogonal_loss, 'item') else float(orthogonal_loss),  # 이 줄 추가
+                    'orthogonal_reg_loss': orthogonal_loss.item() if hasattr(orthogonal_loss, 'item') else float(orthogonal_loss),
                     'length_penalty': length_penalty.item() if hasattr(length_penalty, 'item') else float(length_penalty),
                     'total_loss': total_loss.item() if hasattr(total_loss, 'item') else float(total_loss)
                 }
@@ -253,8 +258,8 @@ class SCSLoss(nn.Module):
     
     def _compute_axon_pruning_loss(self, processing_info: Dict[str, Any], device: torch.device) -> torch.Tensor:
         """
-        Loss에서 직접 axon pruning 손실 계산 - 표준적 접근법
-        processing_info에서 raw 파라미터를 받아서 Loss가 모든 계산 담당
+        경쟁적 Axon Pruning 손실 계산
+        - 패치 간 경쟁과 패치 내 경쟁을 모두 구현
         """
         if 'axonal_parameters' not in processing_info:
             return torch.tensor(0.0, device=device)
@@ -266,18 +271,46 @@ class SCSLoss(nn.Module):
             gates = conn_data['gates']  # [num_patches]
             transforms = conn_data['transforms']  # [num_patches, target_size, source_size]
             
-            # 1. 패치 게이트 L1 손실 (그룹 희소성)
-            if self.gate_pruning_weight > 0.0:
-                gate_loss = torch.norm(gates, 1) / gates.numel() if gates.numel() > 0 else torch.tensor(0.0, device=device)
-                total_loss += self.gate_pruning_weight * gate_loss
+            # 1. 패치 간 경쟁 손실 (Inter-Patch)
+            if self.gate_pruning_weight > 0.0 and gates.numel() > 1:
+                # 목표: gates의 분포가 one-hot 벡터에 가까워지도록 (엔트로피 최소화)
+                # Softmax를 적용하여 확률 분포를 만듦
+                gate_probs = F.softmax(gates / self.gate_temperature, dim=0)
+                
+                # 엔트로피 계산: H(p) = - sum(p * log(p))
+                # 엔트로피가 낮을수록 분포는 뾰족해짐 (소수만 살아남음)
+                # 엔트로피 자체를 손실로 사용하여 최소화하도록 유도
+                entropy_gates = -torch.sum(gate_probs * torch.log(gate_probs.clamp(min=1e-9)))
+                
+                # 최대 엔트로피는 log(num_patches) (균등 분포일 때)
+                # 0~1 사이로 정규화하여 다른 연결과 스케일을 맞춤
+                if gates.numel() > 0:
+                    normalized_entropy_gates = entropy_gates / np.log(gates.numel())
+                    total_loss += self.gate_pruning_weight * normalized_entropy_gates
             
-            # 2. 계층적 내부 연결 L1 손실 (개별 희소성)
-            if self.inner_pruning_weight > 0.0:
-                # 게이트로 가중된 내부 연결 - 생물학적 현실성
-                gated_transforms = gates.abs().unsqueeze(-1).unsqueeze(-1) * transforms
-                inner_loss = torch.norm(gated_transforms, 1) / transforms.numel() if transforms.numel() > 0 else torch.tensor(0.0, device=device)
-                total_loss += self.inner_pruning_weight * inner_loss
-        
+            # 2. 패치 내 경쟁 손실 (Intra-Patch)
+            if self.inner_pruning_weight > 0.0 and transforms.numel() > 0:
+                num_patches, target_size, source_size = transforms.shape
+                if source_size <= 1: 
+                    continue  # 경쟁할 대상이 없음
+                
+                # 목표: 각 transform 행렬의 각 행(row)이 one-hot 벡터에 가까워지도록
+                # 즉, target 뉴런 하나가 소수의 source 뉴런에만 집중하도록 함
+                
+                # transforms: [num_patches, target_size, source_size]
+                # 각 행에 대해 softmax 적용
+                transform_probs = F.softmax(transforms / self.inner_temperature, dim=-1)  # 마지막 차원(source_size)에 대해
+                
+                # 각 행의 엔트로피 계산
+                entropy_transforms = -torch.sum(transform_probs * torch.log(transform_probs.clamp(min=1e-9)), dim=-1)
+                
+                # 모든 패치와 모든 타겟 뉴런에 대해 평균 엔트로피 계산
+                mean_entropy_transforms = entropy_transforms.mean()
+                # 0~1 사이로 정규화
+                if source_size > 0:
+                    normalized_entropy_transforms = mean_entropy_transforms / np.log(source_size)
+                    total_loss += self.inner_pruning_weight * normalized_entropy_transforms
+                    
         return total_loss
 
 
@@ -356,6 +389,8 @@ class SpikingLoss(SCSLoss):
             guide_sep_token_id,
             gate_pruning_weight=kwargs.pop('gate_pruning_weight', 1e-4),
             inner_pruning_weight=kwargs.pop('inner_pruning_weight', 1e-5),
+            gate_temperature=kwargs.pop('gate_temperature', 0.1),
+            inner_temperature=kwargs.pop('inner_temperature', 0.1),
             **kwargs
         )
 
@@ -367,6 +402,8 @@ class NeuromodulationLoss(SCSLoss):
             pad_token_id, 
             guide_sep_token_id,
             use_temporal_weighting=True,
+            gate_temperature=kwargs.pop('gate_temperature', 0.1),
+            inner_temperature=kwargs.pop('inner_temperature', 0.1),
             **kwargs
         )
 
@@ -379,6 +416,8 @@ class MultiObjectiveLoss(SCSLoss):
             guide_sep_token_id,
             gate_pruning_weight=kwargs.pop('gate_pruning_weight', 1e-4),
             inner_pruning_weight=kwargs.pop('inner_pruning_weight', 1e-5),
+            gate_temperature=kwargs.pop('gate_temperature', 0.1),
+            inner_temperature=kwargs.pop('inner_temperature', 0.1),
             use_temporal_weighting=True,
             length_penalty_weight=kwargs.pop('length_penalty_weight', 0.02),
             **kwargs

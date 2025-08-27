@@ -220,7 +220,9 @@ def train_mode(args: argparse.Namespace):
             sync_target_start=learning_config.sync_target_start,
             sync_target_end=learning_config.sync_target_end,
             gate_pruning_weight=learning_config.gate_pruning_weight,
-            inner_pruning_weight=learning_config.inner_pruning_weight
+            gate_temperature=learning_config.gate_temperature,
+            inner_pruning_weight=learning_config.inner_pruning_weight,
+            inner_temperature=learning_config.inner_temperature
         )
         
         # 옵티마이저 생성

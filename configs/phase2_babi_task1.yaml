@@ -75,7 +75,7 @@ task:
 
 # === 학습 설정 오버라이드 ===
 learning:
-  epochs: 11
+  epochs: 31
   learning_rate: 5e-4
   eta_min: 2e-4
   max_clk_training: 128

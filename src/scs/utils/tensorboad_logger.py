@@ -74,6 +74,8 @@ class SCSTensorBoardLogger:
             return self.batch_counter % self.log_interval.get("images", 500) == 0
         elif log_type == "spikes":
             return self.clk_counter % self.log_interval.get("spikes", 50) == 0
+        elif log_type == "axonal_heatmaps":
+            return self.batch_counter % self.log_interval.get("axonal_heatmaps", 200) == 0
         return False
     
     def log_training_step(self, metrics: Dict[str, Any], loss: float):
@@ -243,6 +245,107 @@ class SCSTensorBoardLogger:
         
         return flattened
     
+    def log_axonal_heatmaps(self, axonal_data: Dict[str, Any], step: Optional[int] = None):
+        """축삭 연결 통합 히트맵을 TensorBoard에 로깅"""
+        if not axonal_data or not self.should_log("axonal_heatmaps"):  # 수정: 적절한 should_log 체크
+            return
+        
+        step = step if step is not None else self.epoch
+        
+        try:
+            for conn_data in axonal_data:
+                conn_name = conn_data['connection_name']
+                gates = conn_data['gates']  # [num_patches]
+                transforms = conn_data['transforms']  # [num_patches, target_size, source_size]
+                
+                if gates.numel() > 0 and transforms.numel() > 0:
+                    self._log_integrated_axonal_heatmap(gates, transforms, conn_name, step)
+                    
+        except Exception as e:
+            warnings.warn(f"Axonal 히트맵 로깅 중 오류: {e}")
+    
+    def _log_integrated_axonal_heatmap(self, gates: torch.Tensor, transforms: torch.Tensor, conn_name: str, step: int):
+        """통합된 Gates×Transforms 히트맵을 TensorBoard에 로깅"""
+        try:
+            gates_np = gates.detach().cpu().numpy()
+            transforms_np = transforms.detach().cpu().numpy()
+            
+            num_patches, target_size, source_size = transforms_np.shape
+            
+            # 패치 격자 크기 계산
+            patches_per_row = int(np.ceil(np.sqrt(num_patches)))
+            patches_per_col = int(np.ceil(num_patches / patches_per_row))
+            
+            # 통합 히트맵 크기
+            cell_size = max(target_size, source_size)
+            total_height = patches_per_col * cell_size
+            total_width = patches_per_row * cell_size
+            
+            integrated_heatmap = np.zeros((total_height, total_width))
+            
+            for patch_idx in range(num_patches):
+                row_idx = patch_idx // patches_per_row
+                col_idx = patch_idx % patches_per_row
+                
+                start_row = row_idx * cell_size
+                end_row = start_row + cell_size
+                start_col = col_idx * cell_size
+                end_col = start_col + cell_size
+                
+                # Transform 평균값을 기본값으로 사용
+                patch_transform_mean = transforms_np[patch_idx].mean()
+                integrated_heatmap[start_row:end_row, start_col:end_col] = patch_transform_mean
+                
+                # Gate 값으로 스케일링
+                gate_value = gates_np[patch_idx]
+                integrated_heatmap[start_row:end_row, start_col:end_col] *= gate_value
+                
+                # 실제 transform 패턴 오버레이
+                if target_size <= cell_size and source_size <= cell_size:
+                    center_start_row = start_row + (cell_size - target_size) // 2
+                    center_end_row = center_start_row + target_size
+                    center_start_col = start_col + (cell_size - source_size) // 2
+                    center_end_col = center_start_col + source_size
+                    
+                    integrated_heatmap[center_start_row:center_end_row, 
+                                     center_start_col:center_end_col] = transforms_np[patch_idx] * gate_value
+            
+            # matplotlib으로 히트맵 생성
+            fig, ax = plt.subplots(figsize=(10, 8))
+            im = ax.imshow(integrated_heatmap, cmap='RdYlBu_r', aspect='auto')
+            ax.set_title(f'{conn_name} - Integrated Gates×Transforms\n({num_patches} patches)')
+            ax.set_xlabel('Source Dimension')
+            ax.set_ylabel('Target Dimension')
+            
+            # 패치 경계선
+            for p in range(1, patches_per_row):
+                ax.axvline(x=p * cell_size - 0.5, color='black', linewidth=1, alpha=0.8)
+            for p in range(1, patches_per_col):
+                ax.axhline(y=p * cell_size - 0.5, color='black', linewidth=1, alpha=0.8)
+            
+            # 게이트 값 텍스트 표시
+            for patch_idx in range(num_patches):
+                row_idx = patch_idx // patches_per_row
+                col_idx = patch_idx % patches_per_row
+                
+                text_row = row_idx * cell_size + cell_size // 2
+                text_col = col_idx * cell_size + cell_size // 2
+                
+                ax.text(text_col, text_row, f'{gates_np[patch_idx]:.2f}', 
+                       ha='center', va='center', fontsize=8, 
+                       color='white', fontweight='bold',
+                       bbox=dict(boxstyle='round,pad=0.2', facecolor='black', alpha=0.7))
+            
+            plt.colorbar(im, ax=ax)
+            plt.tight_layout()
+            
+            # TensorBoard에 Figure로 저장
+            self.writer.add_figure(f'Axonal_Integrated/{conn_name}', fig, step)
+            plt.close(fig)
+            
+        except Exception as e:
+            warnings.warn(f"통합 히트맵 로깅 오류 ({conn_name}): {e}")
+
     def launch_tensorboard(self, port: int = 6006, auto_open: bool = True) -> bool:
         """TensorBoard 서버 시작"""
         try:

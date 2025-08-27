@@ -332,7 +332,21 @@ class SCSTrainer:
         # TensorBoard 로깅
         if self.tb_logger:
             self.tb_logger.log_training_step(batch_metrics, loss.item())
-        
+
+        # Axonal 히트맵 로깅 (설정 기반 주기적)
+        if (self.tb_logger and 
+            hasattr(self.tb_logger, 'log_axonal_heatmaps') and
+            self.tb_logger.should_log("axonal_heatmaps")):
+            try:
+                if 'axonal_parameters' in processing_info:
+                    self.tb_logger.log_axonal_heatmaps(
+                        processing_info['axonal_parameters'], 
+                        step=self.tb_logger.global_step
+                    )
+            except Exception as e:
+                # 로깅 실패는 무시하고 계속 진행
+                pass
+
         return loss.item(), batch_metrics
 
     def _validate_epoch(self, val_loader: DataLoader) -> Dict[str, float]:
@@ -343,7 +357,7 @@ class SCSTrainer:
         num_batches = 0
         
         with torch.no_grad():
-            for batch in val_loader:
+            for batch_idx, batch in enumerate(val_loader):
                 input_tokens = batch['input_tokens'].to(self.device)
                 target_tokens = batch['target_tokens'].to(self.device)
                 attention_mask = batch['attention_mask'].to(self.device)
@@ -374,7 +388,20 @@ class SCSTrainer:
                 else:
                     batch_loss = torch.tensor(float('inf'))
                     batch_accuracy = 0.0
-                
+
+                # 검증 중 Axonal 히트맵 로깅 (첫 번째 배치만)
+                if (batch_idx == 0 and self.tb_logger and 
+                    hasattr(self.tb_logger, 'log_axonal_heatmaps')):
+                    try:
+                        if 'axonal_parameters' in processing_info:
+                            self.tb_logger.log_axonal_heatmaps(
+                                processing_info['axonal_parameters'], 
+                                step=self.current_epoch
+                            )
+                    except Exception as e:
+                        # 로깅 실패는 무시하고 계속 진행
+                        pass
+                    
                 total_loss += batch_loss.item()
                 total_accuracy += batch_accuracy
                 num_batches += 1

@@ -265,23 +265,45 @@ def _generate_weight_heatmaps(model, node_names: List[str], vis_dir: Path):
 
 
 def _visualize_axonal_connections(axonal_connections, weight_dir: Path):
-    """축삭 연결 가중치 시각화"""
+    """축삭 연결 가중치 시각화 - 통합된 Gates×Transforms 히트맵"""
     try:
         if not hasattr(axonal_connections, 'patch_gates'):
-            logger.warning("⚠️ AxonalConnections에 patch_gates가 없습니다.")
+            logger.warning("AxonalConnections에 patch_gates가 없습니다.")
             return
         
         patch_gates = axonal_connections.patch_gates
         patch_transforms = axonal_connections.patch_transforms
         
-        # Patch Gates 시각화
-        num_connections = min(6, len(patch_gates))  # 최대 6개만 시각화
+        # 통합 히트맵 생성
+        _visualize_integrated_axonal_heatmaps(patch_gates, patch_transforms, weight_dir)
+        
+        # 기존 통계 시각화도 유지
+        if patch_transforms:
+            _visualize_patch_transform_stats(patch_transforms, weight_dir)
+            
+    except Exception as e:
+        logger.warning(f"축삭 연결 가중치 시각화 중 오류: {e}")
+
+
+def _visualize_integrated_axonal_heatmaps(
+    patch_gates: Dict[str, torch.Tensor], 
+    patch_transforms: Dict[str, torch.Tensor], 
+    weight_dir: Path
+):
+    """통합된 축삭 연결 히트맵 - Gates와 Transforms를 패치 격자 위치에 함께 표시"""
+    try:
+        if not patch_gates or not patch_transforms:
+            return
+        
+        # 공통 연결만 처리
+        common_connections = set(patch_gates.keys()) & set(patch_transforms.keys())
+        num_connections = min(4, len(common_connections))
         
         if num_connections > 0:
-            cols = min(3, num_connections)
+            cols = min(2, num_connections)
             rows = (num_connections + cols - 1) // cols
             
-            fig, axes = plt.subplots(rows, cols, figsize=(4*cols, 4*rows))
+            fig, axes = plt.subplots(rows, cols, figsize=(8*cols, 8*rows))
             if rows == 1 and cols == 1:
                 axes = [axes]
             elif rows == 1 or cols == 1:
@@ -289,26 +311,79 @@ def _visualize_axonal_connections(axonal_connections, weight_dir: Path):
             else:
                 axes = axes.flatten()
             
-            for i, (conn_name, gate_weights) in enumerate(list(patch_gates.items())[:num_connections]):
-                weights = gate_weights.detach().cpu().numpy()
+            for i, conn_name in enumerate(list(common_connections)[:num_connections]):
+                gates = patch_gates[conn_name].detach().cpu().numpy()
+                transforms = patch_transforms[conn_name].detach().cpu().numpy()
                 
-                # 1D 가중치를 적절한 형태로 변환
-                if len(weights.shape) == 1:
-                    # 1차원 배열을 2차원으로 변환
-                    sqrt_size = int(np.sqrt(len(weights)))
-                    if sqrt_size * sqrt_size == len(weights):
-                        weights = weights.reshape(sqrt_size, sqrt_size)
-                    else:
-                        # 적절한 크기로 패딩
-                        pad_size = sqrt_size + 1
-                        padded = np.zeros(pad_size * pad_size)
-                        padded[:len(weights)] = weights
-                        weights = padded.reshape(pad_size, pad_size)
+                # transforms: [num_patches, target_size, source_size]
+                num_patches, target_size, source_size = transforms.shape
                 
-                im = axes[i].imshow(weights, cmap='gray', aspect='auto')
-                axes[i].set_title(f'{conn_name}\nPatch Gates')
-                axes[i].set_xlabel('Patch Index (reshaped)')
-                axes[i].set_ylabel('Patch Index (reshaped)')
+                # 패치 격자 크기 계산
+                patches_per_row = int(np.ceil(np.sqrt(num_patches)))
+                patches_per_col = int(np.ceil(num_patches / patches_per_row))
+                
+                # 통합 히트맵 크기: 각 패치는 transform + gate overlay
+                cell_size = max(target_size, source_size)  # 정사각형으로 만들기
+                total_height = patches_per_col * cell_size
+                total_width = patches_per_row * cell_size
+                
+                integrated_heatmap = np.zeros((total_height, total_width))
+                
+                for patch_idx in range(num_patches):
+                    row_idx = patch_idx // patches_per_row
+                    col_idx = patch_idx % patches_per_row
+                    
+                    # 패치 위치 계산
+                    start_row = row_idx * cell_size
+                    end_row = start_row + cell_size
+                    start_col = col_idx * cell_size
+                    end_col = start_col + cell_size
+                    
+                    # Transform 평균값을 기본값으로 사용
+                    patch_transform_mean = transforms[patch_idx].mean()
+                    integrated_heatmap[start_row:end_row, start_col:end_col] = patch_transform_mean
+                    
+                    # Gate 값으로 스케일링 (게이트가 강할수록 더 밝게)
+                    gate_value = gates[patch_idx]
+                    integrated_heatmap[start_row:end_row, start_col:end_col] *= gate_value
+                    
+                    # 중앙에 실제 transform 패턴 오버레이 (작은 경우만)
+                    if target_size <= cell_size and source_size <= cell_size:
+                        # 중앙 정렬
+                        center_start_row = start_row + (cell_size - target_size) // 2
+                        center_end_row = center_start_row + target_size
+                        center_start_col = start_col + (cell_size - source_size) // 2
+                        center_end_col = center_start_col + source_size
+                        
+                        # 실제 transform 값 적용
+                        integrated_heatmap[center_start_row:center_end_row, 
+                                         center_start_col:center_end_col] = transforms[patch_idx] * gate_value
+                
+                # 히트맵 표시
+                im = axes[i].imshow(integrated_heatmap, cmap='RdYlBu_r', aspect='auto')
+                axes[i].set_title(f'{conn_name}\nIntegrated Gates×Transforms\n({num_patches} patches)')
+                axes[i].set_xlabel('Source Dimension')
+                axes[i].set_ylabel('Target Dimension')
+                
+                # 패치 경계선 그리기
+                for p in range(1, patches_per_row):
+                    axes[i].axvline(x=p * cell_size - 0.5, color='black', linewidth=1, alpha=0.8)
+                for p in range(1, patches_per_col):
+                    axes[i].axhline(y=p * cell_size - 0.5, color='black', linewidth=1, alpha=0.8)
+                
+                # 각 패치에 게이트 값 텍스트 표시
+                for patch_idx in range(num_patches):
+                    row_idx = patch_idx // patches_per_row
+                    col_idx = patch_idx % patches_per_row
+                    
+                    text_row = row_idx * cell_size + cell_size // 2
+                    text_col = col_idx * cell_size + cell_size // 2
+                    
+                    axes[i].text(text_col, text_row, f'{gates[patch_idx]:.2f}', 
+                               ha='center', va='center', fontsize=10, 
+                               color='white', fontweight='bold',
+                               bbox=dict(boxstyle='round,pad=0.2', facecolor='black', alpha=0.7))
+                
                 plt.colorbar(im, ax=axes[i])
             
             # 빈 subplot 숨기기
@@ -316,15 +391,13 @@ def _visualize_axonal_connections(axonal_connections, weight_dir: Path):
                 axes[j].set_visible(False)
             
             plt.tight_layout()
-            plt.savefig(weight_dir / "axonal_patch_gates.png", dpi=100, bbox_inches='tight')
+            plt.savefig(weight_dir / "axonal_integrated_heatmap.png", dpi=100, bbox_inches='tight')
             plt.close()
-        
-        # Patch Transforms 통계 시각화
-        if patch_transforms:
-            _visualize_patch_transform_stats(patch_transforms, weight_dir)
+            
+            logger.info("통합 축삭 연결 히트맵 생성 완료")
             
     except Exception as e:
-        logger.warning(f"⚠️ 축삭 연결 가중치 시각화 중 오류: {e}")
+        logger.warning(f"통합 축삭 히트맵 시각화 중 오류: {e}")
 
 
 def _visualize_patch_transform_stats(patch_transforms, weight_dir: Path):

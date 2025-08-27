@@ -331,15 +331,15 @@ class GLUEDataset(BaseDataset):
     
     # 각 태스크별 프롬프트 템플릿
     TASK_PROMPTS = {
-        'cola': "Judge if this sentence is grammatically acceptable:",
+        'cola': "",
         'sst2': "",
-        'mrpc': "Determine if these two sentences are semantically equivalent:",
-        'qqp': "Determine if these two questions are duplicates:",
-        'rte': "Determine if the premise entails the hypothesis:",
-        'wnli': "Determine if the premise entails the hypothesis:",
-        'mnli': "Determine the relationship between premise and hypothesis:",
-        'qnli': "Does the sentence contain the answer to the question?",
-        'stsb': "Rate the semantic similarity of these sentences from 0 to 5:"
+        'mrpc': "",
+        'qqp': "",
+        'rte': "",
+        'wnli': "",
+        'mnli': "",
+        'qnli': "",
+        'stsb': ""
     }
     
     def __init__(

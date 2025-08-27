@@ -1,0 +1,119 @@
+# configs/mrpc.yaml
+# bAbI 추론 태스크 전용 설정
+
+# === 기본 설정 상속 ===
+defaults:
+  - base_model
+
+# === 실험 메타정보 ===
+experiment:
+  name: "mrpc"
+  description: "GLUE 작동 테스트용"
+  phase: 1
+  expected_runtime: "30-60분"
+
+# === 시스템 역할 (base와 동일하므로 생략 가능) ===
+system_roles:
+  input_node: "IN"
+  output_node: "OUT"
+  acc_node: "ACC"
+
+# === 뇌 영역 구성 (완전 오버라이드) ===
+brain_regions:
+  IN:
+    grid_size: [64, 64]
+    decay_rate: 0.8
+    distance_tau: 1.0
+  ACC:
+    grid_size: [64, 64]
+    decay_rate: 0.8
+    distance_tau: 1.0
+  CMP:
+    grid_size: [16, 16]
+    decay_rate: 0.8
+    distance_tau: 1.0
+  PASS:
+    grid_size: [64, 64]
+    decay_rate: 0.8
+    distance_tau: 1.0
+  OUT:
+    grid_size: [64, 64]
+    decay_rate: 0.8
+    distance_tau: 1.0
+
+# === 축삭 연결 (완전 오버라이드) ===
+axonal_connections:
+  connections:
+    # 기본 정보 처리 경로
+    - source: "IN"
+      target: "CMP"
+      patch_size: 4
+      patch_weight_scale: 1.0
+      inner_weight_scale: 1.0
+    - source: "CMP"
+      target: "OUT"
+      patch_size: 1
+      patch_weight_scale: 1.0
+      inner_weight_scale: 1.0
+    - source: "IN"
+      target: "PASS"
+      patch_size: 1
+      patch_weight_scale: 1.0
+      inner_weight_scale: 1.0
+    - source: "PASS"
+      target: "OUT"
+      patch_size: 1
+      patch_weight_scale: 1.0
+      inner_weight_scale: 1.0
+
+# === 작업 설정 오버라이드 ===
+task:
+  name: "mrpc"
+  type: "pair"
+  dataset_name: "mrpc"
+
+# === 학습 설정 오버라이드 ===
+learning:
+  epochs: 11
+  learning_rate: 5e-4
+  eta_min: 2e-4
+  max_clk_training: 128
+  optimizer: "adamw"
+  weight_decay: 1e-4
+  eval_every: 10
+  save_every: 50
+  early_stopping_patience: 100
+
+  # 점진적 커리큘럼 학습
+  use_curriculum_learning: false
+  curriculum_schedule:
+    0: 50
+    50: 128
+
+timing_manager:
+  train_fixed_ref: "start"
+  train_fixed_offset: 3
+  evaluate_fixed_ref: "start"
+  evaluate_fixed_offset: 3
+  sync_ema_alpha: 0.1 # EMA 필터링 강도
+  sync_threshold_start: 0.3 # 시작 임계값
+  sync_threshold_end: 0.1 # 종료 임계값
+  min_processing_clk: 0 # 최소 처리 시간
+  max_processing_clk: 128 # 최대 처리 시간
+  min_output_length: 5 # 최소 출력 길이
+
+# === 데이터 로딩 오버라이드 ===
+data_loading:
+  batch_size: 16
+  tokenizer:
+    name: "t5-small"
+    max_length: 128
+
+data:
+  train_samples: -1
+  val_samples: -1
+  test_samples: -1
+
+# === 평가 설정 ===
+evaluation:
+  save_examples: 20

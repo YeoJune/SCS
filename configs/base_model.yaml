@@ -113,9 +113,9 @@ learning:
   length_penalty_weight: 0.0
   orthogonal_reg_weight: 0.5
 
-  gate_pruning_weight: 0.1 # 패치 게이트 L1 정규화 가중치
+  gate_pruning_weight: 0.5 # 패치 게이트 L1 정규화 가중치
   gate_temperature: 0.1 # 패치 게이트 온도
-  inner_pruning_weight: 0.1 # 내부 연결 L1 정규화 가중치
+  inner_pruning_weight: 0.5 # 내부 연결 L1 정규화 가중치
   inner_temperature: 0.1 # 내부 연결 온도
 
   # 점진적 커리큘럼 학습

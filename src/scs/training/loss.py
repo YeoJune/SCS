@@ -121,9 +121,11 @@ class SCSLoss(nn.Module):
         
         # Axon Pruning 손실 - Loss에서 직접 계산 (표준적 접근법)
         pruning_loss = torch.tensor(0.0, device=outputs.device)
+        strength_loss = torch.tensor(0.0, device=outputs.device)
         if self.gate_pruning_weight > 0.0 or self.inner_pruning_weight > 0.0 or self.axon_strength_reg_weight > 0.0:
-            pruning_loss = self._compute_axon_pruning_loss(processing_info, outputs.device)
+            pruning_loss, strength_loss = self._compute_axon_pruning_loss(processing_info, outputs.device)
             total_loss += pruning_loss
+            total_loss += strength_loss
         
         # 직교 정규화 손실 추가 (pruning_loss 계산 후에)
         orthogonal_loss = torch.tensor(0.0, device=outputs.device)
@@ -143,6 +145,7 @@ class SCSLoss(nn.Module):
                 loss_components = {
                     'base_loss': base_loss.item() if hasattr(base_loss, 'item') else float(base_loss),
                     'axon_pruning_loss': pruning_loss.item() if hasattr(pruning_loss, 'item') else float(pruning_loss),
+                    'axon_strength_loss': strength_loss.item() if hasattr(strength_loss, 'item') else float(strength_loss),
                     'orthogonal_reg_loss': orthogonal_loss.item() if hasattr(orthogonal_loss, 'item') else float(orthogonal_loss),
                     'length_penalty': length_penalty.item() if hasattr(length_penalty, 'item') else float(length_penalty),
                     'total_loss': total_loss.item() if hasattr(total_loss, 'item') else float(total_loss)
@@ -268,7 +271,8 @@ class SCSLoss(nn.Module):
             return torch.tensor(0.0, device=device)
         
         axonal_params = processing_info['axonal_parameters']
-        total_loss = torch.tensor(0.0, device=device)
+        pruning_loss = torch.tensor(0.0, device=device)
+        strength_loss = torch.tensor(0.0, device=device)
         
         for conn_data in axonal_params:
             gates = conn_data['gates']
@@ -281,7 +285,7 @@ class SCSLoss(nn.Module):
                 
                 # 0~1 사이로 정규화
                 normalized_entropy_gates = entropy_gates / np.log(gates.numel())
-                total_loss += self.gate_pruning_weight * normalized_entropy_gates
+                pruning_loss += self.gate_pruning_weight * normalized_entropy_gates
 
             # --- 2. 패치 내 양방향 경쟁 손실 (Intra-Patch Bidirectional) ---
             if self.inner_pruning_weight > 0.0 and transforms.numel() > 0:
@@ -295,14 +299,14 @@ class SCSLoss(nn.Module):
                     probs_src = F.softmax(transforms / self.inner_temperature, dim=-1)
                     entropy_src = -torch.sum(probs_src * torch.log(probs_src.clamp(min=1e-9)), dim=-1)
                     normalized_entropy_src = entropy_src.mean() / np.log(source_size)
-                    total_loss += weight_per_direction * normalized_entropy_src
+                    pruning_loss += weight_per_direction * normalized_entropy_src
                 
                 # -- 2b. Target 간의 경쟁 (각 Source가 최고의 Target에 연결) --
                 if target_size > 1:
                     probs_tgt = F.softmax(transforms / self.inner_temperature, dim=-2)
                     entropy_tgt = -torch.sum(probs_tgt * torch.log(probs_tgt.clamp(min=1e-9)), dim=-2)
                     normalized_entropy_tgt = entropy_tgt.mean() / np.log(target_size)
-                    total_loss += weight_per_direction * normalized_entropy_tgt
+                    pruning_loss += weight_per_direction * normalized_entropy_tgt
             
             # --- 3. 에너지 보존을 위한 강도 정규화 손실 ---
             if self.axon_strength_reg_weight > 0.0:
@@ -318,12 +322,12 @@ class SCSLoss(nn.Module):
                     current_mean = transforms.mean()
                     
                     # MSE 손실을 사용하여 현재 평균을 목표 평균에 맞춤
-                    strength_loss = F.mse_loss(current_mean,
+                    loss = F.mse_loss(current_mean,
                                             torch.tensor(target_mean_val, device=device))
-                    
-                    total_loss += self.axon_strength_reg_weight * strength_loss
-                    
-        return total_loss
+
+                    strength_loss += self.axon_strength_reg_weight * loss
+
+        return pruning_loss, strength_loss
 
 
 class TimingLoss(SCSLoss):

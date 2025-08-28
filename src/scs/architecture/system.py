@@ -68,7 +68,7 @@ class AxonalConnections(nn.Module):
             target_patch_w = target_w // source_patches_w
             
             # 패치별 게이트 가중치 [num_patches]
-            patch_gates = torch.randn(num_patches, device=self.device) * 0.1 * patch_weight_scale + patch_weight_scale
+            patch_gates = torch.randn(num_patches, device=self.device) * 0.1 + 1.0
             self.patch_gates[conn_key] = nn.Parameter(patch_gates.abs())
             
             # 패치별 내부 변환 행렬 [num_patches, target_patch_size, source_patch_size]
@@ -77,7 +77,7 @@ class AxonalConnections(nn.Module):
             
             inner_transforms = torch.randn(
                 num_patches, target_patch_size, source_patch_size, device=self.device
-            ) * 0.1 * inner_weight_scale + inner_weight_scale
+            ) * 0.1 + 1.0
             self.patch_transforms[conn_key] = nn.Parameter(inner_transforms)
     
     def forward(self, node_spikes: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
@@ -549,22 +549,23 @@ class SCSSystem(nn.Module):
             device=self.device
         )
         
-    def _get_axonal_parameters(self) -> List[Dict[str, torch.Tensor]]:
-        """Loss가 사용할 수 있도록 axonal 파라미터들을 raw 형태로 반환"""
+    def _get_axonal_parameters(self) -> List[Dict[str, Any]]:
         axonal_params = []
         
-        for conn_key in self.axonal_connections.patch_gates:
+        # AxonalConnections의 원본 설정(connections)을 참조
+        for conn_key, conn_config in zip(self.axonal_connections.patch_gates.keys(), self.axonal_connections.connections):
             gates = self.axonal_connections.patch_gates[conn_key]
             transforms = self.axonal_connections.patch_transforms[conn_key]
             
             axonal_params.append({
                 'connection_name': conn_key,
                 'gates': gates,
-                'transforms': transforms
+                'transforms': transforms,
+                'gate_scale': conn_config.get("patch_weight_scale", 1.0),
+                'inner_scale': conn_config.get("inner_weight_scale", 1.0)
             })
         
         return axonal_params
-    
     def _get_orthogonal_regularization(self) -> torch.Tensor:
         """
         spatial_compressor와 pattern_mapper의 직교 정규화 손실 계산 (MSE 기반 수정)

@@ -271,12 +271,15 @@ class SCSLoss(nn.Module):
             return torch.tensor(0.0, device=device)
         
         axonal_params = processing_info['axonal_parameters']
-        pruning_loss = torch.tensor(0.0, device=device)
+        gate_loss = torch.tensor(0.0, device=device)
+        inner_loss = torch.tensor(0.0, device=device)
         strength_loss = torch.tensor(0.0, device=device)
         
         for conn_data in axonal_params:
             gates = conn_data['gates']
             transforms = conn_data['transforms']
+            gate_scale = conn_data['gate_scale']
+            inner_scale = conn_data['inner_scale']
             
             # --- 1. 패치 간 경쟁 손실 (Inter-Patch) ---
             if self.gate_pruning_weight > 0.0 and gates.numel() > 1:
@@ -285,47 +288,49 @@ class SCSLoss(nn.Module):
                 
                 # 0~1 사이로 정규화
                 normalized_entropy_gates = entropy_gates / np.log(gates.numel())
-                pruning_loss += self.gate_pruning_weight * normalized_entropy_gates
+                gate_loss += normalized_entropy_gates * gate_scale
 
             # --- 2. 패치 내 양방향 경쟁 손실 (Intra-Patch Bidirectional) ---
             if self.inner_pruning_weight > 0.0 and transforms.numel() > 0:
                 num_patches, target_size, source_size = transforms.shape
-                
-                # 가중치를 0.5씩 분배하여 총합이 원래 가중치와 같도록 함
-                weight_per_direction = self.inner_pruning_weight * 0.5
 
                 # -- 2a. Source 간의 경쟁 (각 Target이 최고의 Source를 선택) --
                 if source_size > 1:
                     probs_src = F.softmax(transforms / self.inner_temperature, dim=-1)
                     entropy_src = -torch.sum(probs_src * torch.log(probs_src.clamp(min=1e-9)), dim=-1)
                     normalized_entropy_src = entropy_src.mean() / np.log(source_size)
-                    pruning_loss += weight_per_direction * normalized_entropy_src
+                    inner_loss += normalized_entropy_src
                 
                 # -- 2b. Target 간의 경쟁 (각 Source가 최고의 Target에 연결) --
                 if target_size > 1:
                     probs_tgt = F.softmax(transforms / self.inner_temperature, dim=-2)
                     entropy_tgt = -torch.sum(probs_tgt * torch.log(probs_tgt.clamp(min=1e-9)), dim=-2)
                     normalized_entropy_tgt = entropy_tgt.mean() / np.log(target_size)
-                    pruning_loss += weight_per_direction * normalized_entropy_tgt
+                    inner_loss += normalized_entropy_tgt
             
-            # --- 3. 에너지 보존을 위한 강도 정규화 손실 ---
+            # --- 3. 강도 정규화 손실 (Scale로 제어) ---
             if self.axon_strength_reg_weight > 0.0:
-                transforms = conn_data['transforms']
                 num_patches, target_size, source_size = transforms.shape
                 
-                if target_size > 0:
-                    # 목표: 가중치의 평균값이 1 / target_size 가 되도록 설정
-                    # E[W] = 1 / T
-                    target_mean_val = 1.0 / target_size
-                    
-                    # 현재 가중치 행렬의 전체 평균 계산
-                    current_mean = transforms.mean()
-                    
-                    # MSE 손실을 사용하여 현재 평균을 목표 평균에 맞춤
-                    loss = F.mse_loss(current_mean,
-                                            torch.tensor(target_mean_val, device=device))
+                # --- 3a. Gate 강도 정규화 ---
+                # 목표: Gate의 평균값이 gate_scale이 되도록.
+                if gates.numel() > 0:
+                    current_gate_mean = gates.mean()
+                    target_gate_mean = torch.tensor(gate_scale, device=device)
+                    strength_loss += F.mse_loss(current_gate_mean, target_gate_mean)
 
-                    strength_loss += self.axon_strength_reg_weight * loss
+                # --- 3b. Inner Transform 강도 정규화 (에너지 보존) ---
+                if target_size > 0:
+                    # 목표: 가중치의 평균값이 (inner_scale / target_size)가 되도록.
+                    # inner_scale이 1.0이면 에너지 보존, 0.1이면 에너지 1/10로 감쇠.
+                    target_mean_val = inner_scale / target_size
+                    
+                    current_mean = transforms.mean()
+                    target_mean = torch.tensor(target_mean_val, device=device)
+                    
+                    strength_loss += F.mse_loss(current_mean, target_mean)
+        pruning_loss = self.gate_pruning_weight * gate_loss + 0.5 * self.inner_pruning_weight * inner_loss
+        strength_loss = self.axon_strength_reg_weight * strength_loss
 
         return pruning_loss, strength_loss
 

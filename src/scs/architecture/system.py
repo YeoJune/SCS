@@ -567,38 +567,37 @@ class SCSSystem(nn.Module):
     
     def _get_orthogonal_regularization(self) -> torch.Tensor:
         """
-        spatial_compressor와 pattern_mapper의 직교 정규화 손실 계산 (수정된 버전)
-        - 수학적으로 올바른 직교성 제약 적용
-        - 스케일링 문제를 해결하기 위해 정규화 및 불필요한 제곱 제거
+        spatial_compressor와 pattern_mapper의 직교 정규화 손실 계산 (MSE 기반 수정)
+        - 두 행렬 간의 평균 제곱 오차를 계산하여 스케일을 직관적으로 만듦
         """
         device = next(self.parameters()).device
-        orthogonal_loss = torch.tensor(0.0, device=device)
         
         # 1. spatial_compressor 직교 정규화
-        # W_spatial: [E, N], 행(row)들이 직교하도록 강제 (보통 E < N 이므로)
+        # W_spatial: [E, N], 행(row)들이 직교하도록 강제
         W_spatial = self.output_interface.spatial_compressor.weight
         E_spatial, N_spatial = W_spatial.shape
         
-        # W @ W.T 가 단위행렬 I_E 에 가까워지도록 함 (결과: [E, E] 크기)
+        # W @ W.T 가 단위행렬 I_E 에 가까워지도록 함
         WW_T_spatial = torch.mm(W_spatial, W_spatial.t())
         I_spatial = torch.eye(E_spatial, device=device)
         
-        # 프로베니우스 노름을 사용하고, 행렬의 원소 개수로 나누어 스케일 정규화
-        loss_spatial = torch.norm(WW_T_spatial - I_spatial, 'fro') / (E_spatial * E_spatial)
-        orthogonal_loss += loss_spatial
-        
+        # MSE Loss 계산: (X - I)의 모든 원소를 제곱하여 평균
+        loss_spatial = F.mse_loss(WW_T_spatial, I_spatial, reduction='mean')
+
         # 2. pattern_mapper 직교 정규화  
-        # W_pattern: [N, E], 열(column)들이 직교하도록 강제 (보통 E < N 이므로)
+        # W_pattern: [N, E], 열(column)들이 직교하도록 강제
         W_pattern = self.input_interface.pattern_mapper.weight
         N_pattern, E_pattern = W_pattern.shape
 
-        # W.T @ W 가 단위행렬 I_E 에 가까워지도록 함 (결과: [E, E] 크기)
+        # W.T @ W 가 단위행렬 I_E 에 가까워지도록 함
         WT_W_pattern = torch.mm(W_pattern.t(), W_pattern)
         I_pattern = torch.eye(E_pattern, device=device)
 
-        # 프로베니우스 노름을 사용하고, 행렬의 원소 개수로 나누어 스케일 정규화
-        loss_pattern = torch.norm(WT_W_pattern - I_pattern, 'fro') / (E_pattern * E_pattern)
-        orthogonal_loss += loss_pattern
+        # MSE Loss 계산
+        loss_pattern = F.mse_loss(WT_W_pattern, I_pattern, reduction='mean')
+        
+        # 두 손실을 합침
+        orthogonal_loss = loss_spatial + loss_pattern
         
         return orthogonal_loss
 

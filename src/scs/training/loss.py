@@ -258,8 +258,9 @@ class SCSLoss(nn.Module):
     
     def _compute_axon_pruning_loss(self, processing_info: Dict[str, Any], device: torch.device) -> torch.Tensor:
         """
-        경쟁적 Axon Pruning 손실 계산
-        - 패치 간 경쟁과 패치 내 경쟁을 모두 구현
+        양방향 경쟁적 Axon Pruning 손실 계산 (단일 가중치 버전)
+        - 패치 간 경쟁 + 패치 내 양방향(source/target) 경쟁 구현
+        - inner_pruning_weight를 두 방향에 0.5씩 분배하여 적용
         """
         if 'axonal_parameters' not in processing_info:
             return torch.tensor(0.0, device=device)
@@ -268,48 +269,38 @@ class SCSLoss(nn.Module):
         total_loss = torch.tensor(0.0, device=device)
         
         for conn_data in axonal_params:
-            gates = conn_data['gates']  # [num_patches]
-            transforms = conn_data['transforms']  # [num_patches, target_size, source_size]
+            gates = conn_data['gates']
+            transforms = conn_data['transforms']
             
-            # 1. 패치 간 경쟁 손실 (Inter-Patch)
+            # --- 1. 패치 간 경쟁 손실 (Inter-Patch) ---
             if self.gate_pruning_weight > 0.0 and gates.numel() > 1:
-                # 목표: gates의 분포가 one-hot 벡터에 가까워지도록 (엔트로피 최소화)
-                # Softmax를 적용하여 확률 분포를 만듦
                 gate_probs = F.softmax(gates / self.gate_temperature, dim=0)
-                
-                # 엔트로피 계산: H(p) = - sum(p * log(p))
-                # 엔트로피가 낮을수록 분포는 뾰족해짐 (소수만 살아남음)
-                # 엔트로피 자체를 손실로 사용하여 최소화하도록 유도
                 entropy_gates = -torch.sum(gate_probs * torch.log(gate_probs.clamp(min=1e-9)))
                 
-                # 최대 엔트로피는 log(num_patches) (균등 분포일 때)
-                # 0~1 사이로 정규화하여 다른 연결과 스케일을 맞춤
-                if gates.numel() > 0:
-                    normalized_entropy_gates = entropy_gates / np.log(gates.numel())
-                    total_loss += self.gate_pruning_weight * normalized_entropy_gates
-            
-            # 2. 패치 내 경쟁 손실 (Intra-Patch)
+                # 0~1 사이로 정규화
+                normalized_entropy_gates = entropy_gates / np.log(gates.numel())
+                total_loss += self.gate_pruning_weight * normalized_entropy_gates
+
+            # --- 2. 패치 내 양방향 경쟁 손실 (Intra-Patch Bidirectional) ---
             if self.inner_pruning_weight > 0.0 and transforms.numel() > 0:
                 num_patches, target_size, source_size = transforms.shape
-                if source_size <= 1: 
-                    continue  # 경쟁할 대상이 없음
                 
-                # 목표: 각 transform 행렬의 각 행(row)이 one-hot 벡터에 가까워지도록
-                # 즉, target 뉴런 하나가 소수의 source 뉴런에만 집중하도록 함
+                # 가중치를 0.5씩 분배하여 총합이 원래 가중치와 같도록 함
+                weight_per_direction = self.inner_pruning_weight * 0.5
+
+                # -- 2a. Source 간의 경쟁 (각 Target이 최고의 Source를 선택) --
+                if source_size > 1:
+                    probs_src = F.softmax(transforms / self.inner_temperature, dim=-1)
+                    entropy_src = -torch.sum(probs_src * torch.log(probs_src.clamp(min=1e-9)), dim=-1)
+                    normalized_entropy_src = entropy_src.mean() / np.log(source_size)
+                    total_loss += weight_per_direction * normalized_entropy_src
                 
-                # transforms: [num_patches, target_size, source_size]
-                # 각 행에 대해 softmax 적용
-                transform_probs = F.softmax(transforms / self.inner_temperature, dim=-1)  # 마지막 차원(source_size)에 대해
-                
-                # 각 행의 엔트로피 계산
-                entropy_transforms = -torch.sum(transform_probs * torch.log(transform_probs.clamp(min=1e-9)), dim=-1)
-                
-                # 모든 패치와 모든 타겟 뉴런에 대해 평균 엔트로피 계산
-                mean_entropy_transforms = entropy_transforms.mean()
-                # 0~1 사이로 정규화
-                if source_size > 0:
-                    normalized_entropy_transforms = mean_entropy_transforms / np.log(source_size)
-                    total_loss += self.inner_pruning_weight * normalized_entropy_transforms
+                # -- 2b. Target 간의 경쟁 (각 Source가 최고의 Target에 연결) --
+                if target_size > 1:
+                    probs_tgt = F.softmax(transforms / self.inner_temperature, dim=-2)
+                    entropy_tgt = -torch.sum(probs_tgt * torch.log(probs_tgt.clamp(min=1e-9)), dim=-2)
+                    normalized_entropy_tgt = entropy_tgt.mean() / np.log(target_size)
+                    total_loss += weight_per_direction * normalized_entropy_tgt
                     
         return total_loss
 

@@ -130,14 +130,14 @@ class SCSLoss(nn.Module):
         # 직교 정규화 손실 추가 (pruning_loss 계산 후에)
         orthogonal_loss = torch.tensor(0.0, device=outputs.device)
         if self.orthogonal_reg_weight > 0.0 and 'orthogonal_reg_loss' in processing_info:
-            orthogonal_loss = processing_info['orthogonal_reg_loss']
-            total_loss += self.orthogonal_reg_weight * orthogonal_loss
+            orthogonal_loss = self.orthogonal_reg_weight * processing_info['orthogonal_reg_loss']
+            total_loss += orthogonal_loss
         
         # 길이 패널티 (기존 코드 유지)
         length_penalty = torch.tensor(0.0, device=outputs.device)
         if self.length_penalty_weight > 0.0:
-            length_penalty = self._length_penalty(original_output_len, original_target_len, outputs.device)
-            total_loss += self.length_penalty_weight * length_penalty
+            length_penalty = self.length_penalty_weight * self._length_penalty(original_output_len, original_target_len, outputs.device)
+            total_loss += length_penalty
         
         # TensorBoard 로깅 업데이트
         if hasattr(self, '_tb_logger') and self._tb_logger:

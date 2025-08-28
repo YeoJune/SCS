@@ -121,7 +121,7 @@ class SCSLoss(nn.Module):
         
         # Axon Pruning 손실 - Loss에서 직접 계산 (표준적 접근법)
         pruning_loss = torch.tensor(0.0, device=outputs.device)
-        if self.gate_pruning_weight > 0.0 or self.inner_pruning_weight > 0.0:
+        if self.gate_pruning_weight > 0.0 or self.inner_pruning_weight > 0.0 or self.axon_strength_reg_weight > 0.0:
             pruning_loss = self._compute_axon_pruning_loss(processing_info, outputs.device)
             total_loss += pruning_loss
         
@@ -305,7 +305,7 @@ class SCSLoss(nn.Module):
                     total_loss += weight_per_direction * normalized_entropy_tgt
             
             # --- 3. 에너지 보존을 위한 강도 정규화 손실 ---
-            if self.strength_reg_weight > 0.0:
+            if self.axon_strength_reg_weight > 0.0:
                 transforms = conn_data['transforms']
                 num_patches, target_size, source_size = transforms.shape
                 

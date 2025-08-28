@@ -141,6 +141,7 @@ class LearningConfig(BaseModel):
     gate_temperature: float = Field(default=0.1)
     inner_pruning_weight: float = Field(default=0.0)
     inner_temperature: float = Field(default=0.1)
+    axon_strength_reg_weight: float = Field(default=0.0)
 
     # 커리큘럼 학습
     use_curriculum_learning: bool = Field(default=False)

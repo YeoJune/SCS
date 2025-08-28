@@ -222,7 +222,8 @@ def train_mode(args: argparse.Namespace):
             gate_pruning_weight=learning_config.gate_pruning_weight,
             gate_temperature=learning_config.gate_temperature,
             inner_pruning_weight=learning_config.inner_pruning_weight,
-            inner_temperature=learning_config.inner_temperature
+            inner_temperature=learning_config.inner_temperature,
+            axon_strength_reg_weight=learning_config.axon_strength_reg_weight
         )
         
         # 옵티마이저 생성

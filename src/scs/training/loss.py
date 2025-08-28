@@ -21,6 +21,7 @@ class SCSLoss(nn.Module):
         gate_temperature: float = 0.1,
         inner_pruning_weight: float = 0.0,
         inner_temperature: float = 0.1,
+        axon_strength_reg_weight: float = 0.0,
         length_penalty_weight: float = 0.0,
         orthogonal_reg_weight: float = 0.0,
         use_temporal_weighting: bool = False,
@@ -301,6 +302,23 @@ class SCSLoss(nn.Module):
                     entropy_tgt = -torch.sum(probs_tgt * torch.log(probs_tgt.clamp(min=1e-9)), dim=-2)
                     normalized_entropy_tgt = entropy_tgt.mean() / np.log(target_size)
                     total_loss += weight_per_direction * normalized_entropy_tgt
+            
+            # --- 3. 연결 강도 정규화 손실 (당신의 아이디어) ---
+            if self.axon_strength_reg_weight > 0.0:
+                num_patches, target_size, source_size = transforms.shape
+                
+                # 이 연결이 target 뉴런에 전달하는 "총 에너지"의 기댓값을 조절
+                # 각 가중치의 제곱의 평균을 계산
+                mean_square = torch.mean(transforms**2)
+                
+                # 이 평균 제곱이 1/source_patch_size 가 되도록 강제.
+                # 이렇게 하면, 신호의 총합의 분산이 source_patch_size와 무관해짐.
+                target_val = 1.0 / source_size if source_size > 0 else 1.0
+                
+                strength_loss = F.mse_loss(mean_square, 
+                                        torch.tensor(target_val, device=device))
+                
+                total_loss += self.axon_strength_reg_weight * strength_loss
                     
         return total_loss
 

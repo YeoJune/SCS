@@ -28,10 +28,6 @@ brain_regions:
     grid_size: [64, 64]
     decay_rate: 0.8
     distance_tau: 1.0
-  CMP:
-    grid_size: [16, 16]
-    decay_rate: 0.8
-    distance_tau: 1.0
   PASS:
     grid_size: [64, 64]
     decay_rate: 0.8
@@ -44,25 +40,14 @@ brain_regions:
 # === 축삭 연결 (완전 오버라이드) ===
 axonal_connections:
   connections:
-    # 기본 정보 처리 경로
-    - source: "IN"
-      target: "CMP"
-      patch_size: 4
-      patch_weight_scale: 1.0
-      inner_weight_scale: 1.0
-    - source: "CMP"
-      target: "OUT"
-      patch_size: 1
-      patch_weight_scale: 1.0
-      inner_weight_scale: 1.0
     - source: "IN"
       target: "PASS"
-      patch_size: 1
+      patch_size: 4
       patch_weight_scale: 1.0
       inner_weight_scale: 1.0
     - source: "PASS"
       target: "OUT"
-      patch_size: 1
+      patch_size: 4
       patch_weight_scale: 1.0
       inner_weight_scale: 1.0
 

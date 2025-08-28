@@ -114,9 +114,9 @@ learning:
   orthogonal_reg_weight: 5.0
 
   gate_pruning_weight: 2.0 # 패치 게이트 L1 정규화 가중치
-  gate_temperature: 0.01 # 패치 게이트 온도
+  gate_temperature: 0.5 # 패치 게이트 온도
   inner_pruning_weight: 2.0 # 내부 연결 L1 정규화 가중치
-  inner_temperature: 0.01 # 내부 연결 온도
+  inner_temperature: 0.5 # 내부 연결 온도
 
   # 점진적 커리큘럼 학습
   use_curriculum_learning: false

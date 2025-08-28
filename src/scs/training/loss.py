@@ -38,6 +38,7 @@ class SCSLoss(nn.Module):
         self.inner_pruning_weight = inner_pruning_weight
         self.gate_temperature = gate_temperature
         self.inner_temperature = inner_temperature
+        self.axon_strength_reg_weight = axon_strength_reg_weight
         self.length_penalty_weight = length_penalty_weight
         self.orthogonal_reg_weight = orthogonal_reg_weight  
         self.use_temporal_weighting = use_temporal_weighting

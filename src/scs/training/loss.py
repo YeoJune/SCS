@@ -304,22 +304,24 @@ class SCSLoss(nn.Module):
                     normalized_entropy_tgt = entropy_tgt.mean() / np.log(target_size)
                     total_loss += weight_per_direction * normalized_entropy_tgt
             
-            # --- 3. 연결 강도 정규화 손실 (당신의 아이디어) ---
-            if self.axon_strength_reg_weight > 0.0:
+            # --- 3. 연결 강도 정규화 손실 (L1-Norm 기반) ---
+            if self.strength_reg_weight > 0.0:
                 num_patches, target_size, source_size = transforms.shape
                 
-                # 이 연결이 target 뉴런에 전달하는 "총 에너지"의 기댓값을 조절
-                # 각 가중치의 제곱의 평균을 계산
-                mean_square = torch.mean(transforms**2)
-                
-                # 이 평균 제곱이 1/source_patch_size 가 되도록 강제.
-                # 이렇게 하면, 신호의 총합의 분산이 source_patch_size와 무관해짐.
-                target_val = 1.0 / source_size if source_size > 0 else 1.0
-                
-                strength_loss = F.mse_loss(mean_square, 
-                                        torch.tensor(target_val, device=device))
-                
-                total_loss += self.axon_strength_reg_weight * strength_loss
+                if source_size > 0:
+                    # 각 타겟 뉴런으로 들어오는 연결 가중치의 합(L1 Norm)을 계산.
+                    # 모든 가중치가 양수이므로 abs()는 생략 가능하나, 강건성을 위해 포함.
+                    l1_norm_per_row = torch.sum(transforms.abs(), dim=-1) # shape: [num_patches, target_size]
+                    
+                    # 목표값은 1.0. 
+                    # 이렇게 하면 스파이크 k개가 들어올 때, 출력의 합도 k에 가까워짐.
+                    target_norm = torch.tensor(1.0, device=device)
+                    
+                    # 각 행의 L1 Norm이 1.0이 되도록 MSE 손실을 사용하여 강제
+                    # 전체 패치와 타겟 뉴런에 대해 평균적인 오차를 계산
+                    strength_loss = F.mse_loss(l1_norm_per_row, target_norm)
+                    
+                    total_loss += self.strength_reg_weight * strength_loss
                     
         return total_loss
 

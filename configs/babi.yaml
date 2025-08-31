@@ -44,12 +44,12 @@ axonal_connections:
       target: "PASS"
       patch_size: 4
       patch_weight_scale: 1.0
-      inner_weight_scale: 0.5
+      inner_weight_scale: 1.0
     - source: "PASS"
       target: "OUT"
       patch_size: 4
       patch_weight_scale: 1.0
-      inner_weight_scale: 0.5
+      inner_weight_scale: 1.0
 
 # === 작업 설정 오버라이드 ===
 task:

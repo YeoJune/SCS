@@ -1,0 +1,7 @@
+# === 기본 설정 상속 ===
+defaults:
+  - babi
+
+learning:
+  learning_rate: 5e-5
+  eta_min: 5e-5

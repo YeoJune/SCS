@@ -256,22 +256,29 @@ class SCSVisualizer:
         conn_name: str
     ) -> plt.Figure:
         """Source(0,0) 고정 뷰 생성"""
-        full_view = np.zeros((patches_per_row * 4, patches_per_col * 4))
+
+        # Transform 차원 확인
+        num_patches, target_size, source_size = transforms.shape
+        target_grid_size = int(np.sqrt(target_size))  # 예: 16 -> 4, 4 -> 2
+        
+        full_view = np.zeros((patches_per_row * target_grid_size, patches_per_col * target_grid_size))
         
         for patch_idx in range(len(gates)):
             patch_row = patch_idx // patches_per_row
             patch_col = patch_idx % patches_per_row
             
-            # source(0,0)에서 16개 target으로의 연결
-            source_00_connections = transforms[patch_idx][:, 0]
+            # source(0,0)에서 target들로의 연결
+            source_00_connections = transforms[patch_idx][:, 0]  # [target_size]
             weighted_connections = source_00_connections * gates[patch_idx]
-            connection_pattern = weighted_connections.reshape(4, 4)
+            
+            # 동적 크기로 reshape
+            connection_pattern = weighted_connections.reshape(target_grid_size, target_grid_size)
             
             # 전체 뷰에 배치
-            start_row = patch_row * 4
-            end_row = start_row + 4
-            start_col = patch_col * 4
-            end_col = start_col + 4
+            start_row = patch_row * target_grid_size
+            end_row = start_row + target_grid_size
+            start_col = patch_col * target_grid_size
+            end_col = start_col + target_grid_size
             
             full_view[start_row:end_row, start_col:end_col] = connection_pattern
         
@@ -303,22 +310,28 @@ class SCSVisualizer:
         conn_name: str
     ) -> plt.Figure:
         """Target(0,0) 고정 뷰 생성"""
-        full_view = np.zeros((patches_per_row * 4, patches_per_col * 4))
-        
+        # Transform 차원 확인
+        num_patches, target_size, source_size = transforms.shape
+        source_grid_size = int(np.sqrt(source_size))  # 예: 16 -> 4, 4 -> 2
+
+        full_view = np.zeros((patches_per_row * source_grid_size, patches_per_col * source_grid_size))
+
         for patch_idx in range(len(gates)):
             patch_row = patch_idx // patches_per_row
             patch_col = patch_idx % patches_per_row
             
-            # target(0,0)이 16개 source로부터 받는 연결
-            target_00_connections = transforms[patch_idx][0, :]
+            # target(0,0)이 source들로부터 받는 연결
+            target_00_connections = transforms[patch_idx][0, :]  # [source_size]
             weighted_connections = target_00_connections * gates[patch_idx]
-            connection_pattern = weighted_connections.reshape(4, 4)
+            
+            # 동적 크기로 reshape
+            connection_pattern = weighted_connections.reshape(source_grid_size, source_grid_size)
             
             # 전체 뷰에 배치
-            start_row = patch_row * 4
-            end_row = start_row + 4
-            start_col = patch_col * 4
-            end_col = start_col + 4
+            start_row = patch_row * source_grid_size
+            end_row = start_row + source_grid_size
+            start_col = patch_col * source_grid_size
+            end_col = start_col + source_grid_size
             
             full_view[start_row:end_row, start_col:end_col] = connection_pattern
         

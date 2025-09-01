@@ -1,7 +1,0 @@
-# === 기본 설정 상속 ===
-defaults:
-  - babi
-
-timing_manager:
-  train_fixed_offset: 5
-  evaluate_fixed_offset: 5

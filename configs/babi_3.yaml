@@ -2,6 +2,5 @@
 defaults:
   - babi
 
-timing_manager:
-  train_fixed_offset: 3
-  evaluate_fixed_offset: 3
+spike_dynamics:
+  surrogate_beta: 3.0

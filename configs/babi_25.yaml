@@ -3,4 +3,4 @@ defaults:
   - babi
 
 spike_dynamics:
-  surrogate_beta: 10.0
+  surrogate_beta: 25.0

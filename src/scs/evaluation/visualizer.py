@@ -288,7 +288,7 @@ class SCSVisualizer:
         figsize = (base_size * aspect_ratio * self.figsize_scale, base_size * self.figsize_scale)
         
         fig, ax = plt.subplots(figsize=figsize)
-        im = ax.imshow(full_view, cmap='RdBu_r', aspect='equal')
+        im = ax.imshow(full_view, cmap='viridis', aspect='equal')
         
         ax.set_title(f'{conn_name} - Source(0,0) Fixed View\nConnections from each patch source(0,0) to targets')
         ax.set_xlabel('Target Position (Global)')
@@ -345,7 +345,7 @@ class SCSVisualizer:
         figsize = (base_size * aspect_ratio * self.figsize_scale, base_size * self.figsize_scale)
         
         fig, ax = plt.subplots(figsize=figsize)
-        im = ax.imshow(full_view, cmap='RdBu_r', aspect='equal')
+        im = ax.imshow(full_view, cmap='viridis', aspect='equal')
         
         ax.set_title(f'{conn_name} - Target(0,0) Fixed View\nConnections to each patch target(0,0) from sources')
         ax.set_xlabel('Source Position (Global)')

@@ -48,8 +48,9 @@ class SCSVisualizer:
         
         return gate_fig, source_fig, target_fig
     
-    def create_weight_heatmaps_figure(self, model, node_names: List[str]) -> plt.Figure:
+    def create_weight_heatmaps_figure(self, model) -> plt.Figure:
         """노드별 influence 가중치 히트맵 생성"""
+        node_names = list(model.nodes.keys())
         num_nodes = len(node_names)
         figsize = (4 * num_nodes * self.figsize_scale, 4 * self.figsize_scale)
         
@@ -450,7 +451,7 @@ class SCSVisualizer:
                     logger.warning(f"애니메이션 생성 실패: {e}")
                 
                 # 4. 가중치 히트맵 저장
-                weight_fig = self.create_weight_heatmaps_figure(model, node_names)
+                weight_fig = self.create_weight_heatmaps_figure(model)
                 self.save_figure(weight_fig, vis_dir / "weight_heatmaps" / "node_influence_weights.png")
 
                 # 5. 처리 정보 시각화 저장

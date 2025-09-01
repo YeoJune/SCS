@@ -2,15 +2,25 @@
 defaults:
   - babi
 
-axonal_connections:
-  connections:
-    - source: "IN"
-      target: "PASS"
-      patch_size: 2
-      patch_weight_scale: .5
-      inner_weight_scale: 1.0
-    - source: "PASS"
-      target: "OUT"
-      patch_size: 2
-      patch_weight_scale: .5
-      inner_weight_scale: 1.0
+# === IO 시스템 ===
+io_system:
+  input_interface:
+    embedding_dim: 512
+    window_size: 16
+    encoder_layers: 5
+    encoder_heads: 8
+    encoder_dropout: 0.1
+    dim_feedforward: 2048
+    input_power: 0.05
+    softmax_temperature: 0.1
+    t5_model_name: "t5-small"
+
+  output_interface:
+    embedding_dim: 512
+    window_size: 16
+    decoder_layers: 5
+    decoder_heads: 8
+    dim_feedforward: 2048
+    dropout: 0.1
+    t5_model_name: "t5-small"
+    transplant_cross_attention: true

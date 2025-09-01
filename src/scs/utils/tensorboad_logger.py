@@ -133,7 +133,6 @@ class SCSTensorBoardLogger:
         step = step if step is not None else self.epoch
         
         try:
-            print("가중치 히트맵 생성 중...")
             weight_fig = self.visualizer.create_weight_heatmaps_figure(model)
             self.writer.add_figure('Weight_Heatmaps/Node_Influences', weight_fig, step)
             plt.close(weight_fig)

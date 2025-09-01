@@ -62,7 +62,7 @@ class SCSVisualizer:
                 node = model.nodes[node_name]
                 influence = node.influence_strength.detach().cpu().numpy()
                 
-                im = axes[i].imshow(influence, cmap='RdBu_r', vmin=-2, vmax=2)
+                im = axes[i].imshow(influence, cmap='coolwarm', vmin=-2, vmax=2)
                 axes[i].set_title(f'{node_name}\nInfluence Strength')
                 axes[i].set_xlabel('Width')
                 axes[i].set_ylabel('Height')
@@ -146,7 +146,7 @@ class SCSVisualizer:
             for i, node_name in enumerate(node_names):
                 if node_name in spike_pattern:
                     spikes = spike_pattern[node_name]
-                    im = axes[i].imshow(spikes, cmap='gray', vmin=0, vmax=1)
+                    im = axes[i].imshow(spikes, cmap='magma', vmin=0, vmax=1)
                     axes[i].set_title(f'{node_name}\nCLK {clk}')
                     axes[i].set_xlabel('Width')
                     axes[i].set_ylabel('Height')
@@ -230,7 +230,7 @@ class SCSVisualizer:
         
         figsize = (8 * self.figsize_scale, 8 * self.figsize_scale)
         fig, ax = plt.subplots(figsize=figsize)
-        im = ax.imshow(gate_grid, cmap='viridis', aspect='equal')
+        im = ax.imshow(gate_grid, cmap='plasma', aspect='equal')
         
         ax.set_title(f'{conn_name} - Gate Strengths\n({len(gates)} patches)')
         ax.set_xlabel('Patch Column')
@@ -288,7 +288,7 @@ class SCSVisualizer:
         figsize = (base_size * aspect_ratio * self.figsize_scale, base_size * self.figsize_scale)
         
         fig, ax = plt.subplots(figsize=figsize)
-        im = ax.imshow(full_view, cmap='viridis', aspect='equal')
+        im = ax.imshow(full_view, cmap='plasma', aspect='equal')
         
         ax.set_title(f'{conn_name} - Source(0,0) Fixed View\nConnections from each patch source(0,0) to targets')
         ax.set_xlabel('Target Position (Global)')
@@ -345,7 +345,7 @@ class SCSVisualizer:
         figsize = (base_size * aspect_ratio * self.figsize_scale, base_size * self.figsize_scale)
         
         fig, ax = plt.subplots(figsize=figsize)
-        im = ax.imshow(full_view, cmap='viridis', aspect='equal')
+        im = ax.imshow(full_view, cmap='plasma', aspect='equal')
         
         ax.set_title(f'{conn_name} - Target(0,0) Fixed View\nConnections to each patch target(0,0) from sources')
         ax.set_xlabel('Source Position (Global)')

@@ -44,8 +44,11 @@ class SCSTensorBoardLogger:
         self.max_images_per_batch = self.config.get('max_images_per_batch', 4)
         self.histogram_freq = self.config.get('histogram_freq', 100)
         
-        # TensorBoard Writer 초기화
-        self.writer = SummaryWriter(self.log_dir)
+        # TensorBoard Writer 초기화 - purge_step=0으로 중복 디렉토리 방지
+        self.writer = SummaryWriter(
+            log_dir=self.log_dir,
+            purge_step=0  # 기존 로그를 덮어쓰며 새로운 run 디렉토리 생성 방지
+        )
         
         # 카운터들
         self.global_step = 0
@@ -59,7 +62,7 @@ class SCSTensorBoardLogger:
         # 자동 실행
         if self.config.get('auto_launch', False):
             self.launch_tensorboard(self.config.get('port', 6006))
-    
+            
     def set_epoch(self, epoch: int):
         """현재 에포크 설정"""
         self.epoch = epoch
@@ -351,9 +354,10 @@ class SCSTensorBoardLogger:
         try:
             cmd = [
                 "tensorboard", 
-                "--logdir", str(self.log_dir.parent), 
+                "--logdir", str(self.log_dir),  # 상위 디렉토리가 아닌 정확한 로그 디렉토리 지정
                 "--port", str(port), 
-                "--host", "0.0.0.0"
+                "--host", "0.0.0.0",
+                "--reload_interval", "30"  # 30초마다 새 로그 확인
             ]
             
             self.tb_process = subprocess.Popen(
@@ -374,6 +378,7 @@ class SCSTensorBoardLogger:
                     pass  # 브라우저 열기 실패해도 무시
             
             print(f"📊 TensorBoard 서버 시작됨: http://localhost:{port}")
+            print(f"📁 로그 디렉토리: {self.log_dir}")
             return True
             
         except FileNotFoundError:
@@ -382,7 +387,7 @@ class SCSTensorBoardLogger:
         except Exception as e:
             print(f"⚠️ TensorBoard 서버 시작 실패: {e}")
             return False
-    
+        
     def close(self):
         """로거 및 TensorBoard 서버 종료"""
         if self.writer:

@@ -344,11 +344,10 @@ class SCSTrainer:
                     pass
             if (self.tb_logger.should_log("weight_heatmaps")):
                 try:
-                    if 'weight_parameters' in processing_info:
-                        self.tb_logger.log_weight_heatmaps(
-                            processing_info['weight_parameters'], 
-                            step=self.tb_logger.global_step
-                        )
+                    self.tb_logger.log_weight_heatmaps(
+                        self.model,
+                        step=self.tb_logger.global_step
+                    )
                 except Exception as e:
                     pass
 

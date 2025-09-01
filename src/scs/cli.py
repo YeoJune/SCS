@@ -17,7 +17,7 @@ import torch
 try:
     from scs.config import load_and_validate_config, ModelBuilder, AppConfig, LearningConfig
     from scs.training import SCSTrainer, MultiObjectiveLoss, TimingLoss, OptimizerFactory
-    from scs.evaluation import generate_visualizations, analyze_io_pipeline
+    from scs.evaluation import SCSVisualizer, analyze_io_pipeline
     from scs.data import create_dataloader, SCSTokenizer
     from scs.utils import (
         setup_logging, save_config, set_random_seed, get_device
@@ -292,8 +292,9 @@ def train_mode(args: argparse.Namespace):
 
         # 8. 시각화 및 분석 (evaluation 패키지 사용)
         logger.info("🎨 시각화 생성 중...")
-        generate_visualizations(model, test_loader, experiment_dir)
-        
+        visualizer = SCSVisualizer()
+        visualizer.generate_visualizations(model, test_loader, experiment_dir)
+
         logger.info("🔬 IO 파이프라인 분석 중...")
         analyze_io_pipeline(model, test_loader, experiment_dir, device)
 

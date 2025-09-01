@@ -1,8 +1,8 @@
 # src/scs/evaluation/visualizer.py
 """
-SCS 모델 시각화 모듈 (v2.0)
+SCS 모델 시각화 시스템 (v4.0)
 
-SCSSystem의 새로운 아키텍처에 맞춘 스파이크 패턴 및 가중치 시각화 기능 제공
+단일 클래스 기반 설계로 모든 시각화 기능 통합
 """
 
 import torch
@@ -10,180 +10,169 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import numpy as np
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import logging
 
 logger = logging.getLogger(__name__)
 
 
-def generate_visualizations(model, test_loader, output_dir: Path):
-    """
-    SCS 모델의 스파이크 패턴과 가중치 히트맵 시각화 생성
+class SCSVisualizer:
+    """SCS 모델 전용 시각화 클래스"""
     
-    Args:
-        model: SCSSystem 모델
-        test_loader: 테스트 데이터 로더
-        output_dir: 시각화 파일 저장 디렉토리
-    """
-    try:
-        vis_dir = output_dir / "visualizations"
-        vis_dir.mkdir(exist_ok=True)
-        
-        # 첫 번째 배치만 사용
-        first_batch = next(iter(test_loader))
-        input_tokens = first_batch['input_tokens'][:1].to(model.device)  # 첫 번째 샘플만
-        attention_mask = first_batch.get('attention_mask')
-        if attention_mask is not None:
-            attention_mask = attention_mask[:1].to(model.device)
-        
-        # 스파이크 패턴 수집을 위한 모델 실행
-        model.eval()
-        with torch.no_grad():
-            # 스파이크 패턴 수집
-            all_spike_patterns = _collect_spike_patterns(
-                model, input_tokens, attention_mask
-            )
-        
-        # 노드 이름 추출
-        node_names = list(all_spike_patterns[0].keys()) if all_spike_patterns else []
-        
-        if not node_names:
-            logger.warning("⚠️ 수집된 스파이크 패턴이 없습니다.")
-            return
-        
-        # 1. CLK별 스파이크 패턴 이미지 생성
-        _generate_spike_pattern_images(all_spike_patterns, node_names, vis_dir)
-        
-        # 2. 스파이크 패턴 GIF 애니메이션 생성
-        _generate_spike_animation(all_spike_patterns, node_names, vis_dir)
-        
-        # 3. 가중치 히트맵 생성
-        _generate_weight_heatmaps(model, node_names, vis_dir)
-        
-        # 4. 처리 정보 시각화 (새로운 기능)
-        _generate_processing_info_plots(all_spike_patterns, vis_dir)
-        
-        logger.info(f"📁 모든 시각화 파일 저장 완료: {vis_dir}")
-        
-    except Exception as e:
-        logger.warning(f"⚠️ 시각화 생성 중 오류 (무시하고 계속): {e}")
-        import traceback
-        logger.debug(traceback.format_exc())
-
-
-def _collect_spike_patterns(
-    model, 
-    input_tokens: torch.Tensor, 
-    attention_mask: Optional[torch.Tensor]
-) -> List[Dict[str, np.ndarray]]:
-    """
-    SCSSystem v2.0에서 스파이크 패턴 수집
+    def __init__(self, save_dpi: int = 100, figsize_scale: float = 1.0):
+        """
+        Args:
+            save_dpi: 저장 시 DPI
+            figsize_scale: Figure 크기 스케일링 팩터
+        """
+        self.save_dpi = save_dpi
+        self.figsize_scale = figsize_scale
     
-    Args:
-        model: SCSSystem 모델
-        input_tokens: [1, seq_len] 입력 토큰
-        attention_mask: [1, seq_len] 어텐션 마스크
+    def create_axonal_pruning_figures(
+        self, 
+        gates: torch.Tensor, 
+        transforms: torch.Tensor, 
+        conn_name: str
+    ) -> Tuple[plt.Figure, plt.Figure, plt.Figure]:
+        """Axonal 프루닝 3뷰 시각화 생성"""
+        gates_np = gates.detach().cpu().numpy()
+        transforms_np = transforms.detach().cpu().numpy()
+        num_patches = len(gates_np)
         
-    Returns:
-        all_spike_patterns: CLK별 스파이크 패턴 리스트
-    """
-    # 모델 상태 초기화
-    model.reset_state(batch_size=1)
+        patches_per_row = int(np.sqrt(num_patches))
+        patches_per_col = patches_per_row
+        
+        gate_fig = self._create_gate_view(gates_np, patches_per_row, patches_per_col, conn_name)
+        source_fig = self._create_source_fixed_view(gates_np, transforms_np, patches_per_row, patches_per_col, conn_name)
+        target_fig = self._create_target_fixed_view(gates_np, transforms_np, patches_per_row, patches_per_col, conn_name)
+        
+        return gate_fig, source_fig, target_fig
     
-    all_spike_patterns = []
-    max_clk = min(100, model.max_clk)  # 시각화용으로 제한
-    
-    logger.info(f"🔍 스파이크 패턴 수집 시작 (최대 {max_clk} CLK)")
-    
-    for clk in range(max_clk):
-        try:
-            # Phase 1: 스파이크 계산 및 상태 업데이트
-            current_spikes = model._compute_spikes()
-            external_input = model._get_external_input_at_clk(
-                input_tokens, clk, attention_mask
-            )
-            model._update_states(external_input, current_spikes)
-            final_acc_spikes = current_spikes.get(model.acc_node)
-            
-            # 현재 스파이크 패턴 저장
-            if current_spikes:
-                spike_pattern = {}
-                for node_name, spikes in current_spikes.items():
-                    if spikes is not None:
-                        spike_pattern[node_name] = spikes[0].cpu().numpy()  # [H, W]
-                all_spike_patterns.append(spike_pattern)
-            
-            # Phase 2: TimingManager 업데이트
-            model.timing_manager.step(
-                current_clk=clk,
-                acc_node_spikes=final_acc_spikes,
-                training=False,
-                input_seq_len=input_tokens.shape[1],
-                target_seq_len=input_tokens.shape[1]  # 추론 모드
-            )
-            
-            # 조기 종료 조건
-            if model.timing_manager.all_ended:
-                logger.info(f"⏹️ CLK {clk}에서 처리 완료 (조기 종료)")
-                break
-                
-        except Exception as e:
-            logger.warning(f"⚠️ CLK {clk} 처리 중 오류: {e}")
-            break
-    
-    logger.info(f"✅ 총 {len(all_spike_patterns)}개 CLK의 스파이크 패턴 수집 완료")
-    return all_spike_patterns
-
-
-def _generate_spike_pattern_images(
-    all_spike_patterns: List[Dict[str, np.ndarray]], 
-    node_names: List[str], 
-    vis_dir: Path
-):
-    """CLK별 스파이크 패턴 이미지 생성"""
-    spike_dir = vis_dir / "spike_patterns"
-    spike_dir.mkdir(exist_ok=True)
-    
-    num_nodes = len(node_names)
-    
-    for clk, spike_pattern in enumerate(all_spike_patterns):
-        fig, axes = plt.subplots(1, num_nodes, figsize=(4*num_nodes, 4))
+    def create_weight_heatmaps_figure(self, model, node_names: List[str]) -> plt.Figure:
+        """노드별 influence 가중치 히트맵 생성"""
+        num_nodes = len(node_names)
+        figsize = (4 * num_nodes * self.figsize_scale, 4 * self.figsize_scale)
+        
+        fig, axes = plt.subplots(1, num_nodes, figsize=figsize)
         if num_nodes == 1:
             axes = [axes]
         
         for i, node_name in enumerate(node_names):
-            if node_name in spike_pattern:
-                spikes = spike_pattern[node_name]
-                im = axes[i].imshow(spikes, cmap='gray', vmin=0, vmax=1)
-                axes[i].set_title(f'{node_name}\nCLK {clk}')
+            if node_name in model.nodes:
+                node = model.nodes[node_name]
+                influence = node.influence_strength.detach().cpu().numpy()
+                
+                im = axes[i].imshow(influence, cmap='RdBu_r', vmin=-2, vmax=2)
+                axes[i].set_title(f'{node_name}\nInfluence Strength')
                 axes[i].set_xlabel('Width')
                 axes[i].set_ylabel('Height')
                 plt.colorbar(im, ax=axes[i])
             else:
                 axes[i].text(0.5, 0.5, f'{node_name}\nNo Data', 
                            transform=axes[i].transAxes, ha='center', va='center')
-                axes[i].set_title(f'{node_name}\nCLK {clk}')
+                axes[i].set_title(f'{node_name}\nInfluence Strength')
         
         plt.tight_layout()
-        plt.savefig(spike_dir / f"clk_{clk:03d}.png", dpi=100, bbox_inches='tight')
-        plt.close()
+        return fig
     
-    logger.info(f"✅ 스파이크 패턴 이미지 {len(all_spike_patterns)}개 저장: {spike_dir}")
-
-
-def _generate_spike_animation(
-    all_spike_patterns: List[Dict[str, np.ndarray]], 
-    node_names: List[str], 
-    vis_dir: Path
-):
-    """스파이크 패턴 GIF 애니메이션 생성"""
-    try:
+    def create_processing_info_figures(self, all_spike_patterns: List[Dict[str, np.ndarray]]) -> Tuple[plt.Figure, plt.Figure]:
+        """처리 정보 시각화 생성"""
         if not all_spike_patterns:
-            logger.warning("⚠️ 애니메이션 생성을 위한 스파이크 패턴이 없습니다.")
-            return
+            # 빈 Figure 반환
+            fig1, _ = plt.subplots(figsize=(1, 1))
+            fig2, _ = plt.subplots(figsize=(1, 1))
+            return fig1, fig2
+        
+        node_names = list(all_spike_patterns[0].keys())
+        
+        # 1. 노드 활성도 시간 변화
+        node_activities = {node: [] for node in node_names}
+        for spike_pattern in all_spike_patterns:
+            for node_name in node_names:
+                if node_name in spike_pattern:
+                    activity = np.mean(spike_pattern[node_name])
+                    node_activities[node_name].append(activity)
+                else:
+                    node_activities[node_name].append(0.0)
+        
+        activity_fig = plt.figure(figsize=(12 * self.figsize_scale, 6 * self.figsize_scale))
+        for node_name, activities in node_activities.items():
+            plt.plot(activities, label=node_name, linewidth=2)
+        
+        plt.xlabel('CLK')
+        plt.ylabel('Average Spike Rate')
+        plt.title('Node Activity Over Time')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        
+        # 2. 총 스파이크 수 변화
+        total_spikes = []
+        for spike_pattern in all_spike_patterns:
+            total = sum(np.sum(spikes) for spikes in spike_pattern.values())
+            total_spikes.append(total)
+        
+        spike_fig = plt.figure(figsize=(10 * self.figsize_scale, 5 * self.figsize_scale))
+        plt.plot(total_spikes, linewidth=2, color='red')
+        plt.xlabel('CLK')
+        plt.ylabel('Total Spikes')
+        plt.title('Total Spike Count Over Time')
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        
+        return activity_fig, spike_fig
+    
+    def create_spike_pattern_images_batch(
+        self, 
+        all_spike_patterns: List[Dict[str, np.ndarray]], 
+        node_names: List[str],
+        max_images: Optional[int] = None
+    ) -> List[Tuple[plt.Figure, int]]:
+        """스파이크 패턴 이미지들을 배치로 생성"""
+        if max_images is not None:
+            patterns_to_process = all_spike_patterns[:max_images]
+        else:
+            patterns_to_process = all_spike_patterns
+        
+        figures_with_clk = []
+        num_nodes = len(node_names)
+        
+        for clk, spike_pattern in enumerate(patterns_to_process):
+            figsize = (4 * num_nodes * self.figsize_scale, 4 * self.figsize_scale)
+            fig, axes = plt.subplots(1, num_nodes, figsize=figsize)
+            if num_nodes == 1:
+                axes = [axes]
+            
+            for i, node_name in enumerate(node_names):
+                if node_name in spike_pattern:
+                    spikes = spike_pattern[node_name]
+                    im = axes[i].imshow(spikes, cmap='gray', vmin=0, vmax=1)
+                    axes[i].set_title(f'{node_name}\nCLK {clk}')
+                    axes[i].set_xlabel('Width')
+                    axes[i].set_ylabel('Height')
+                    plt.colorbar(im, ax=axes[i])
+                else:
+                    axes[i].text(0.5, 0.5, f'{node_name}\nNo Data', 
+                               transform=axes[i].transAxes, ha='center', va='center')
+                    axes[i].set_title(f'{node_name}\nCLK {clk}')
+            
+            plt.tight_layout()
+            figures_with_clk.append((fig, clk))
+        
+        return figures_with_clk
+    
+    def create_spike_animation(
+        self, 
+        all_spike_patterns: List[Dict[str, np.ndarray]], 
+        node_names: List[str]
+    ) -> animation.FuncAnimation:
+        """스파이크 패턴 GIF 애니메이션 생성"""
+        if not all_spike_patterns:
+            raise ValueError("스파이크 패턴이 비어있습니다")
         
         num_nodes = len(node_names)
-        fig, axes = plt.subplots(1, num_nodes, figsize=(4*num_nodes, 4))
+        figsize = (4 * num_nodes * self.figsize_scale, 4 * self.figsize_scale)
+        fig, axes = plt.subplots(1, num_nodes, figsize=figsize)
         if num_nodes == 1:
             axes = [axes]
         
@@ -193,7 +182,7 @@ def _generate_spike_animation(
             if node_name in all_spike_patterns[0]:
                 initial_data = all_spike_patterns[0][node_name]
             else:
-                initial_data = np.zeros((64, 64))  # 기본 크기
+                initial_data = np.zeros((64, 64))
             
             im = axes[i].imshow(initial_data, cmap='gray', vmin=0, vmax=1)
             axes[i].set_title(f'{node_name}\nCLK 0')
@@ -210,345 +199,264 @@ def _generate_spike_animation(
                 axes[i].set_title(f'{node_name}\nCLK {frame}')
             return ims
         
-        # 애니메이션 생성
         anim = animation.FuncAnimation(
             fig, animate, frames=len(all_spike_patterns),
             interval=200, blit=True, repeat=True
         )
         
-        # GIF 저장
-        gif_path = vis_dir / "spike_animation.gif"
-        anim.save(gif_path, writer='pillow', fps=5)
-        plt.close()
-        
-        logger.info(f"🎬 스파이크 패턴 GIF 생성: {gif_path}")
-        
-    except Exception as gif_error:
-        logger.warning(f"⚠️ GIF 생성 중 오류 (개별 이미지는 정상 저장됨): {gif_error}")
-
-
-def _generate_weight_heatmaps(model, node_names: List[str], vis_dir: Path):
-    """가중치 히트맵 생성"""
-    weight_dir = vis_dir / "weight_heatmaps"
-    weight_dir.mkdir(exist_ok=True)
+        return anim
     
-    num_nodes = len(node_names)
+    def save_figure(self, fig: plt.Figure, save_path: Path) -> None:
+        """Figure 저장 후 메모리 해제"""
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=self.save_dpi, bbox_inches='tight')
+        plt.close(fig)
     
-    # 1. 노드별 influence 가중치
-    fig, axes = plt.subplots(1, num_nodes, figsize=(4*num_nodes, 4))
-    if num_nodes == 1:
-        axes = [axes]
+    def save_animation(self, anim: animation.FuncAnimation, save_path: Path, fps: int = 5) -> None:
+        """애니메이션 저장"""
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        anim.save(save_path, writer='pillow', fps=fps)
+        plt.close(anim._fig)
     
-    for i, node_name in enumerate(node_names):
-        if node_name in model.nodes:
-            node = model.nodes[node_name]
-            influence = node.influence_strength.detach().cpu().numpy()
-            
-            im = axes[i].imshow(influence, cmap='RdBu_r', vmin=-2, vmax=2)
-            axes[i].set_title(f'{node_name}\nInfluence Strength')
-            axes[i].set_xlabel('Width')
-            axes[i].set_ylabel('Height')
-            plt.colorbar(im, ax=axes[i])
-        else:
-            axes[i].text(0.5, 0.5, f'{node_name}\nNo Data', 
-                       transform=axes[i].transAxes, ha='center', va='center')
-            axes[i].set_title(f'{node_name}\nInfluence Strength')
-    
-    plt.tight_layout()
-    plt.savefig(weight_dir / "node_influence_weights.png", dpi=100, bbox_inches='tight')
-    plt.close()
-    
-    # 2. 축삭 연결 가중치 (AxonalConnections)
-    _visualize_axonal_connections(model.axonal_connections, weight_dir)
-    
-    logger.info(f"✅ 가중치 히트맵 저장: {weight_dir}")
-
-
-def _visualize_axonal_connections(axonal_connections, weight_dir: Path):
-    """축삭 연결 가중치 시각화 - 통합된 Gates×Transforms 히트맵"""
-    try:
-        if not hasattr(axonal_connections, 'patch_gates'):
-            logger.warning("AxonalConnections에 patch_gates가 없습니다.")
-            return
+    def _create_gate_view(
+        self, 
+        gates: np.ndarray, 
+        patches_per_row: int, 
+        patches_per_col: int, 
+        conn_name: str
+    ) -> plt.Figure:
+        """Gate 뷰 생성"""
+        gate_grid = gates.reshape(patches_per_row, patches_per_col)
         
-        patch_gates = axonal_connections.patch_gates
-        patch_transforms = axonal_connections.patch_transforms
+        figsize = (8 * self.figsize_scale, 8 * self.figsize_scale)
+        fig, ax = plt.subplots(figsize=figsize)
+        im = ax.imshow(gate_grid, cmap='viridis', aspect='equal')
         
-        # 통합 히트맵 생성
-        _visualize_integrated_axonal_heatmaps(patch_gates, patch_transforms, weight_dir)
+        ax.set_title(f'{conn_name} - Gate Strengths\n({len(gates)} patches)')
+        ax.set_xlabel('Patch Column')
+        ax.set_ylabel('Patch Row')
         
-        # 기존 통계 시각화도 유지
-        if patch_transforms:
-            _visualize_patch_transform_stats(patch_transforms, weight_dir)
-            
-    except Exception as e:
-        logger.warning(f"축삭 연결 가중치 시각화 중 오류: {e}")
-
-
-def _visualize_integrated_axonal_heatmaps(
-    patch_gates: Dict[str, torch.Tensor], 
-    patch_transforms: Dict[str, torch.Tensor], 
-    weight_dir: Path
-):
-    """통합된 축삭 연결 히트맵 - Gates와 Transforms를 패치 격자 위치에 함께 표시"""
-    try:
-        if not patch_gates or not patch_transforms:
-            return
+        plt.colorbar(im, ax=ax, label='Gate Value')
         
-        # 공통 연결만 처리
-        common_connections = set(patch_gates.keys()) & set(patch_transforms.keys())
-        num_connections = min(4, len(common_connections))
+        # 격자 표시
+        for i in range(patches_per_row + 1):
+            ax.axhline(i - 0.5, color='white', linewidth=0.5, alpha=0.7)
+        for j in range(patches_per_col + 1):
+            ax.axvline(j - 0.5, color='white', linewidth=0.5, alpha=0.7)
         
-        if num_connections > 0:
-            cols = min(2, num_connections)
-            rows = (num_connections + cols - 1) // cols
-            
-            fig, axes = plt.subplots(rows, cols, figsize=(8*cols, 8*rows))
-            if rows == 1 and cols == 1:
-                axes = [axes]
-            elif rows == 1 or cols == 1:
-                axes = axes.flatten()
-            else:
-                axes = axes.flatten()
-            
-            for i, conn_name in enumerate(list(common_connections)[:num_connections]):
-                gates = patch_gates[conn_name].detach().cpu().numpy()
-                transforms = patch_transforms[conn_name].detach().cpu().numpy()
-                
-                # transforms: [num_patches, target_size, source_size]
-                num_patches, target_size, source_size = transforms.shape
-                
-                # 패치 격자 크기 계산
-                patches_per_row = int(np.ceil(np.sqrt(num_patches)))
-                patches_per_col = int(np.ceil(num_patches / patches_per_row))
-                
-                # 통합 히트맵 크기: 각 패치는 transform + gate overlay
-                cell_size = max(target_size, source_size)  # 정사각형으로 만들기
-                total_height = patches_per_col * cell_size
-                total_width = patches_per_row * cell_size
-                
-                integrated_heatmap = np.zeros((total_height, total_width))
-                
-                for patch_idx in range(num_patches):
-                    row_idx = patch_idx // patches_per_row
-                    col_idx = patch_idx % patches_per_row
-                    
-                    # 패치 위치 계산
-                    start_row = row_idx * cell_size
-                    end_row = start_row + cell_size
-                    start_col = col_idx * cell_size
-                    end_col = start_col + cell_size
-                    
-                    # Transform 평균값을 기본값으로 사용
-                    patch_transform_mean = transforms[patch_idx].mean()
-                    integrated_heatmap[start_row:end_row, start_col:end_col] = patch_transform_mean
-                    
-                    # Gate 값으로 스케일링 (게이트가 강할수록 더 밝게)
-                    gate_value = gates[patch_idx]
-                    integrated_heatmap[start_row:end_row, start_col:end_col] *= gate_value
-                    
-                    # 중앙에 실제 transform 패턴 오버레이 (작은 경우만)
-                    if target_size <= cell_size and source_size <= cell_size:
-                        # 중앙 정렬
-                        center_start_row = start_row + (cell_size - target_size) // 2
-                        center_end_row = center_start_row + target_size
-                        center_start_col = start_col + (cell_size - source_size) // 2
-                        center_end_col = center_start_col + source_size
-                        
-                        # 실제 transform 값 적용
-                        integrated_heatmap[center_start_row:center_end_row, 
-                                         center_start_col:center_end_col] = transforms[patch_idx] * gate_value
-                
-                # 히트맵 표시
-                im = axes[i].imshow(integrated_heatmap, cmap='RdYlBu_r', aspect='auto')
-                axes[i].set_title(f'{conn_name}\nIntegrated Gates×Transforms\n({num_patches} patches)')
-                axes[i].set_xlabel('Source Dimension')
-                axes[i].set_ylabel('Target Dimension')
-                
-                # 패치 경계선 그리기
-                for p in range(1, patches_per_row):
-                    axes[i].axvline(x=p * cell_size - 0.5, color='black', linewidth=1, alpha=0.8)
-                for p in range(1, patches_per_col):
-                    axes[i].axhline(y=p * cell_size - 0.5, color='black', linewidth=1, alpha=0.8)
-                
-                # 각 패치에 게이트 값 텍스트 표시
-                for patch_idx in range(num_patches):
-                    row_idx = patch_idx // patches_per_row
-                    col_idx = patch_idx % patches_per_row
-                    
-                    text_row = row_idx * cell_size + cell_size // 2
-                    text_col = col_idx * cell_size + cell_size // 2
-                    
-                    axes[i].text(text_col, text_row, f'{gates[patch_idx]:.2f}', 
-                               ha='center', va='center', fontsize=10, 
-                               color='white', fontweight='bold',
-                               bbox=dict(boxstyle='round,pad=0.2', facecolor='black', alpha=0.7))
-                
-                plt.colorbar(im, ax=axes[i])
-            
-            # 빈 subplot 숨기기
-            for j in range(i+1, len(axes)):
-                axes[j].set_visible(False)
-            
-            plt.tight_layout()
-            plt.savefig(weight_dir / "axonal_integrated_heatmap.png", dpi=100, bbox_inches='tight')
-            plt.close()
-            
-            logger.info("통합 축삭 연결 히트맵 생성 완료")
-            
-    except Exception as e:
-        logger.warning(f"통합 축삭 히트맵 시각화 중 오류: {e}")
-
-
-def _visualize_patch_transform_stats(patch_transforms, weight_dir: Path):
-    """Patch Transform 행렬의 통계 시각화"""
-    try:
-        # 각 연결별 transform 행렬의 통계 계산
-        conn_stats = {}
-        
-        for conn_name, transforms in patch_transforms.items():
-            transforms_np = transforms.detach().cpu().numpy()
-            
-            # 통계 계산
-            stats = {
-                'mean': np.mean(transforms_np),
-                'std': np.std(transforms_np),
-                'min': np.min(transforms_np),
-                'max': np.max(transforms_np),
-                'shape': transforms_np.shape
-            }
-            conn_stats[conn_name] = stats
-        
-        # 통계 시각화
-        if conn_stats:
-            conn_names = list(conn_stats.keys())
-            metrics = ['mean', 'std', 'min', 'max']
-            
-            fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-            axes = axes.flatten()
-            
-            for i, metric in enumerate(metrics):
-                values = [conn_stats[conn][metric] for conn in conn_names]
-                bars = axes[i].bar(range(len(conn_names)), values)
-                axes[i].set_title(f'Patch Transform {metric.capitalize()}')
-                axes[i].set_xlabel('Connection')
-                axes[i].set_ylabel(metric.capitalize())
-                axes[i].set_xticks(range(len(conn_names)))
-                axes[i].set_xticklabels([name.split('_to_')[0][:8] + '→' + name.split('_to_')[1][:8] 
-                                       for name in conn_names], rotation=45)
-                
-                # 값 표시
-                for bar, value in zip(bars, values):
-                    axes[i].text(bar.get_x() + bar.get_width()/2, bar.get_height(),
-                               f'{value:.3f}', ha='center', va='bottom', fontsize=8)
-            
-            plt.tight_layout()
-            plt.savefig(weight_dir / "patch_transform_stats.png", dpi=100, bbox_inches='tight')
-            plt.close()
-            
-            logger.info("✅ Patch Transform 통계 시각화 완료")
-            
-    except Exception as e:
-        logger.warning(f"⚠️ Patch Transform 통계 시각화 중 오류: {e}")
-
-
-def _generate_processing_info_plots(all_spike_patterns: List[Dict[str, np.ndarray]], vis_dir: Path):
-    """처리 정보 시각화 (새로운 기능)"""
-    try:
-        if not all_spike_patterns:
-            return
-        
-        info_dir = vis_dir / "processing_info"
-        info_dir.mkdir(exist_ok=True)
-        
-        node_names = list(all_spike_patterns[0].keys())
-        num_clks = len(all_spike_patterns)
-        
-        # 1. CLK별 노드 활성도 변화
-        node_activities = {node: [] for node in node_names}
-        
-        for spike_pattern in all_spike_patterns:
-            for node_name in node_names:
-                if node_name in spike_pattern:
-                    activity = np.mean(spike_pattern[node_name])
-                    node_activities[node_name].append(activity)
-                else:
-                    node_activities[node_name].append(0.0)
-        
-        # 활성도 플롯
-        plt.figure(figsize=(12, 6))
-        for node_name, activities in node_activities.items():
-            plt.plot(activities, label=node_name, linewidth=2)
-        
-        plt.xlabel('CLK')
-        plt.ylabel('Average Spike Rate')
-        plt.title('Node Activity Over Time')
-        plt.legend()
-        plt.grid(True, alpha=0.3)
         plt.tight_layout()
-        plt.savefig(info_dir / "node_activity_timeline.png", dpi=100, bbox_inches='tight')
-        plt.close()
+        return fig
+    
+    def _create_source_fixed_view(
+        self,
+        gates: np.ndarray,
+        transforms: np.ndarray,
+        patches_per_row: int,
+        patches_per_col: int,
+        conn_name: str
+    ) -> plt.Figure:
+        """Source(0,0) 고정 뷰 생성"""
+        full_view = np.zeros((patches_per_row * 4, patches_per_col * 4))
         
-        # 2. 총 스파이크 수 변화
-        total_spikes = []
-        for spike_pattern in all_spike_patterns:
-            total = sum(np.sum(spikes) for spikes in spike_pattern.values())
-            total_spikes.append(total)
+        for patch_idx in range(len(gates)):
+            patch_row = patch_idx // patches_per_row
+            patch_col = patch_idx % patches_per_row
+            
+            # source(0,0)에서 16개 target으로의 연결
+            source_00_connections = transforms[patch_idx][:, 0]
+            weighted_connections = source_00_connections * gates[patch_idx]
+            connection_pattern = weighted_connections.reshape(4, 4)
+            
+            # 전체 뷰에 배치
+            start_row = patch_row * 4
+            end_row = start_row + 4
+            start_col = patch_col * 4
+            end_col = start_col + 4
+            
+            full_view[start_row:end_row, start_col:end_col] = connection_pattern
         
-        plt.figure(figsize=(10, 5))
-        plt.plot(total_spikes, linewidth=2, color='red')
-        plt.xlabel('CLK')
-        plt.ylabel('Total Spikes')
-        plt.title('Total Spike Count Over Time')
-        plt.grid(True, alpha=0.3)
+        figsize = (10 * self.figsize_scale, 10 * self.figsize_scale)
+        fig, ax = plt.subplots(figsize=figsize)
+        im = ax.imshow(full_view, cmap='RdBu_r', aspect='equal')
+        
+        ax.set_title(f'{conn_name} - Source(0,0) Fixed View\nConnections from each patch source(0,0) to targets')
+        ax.set_xlabel('Target Position (Global)')
+        ax.set_ylabel('Target Position (Global)')
+        
+        plt.colorbar(im, ax=ax, label='Connection Strength')
+        
+        # 패치 경계선
+        for i in range(1, patches_per_row):
+            ax.axhline(i * 4 - 0.5, color='black', linewidth=1, alpha=0.8)
+        for j in range(1, patches_per_col):
+            ax.axvline(j * 4 - 0.5, color='black', linewidth=1, alpha=0.8)
+        
         plt.tight_layout()
-        plt.savefig(info_dir / "total_spikes_timeline.png", dpi=100, bbox_inches='tight')
-        plt.close()
+        return fig
+    
+    def _create_target_fixed_view(
+        self,
+        gates: np.ndarray,
+        transforms: np.ndarray,
+        patches_per_row: int,
+        patches_per_col: int,
+        conn_name: str
+    ) -> plt.Figure:
+        """Target(0,0) 고정 뷰 생성"""
+        full_view = np.zeros((patches_per_row * 4, patches_per_col * 4))
         
-        logger.info(f"✅ 처리 정보 시각화 저장: {info_dir}")
+        for patch_idx in range(len(gates)):
+            patch_row = patch_idx // patches_per_row
+            patch_col = patch_idx % patches_per_row
+            
+            # target(0,0)이 16개 source로부터 받는 연결
+            target_00_connections = transforms[patch_idx][0, :]
+            weighted_connections = target_00_connections * gates[patch_idx]
+            connection_pattern = weighted_connections.reshape(4, 4)
+            
+            # 전체 뷰에 배치
+            start_row = patch_row * 4
+            end_row = start_row + 4
+            start_col = patch_col * 4
+            end_col = start_col + 4
+            
+            full_view[start_row:end_row, start_col:end_col] = connection_pattern
         
-    except Exception as e:
-        logger.warning(f"⚠️ 처리 정보 시각화 중 오류: {e}")
+        figsize = (10 * self.figsize_scale, 10 * self.figsize_scale)
+        fig, ax = plt.subplots(figsize=figsize)
+        im = ax.imshow(full_view, cmap='RdBu_r', aspect='equal')
+        
+        ax.set_title(f'{conn_name} - Target(0,0) Fixed View\nConnections to each patch target(0,0) from sources')
+        ax.set_xlabel('Source Position (Global)')
+        ax.set_ylabel('Source Position (Global)')
+        
+        plt.colorbar(im, ax=ax, label='Connection Strength')
+        
+        # 패치 경계선
+        for i in range(1, patches_per_row):
+            ax.axhline(i * 4 - 0.5, color='black', linewidth=1, alpha=0.8)
+        for j in range(1, patches_per_col):
+            ax.axvline(j * 4 - 0.5, color='black', linewidth=1, alpha=0.8)
+        
+        plt.tight_layout()
+        return fig
 
 
-def generate_quick_visualization(
-    model, 
-    input_tokens: torch.Tensor, 
-    attention_mask: Optional[torch.Tensor] = None,
-    max_clks: int = 50
-) -> Dict[str, Any]:
-    """
-    빠른 시각화용 함수 - 파일 저장 없이 데이터만 반환
-    
-    Args:
-        model: SCSSystem 모델
-        input_tokens: [B, seq_len] 입력 토큰
-        attention_mask: [B, seq_len] 어텐션 마스크
-        max_clks: 최대 CLK 수
+    def collect_spike_patterns(
+        self,
+        model, 
+        input_tokens: torch.Tensor, 
+        attention_mask: Optional[torch.Tensor] = None,
+        max_clk: int = 200
+    ) -> List[Dict[str, np.ndarray]]:
+        """스파이크 패턴 수집 유틸리티 함수"""
+        model.reset_state(batch_size=1)
+        all_spike_patterns = []
+        max_clk = min(max_clk, model.max_clk)
         
-    Returns:
-        visualization_data: 시각화 데이터 딕셔너리
-    """
-    model.eval()
-    
-    # 첫 번째 샘플만 사용
-    single_input = input_tokens[:1]
-    single_mask = attention_mask[:1] if attention_mask is not None else None
-    
-    with torch.no_grad():
-        spike_patterns = _collect_spike_patterns(model, single_input, single_mask)
+        logger.info(f"스파이크 패턴 수집 시작 (최대 {max_clk} CLK)")
         
-        # 활성도 계산
-        if spike_patterns:
-            node_names = list(spike_patterns[0].keys())
-            activities = {node: [np.mean(pattern.get(node, np.zeros((1,1)))) 
-                               for pattern in spike_patterns] 
-                         for node in node_names}
-        else:
-            activities = {}
-    
-    return {
-        'spike_patterns': spike_patterns,
-        'node_activities': activities,
-        'num_clks_processed': len(spike_patterns)
-    }
+        for clk in range(max_clk):
+            try:
+                current_spikes = model._compute_spikes()
+                external_input = model._get_external_input_at_clk(input_tokens, clk, attention_mask)
+                model._update_states(external_input, current_spikes)
+                final_acc_spikes = current_spikes.get(model.acc_node)
+                
+                # 스파이크 패턴 저장
+                if current_spikes:
+                    spike_pattern = {}
+                    for node_name, spikes in current_spikes.items():
+                        if spikes is not None:
+                            spike_pattern[node_name] = spikes[0].cpu().numpy()
+                    all_spike_patterns.append(spike_pattern)
+                
+                # TimingManager 업데이트
+                model.timing_manager.step(
+                    current_clk=clk,
+                    acc_node_spikes=final_acc_spikes,
+                    training=False,
+                    input_seq_len=input_tokens.shape[1],
+                    target_seq_len=input_tokens.shape[1]
+                )
+                
+                if model.timing_manager.all_ended:
+                    logger.info(f"CLK {clk}에서 처리 완료")
+                    break
+                    
+            except Exception as e:
+                logger.warning(f"CLK {clk} 처리 중 오류: {e}")
+                break
+        
+        logger.info(f"총 {len(all_spike_patterns)}개 CLK 패턴 수집 완료")
+        return all_spike_patterns
+
+
+    def generate_all_visualizations(self, model, test_loader, output_dir: Path):
+        """모든 시각화 생성 및 저장"""
+        try:
+            vis_dir = output_dir / "visualizations"
+            
+            # 첫 번째 배치 사용
+            first_batch = next(iter(test_loader))
+            input_tokens = first_batch['input_tokens'][:1].to(model.device)
+            attention_mask = first_batch.get('attention_mask')
+            if attention_mask is not None:
+                attention_mask = attention_mask[:1].to(model.device)
+            
+            model.eval()
+            with torch.no_grad():
+                # 1. 스파이크 패턴 수집
+                all_spike_patterns = self.collect_spike_patterns(model, input_tokens, attention_mask)
+                
+                if not all_spike_patterns:
+                    logger.warning("수집된 스파이크 패턴이 없습니다")
+                    return
+                
+                node_names = list(all_spike_patterns[0].keys())
+                
+                # 2. 스파이크 패턴 이미지들 저장
+                spike_dir = vis_dir / "spike_patterns"
+                figures_with_clk = self.create_spike_pattern_images_batch(all_spike_patterns, node_names)
+                for fig, clk in figures_with_clk:
+                    self.save_figure(fig, spike_dir / f"clk_{clk:03d}.png")
+
+                # 3. 스파이크 애니메이션 저장
+                try:
+                    anim = self.create_spike_animation(all_spike_patterns, node_names)
+                    self.save_animation(anim, vis_dir / "spike_animation_complete.gif")
+                except Exception as e:
+                    logger.warning(f"애니메이션 생성 실패: {e}")
+                
+                # 4. 가중치 히트맵 저장
+                weight_fig = self.create_weight_heatmaps_figure(model, node_names)
+                self.save_figure(weight_fig, vis_dir / "weight_heatmaps" / "node_influence_weights.png")
+
+                # 5. 처리 정보 시각화 저장
+                activity_fig, spike_count_fig = self.create_processing_info_figures(all_spike_patterns)
+                info_dir = vis_dir / "processing_info"
+                self.save_figure(activity_fig, info_dir / "node_activity_timeline.png")
+                self.save_figure(spike_count_fig, info_dir / "total_spikes_timeline.png")
+                
+                # 6. Axonal 프루닝 시각화 저장
+                if hasattr(model, '_get_axonal_parameters'):
+                    axonal_data = model._get_axonal_parameters()
+                    axonal_dir = vis_dir / "axonal_pruning"
+                    
+                    for conn_data in axonal_data:
+                        gates = conn_data['gates']
+                        transforms = conn_data['transforms']
+                        conn_name = conn_data['connection_name']
+
+                        gate_fig, source_fig, target_fig = self.create_axonal_pruning_figures(gates, transforms, conn_name)
+
+                        self.save_figure(gate_fig, axonal_dir / f"{conn_name}_gates.png")
+                        self.save_figure(source_fig, axonal_dir / f"{conn_name}_source_fixed.png")
+                        self.save_figure(target_fig, axonal_dir / f"{conn_name}_target_fixed.png")
+
+            logger.info(f"모든 시각화 저장 완료: {vis_dir}")
+            
+        except Exception as e:
+            logger.error(f"시각화 생성 중 오류: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())

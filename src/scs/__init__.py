@@ -22,7 +22,7 @@ from .training import (
 from .evaluation import (
     SCSMetrics, SCSOptimizer, KHopBackpropagation, 
     AdaptiveLearningRateScheduler, OptimizerFactory,
-    generate_visualizations, analyze_io_pipeline
+    SCSVisualizer, analyze_io_pipeline
 )
 
 # Data 모듈
@@ -67,7 +67,7 @@ __all__ = [
     # 평가 및 메트릭 시스템
     "SCSMetrics", "SCSOptimizer", "KHopBackpropagation", 
     "AdaptiveLearningRateScheduler", "OptimizerFactory",
-    "generate_visualizations", "analyze_io_pipeline",
+    "SCSVisualizer", "analyze_io_pipeline",
     
     # 데이터 처리
     "SCSTokenizer", "BaseDataset", "LogiQADataset", "bAbIDataset", "MultiDataset", 

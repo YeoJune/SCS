@@ -12,7 +12,7 @@ from .metrics import (
     AdaptiveLearningRateScheduler,
     OptimizerFactory
 )
-from .visualizer import generate_visualizations
+from .visualizer import SCSVisualizer
 from .analyzer import analyze_io_pipeline
 
 __all__ = [
@@ -24,6 +24,6 @@ __all__ = [
     "OptimizerFactory",
     
     # 시각화 및 분석
-    "generate_visualizations",
+    "SCSVisualizer",
     "analyze_io_pipeline"
 ]

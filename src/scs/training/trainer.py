@@ -333,18 +333,17 @@ class SCSTrainer:
         if self.tb_logger:
             self.tb_logger.log_training_step(batch_metrics, loss.item())
 
-        # Axonal 히트맵 로깅 (설정 기반 주기적)
+        # Axonal 프루닝 히트맵 로깅
         if (self.tb_logger and 
-            hasattr(self.tb_logger, 'log_axonal_heatmaps') and
+            hasattr(self.tb_logger, 'log_axonal_pruning_progress') and
             self.tb_logger.should_log("axonal_heatmaps")):
             try:
                 if 'axonal_parameters' in processing_info:
-                    self.tb_logger.log_axonal_heatmaps(
+                    self.tb_logger.log_axonal_pruning_progress(
                         processing_info['axonal_parameters'], 
                         step=self.tb_logger.global_step
                     )
             except Exception as e:
-                # 로깅 실패는 무시하고 계속 진행
                 pass
 
         return loss.item(), batch_metrics
@@ -389,17 +388,24 @@ class SCSTrainer:
                     batch_loss = torch.tensor(float('inf'))
                     batch_accuracy = 0.0
 
-                # 검증 중 Axonal 히트맵 로깅 (첫 번째 배치만)
-                if (batch_idx == 0 and self.tb_logger and 
-                    hasattr(self.tb_logger, 'log_axonal_heatmaps')):
+                # 검증 중 다양한 시각화 로깅 (첫 번째 배치만)
+                if batch_idx == 0 and self.tb_logger:
                     try:
+                        # Axonal 프루닝 시각화
                         if 'axonal_parameters' in processing_info:
-                            self.tb_logger.log_axonal_heatmaps(
+                            self.tb_logger.log_axonal_pruning_progress(
                                 processing_info['axonal_parameters'], 
                                 step=self.current_epoch
                             )
+                        
+                        # 가중치 히트맵 (노드명이 있을 때만)
+                        if hasattr(self.model, 'nodes'):
+                            node_names = list(self.model.nodes.keys())
+                            self.tb_logger.log_weight_heatmaps(
+                                self.model, node_names, step=self.current_epoch
+                            )
+                            
                     except Exception as e:
-                        # 로깅 실패는 무시하고 계속 진행
                         pass
                     
                 total_loss += batch_loss.item()

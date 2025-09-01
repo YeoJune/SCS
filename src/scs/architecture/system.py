@@ -247,17 +247,6 @@ class SCSSystem(nn.Module):
             self._update_states(external_input, current_spikes)
             final_acc_spikes = current_spikes.get(self.acc_node)
             
-            # TensorBoard 스파이크 패턴 로깅 (새로 추가)
-            if (tensorboard_logger and 
-                clk > 0 and 
-                hasattr(tensorboard_logger, 'should_log') and
-                tensorboard_logger.should_log("spikes")):
-                try:
-                    tensorboard_logger.log_spike_patterns(current_spikes, clk)
-                except Exception as e:
-                    # 로깅 실패는 무시하고 계속 진행
-                    pass
-            
             # Phase 2: TimingManager 업데이트 (generated_length 증가)
             self.timing_manager.step(
                 current_clk=clk,

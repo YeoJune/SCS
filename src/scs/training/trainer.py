@@ -333,9 +333,7 @@ class SCSTrainer:
         if self.tb_logger:
             self.tb_logger.log_training_step(batch_metrics, loss.item())
 
-            # Axonal 프루닝 히트맵 로깅
-            if (hasattr(self.tb_logger, 'log_axonal_heatmaps') and
-                self.tb_logger.should_log("axonal_heatmaps")):
+            if (self.tb_logger.should_log("axonal_heatmaps")):
                 try:
                     if 'axonal_parameters' in processing_info:
                         self.tb_logger.log_axonal_heatmaps(
@@ -344,8 +342,7 @@ class SCSTrainer:
                         )
                 except Exception as e:
                     pass
-            if (hasattr(self.tb_logger, 'log_weight_heatmaps') and
-                self.tb_logger.should_log("weight_heatmaps")):
+            if (self.tb_logger.should_log("weight_heatmaps")):
                 try:
                     if 'weight_parameters' in processing_info:
                         self.tb_logger.log_weight_heatmaps(

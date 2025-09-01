@@ -282,7 +282,11 @@ class SCSVisualizer:
             
             full_view[start_row:end_row, start_col:end_col] = connection_pattern
         
-        figsize = (10 * self.figsize_scale, 10 * self.figsize_scale)
+        # 동적 figure 크기 계산 (데이터 크기에 비례)
+        aspect_ratio = full_view.shape[1] / full_view.shape[0]
+        base_size = 8  # 기본 크기
+        figsize = (base_size * aspect_ratio * self.figsize_scale, base_size * self.figsize_scale)
+        
         fig, ax = plt.subplots(figsize=figsize)
         im = ax.imshow(full_view, cmap='RdBu_r', aspect='equal')
         
@@ -292,11 +296,11 @@ class SCSVisualizer:
         
         plt.colorbar(im, ax=ax, label='Connection Strength')
         
-        # 패치 경계선
+        # 동적 패치 경계선 (target_grid_size 기반)
         for i in range(1, patches_per_row):
-            ax.axhline(i * 4 - 0.5, color='black', linewidth=1, alpha=0.8)
+            ax.axhline(i * target_grid_size - 0.5, color='black', linewidth=1, alpha=0.8)
         for j in range(1, patches_per_col):
-            ax.axvline(j * 4 - 0.5, color='black', linewidth=1, alpha=0.8)
+            ax.axvline(j * target_grid_size - 0.5, color='black', linewidth=1, alpha=0.8)
         
         plt.tight_layout()
         return fig
@@ -335,7 +339,11 @@ class SCSVisualizer:
             
             full_view[start_row:end_row, start_col:end_col] = connection_pattern
         
-        figsize = (10 * self.figsize_scale, 10 * self.figsize_scale)
+        # 동적 figure 크기 계산 (데이터 크기에 비례)
+        aspect_ratio = full_view.shape[1] / full_view.shape[0]
+        base_size = 8  # 기본 크기
+        figsize = (base_size * aspect_ratio * self.figsize_scale, base_size * self.figsize_scale)
+        
         fig, ax = plt.subplots(figsize=figsize)
         im = ax.imshow(full_view, cmap='RdBu_r', aspect='equal')
         
@@ -345,11 +353,11 @@ class SCSVisualizer:
         
         plt.colorbar(im, ax=ax, label='Connection Strength')
         
-        # 패치 경계선
+        # 동적 패치 경계선 (source_grid_size 기반)
         for i in range(1, patches_per_row):
-            ax.axhline(i * 4 - 0.5, color='black', linewidth=1, alpha=0.8)
+            ax.axhline(i * source_grid_size - 0.5, color='black', linewidth=1, alpha=0.8)
         for j in range(1, patches_per_col):
-            ax.axvline(j * 4 - 0.5, color='black', linewidth=1, alpha=0.8)
+            ax.axvline(j * source_grid_size - 0.5, color='black', linewidth=1, alpha=0.8)
         
         plt.tight_layout()
         return fig

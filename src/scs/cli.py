@@ -293,7 +293,7 @@ def train_mode(args: argparse.Namespace):
         # 8. 시각화 및 분석 (evaluation 패키지 사용)
         logger.info("🎨 시각화 생성 중...")
         visualizer = SCSVisualizer()
-        visualizer.generate_visualizations(model, test_loader, experiment_dir)
+        visualizer.generate_all_visualizations(model, test_loader, experiment_dir)
 
         logger.info("🔬 IO 파이프라인 분석 중...")
         analyze_io_pipeline(model, test_loader, experiment_dir, device)
@@ -399,8 +399,9 @@ def evaluate_mode(args: argparse.Namespace):
         
         # 7. 시각화 및 분석 (evaluation 패키지 사용)
         logger.info("🎨 시각화 생성 중...")
-        generate_visualizations(model, test_loader, experiment_dir)
-        
+        visualizer = SCSVisualizer()
+        visualizer.generate_visualizations(model, test_loader, experiment_dir)
+
         logger.info("🔬 IO 파이프라인 분석 중...")
         analyze_io_pipeline(model, test_loader, experiment_dir, device)
 

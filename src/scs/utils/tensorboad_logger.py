@@ -41,7 +41,7 @@ class SCSTensorBoardLogger:
             'scalars': 1,
             'histograms': 100,
             'axonal_heatmaps': 200,
-            'weight_heatmaps': 500,
+            'weight_heatmaps': 200,
             'processing_info': 100
         })
         self.max_images_per_batch = self.config.get('max_images_per_batch', 4)
@@ -125,7 +125,7 @@ class SCSTensorBoardLogger:
                 if param.grad is not None:
                     self.writer.add_histogram(f"Gradients{suffix}/{name}", param.grad.detach().cpu(), self.epoch)
     
-    def log_weight_heatmaps(self, model, node_names: List[str], step: Optional[int] = None):
+    def log_weight_heatmaps(self, model, step: Optional[int] = None):
         """노드 가중치 히트맵 로깅"""
         if not self.should_log("weight_heatmaps"):
             return
@@ -133,6 +133,7 @@ class SCSTensorBoardLogger:
         step = step if step is not None else self.epoch
         
         try:
+            node_names = list(model.nodes.keys())
             weight_fig = self.visualizer.create_weight_heatmaps_figure(model, node_names)
             self.writer.add_figure('Weight_Heatmaps/Node_Influences', weight_fig, step)
             plt.close(weight_fig)

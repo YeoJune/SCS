@@ -7,10 +7,10 @@ axonal_connections:
     - source: "IN"
       target: "PASS"
       patch_size: 2
-      patch_weight_scale: 1.0
+      patch_weight_scale: .5
       inner_weight_scale: 1.0
     - source: "PASS"
       target: "OUT"
       patch_size: 2
-      patch_weight_scale: 1.0
+      patch_weight_scale: .5
       inner_weight_scale: 1.0

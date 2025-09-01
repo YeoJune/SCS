@@ -1,6 +1,0 @@
-# === 기본 설정 상속 ===
-defaults:
-  - babi
-
-spike_dynamics:
-  surrogate_beta: 25.0

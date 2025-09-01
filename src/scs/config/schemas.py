@@ -195,8 +195,8 @@ class TensorBoardConfig(BaseModel):
         "scalars": 1,       # 매 배치
         "histograms": 100,  # 100배치마다
         "images": 500,      # 500배치마다
-        "spikes": 50,       # 50 CLK마다
-        "log_axonal_heatmaps": 200  # 200배치마다
+        "axonal_heatmaps": 200,  # 200배치마다
+        "weight_heatmaps": 200
     }, description="로깅 간격 설정")
     auto_launch: bool = Field(default=False, description="TensorBoard 서버 자동 시작")
     port: int = Field(default=6006, description="TensorBoard 서버 포트")

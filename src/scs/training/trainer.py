@@ -333,18 +333,27 @@ class SCSTrainer:
         if self.tb_logger:
             self.tb_logger.log_training_step(batch_metrics, loss.item())
 
-        # Axonal 프루닝 히트맵 로깅
-        if (self.tb_logger and 
-            hasattr(self.tb_logger, 'log_axonal_pruning_progress') and
-            self.tb_logger.should_log("axonal_heatmaps")):
-            try:
-                if 'axonal_parameters' in processing_info:
-                    self.tb_logger.log_axonal_pruning_progress(
-                        processing_info['axonal_parameters'], 
-                        step=self.tb_logger.global_step
-                    )
-            except Exception as e:
-                pass
+            # Axonal 프루닝 히트맵 로깅
+            if (hasattr(self.tb_logger, 'log_axonal_heatmaps') and
+                self.tb_logger.should_log("axonal_heatmaps")):
+                try:
+                    if 'axonal_parameters' in processing_info:
+                        self.tb_logger.log_axonal_heatmaps(
+                            processing_info['axonal_parameters'], 
+                            step=self.tb_logger.global_step
+                        )
+                except Exception as e:
+                    pass
+            if (hasattr(self.tb_logger, 'log_weight_heatmaps') and
+                self.tb_logger.should_log("weight_heatmaps")):
+                try:
+                    if 'weight_parameters' in processing_info:
+                        self.tb_logger.log_weight_heatmaps(
+                            processing_info['weight_parameters'], 
+                            step=self.tb_logger.global_step
+                        )
+                except Exception as e:
+                    pass
 
         return loss.item(), batch_metrics
 
@@ -391,9 +400,9 @@ class SCSTrainer:
                 # 검증 중 다양한 시각화 로깅 (첫 번째 배치만)
                 if batch_idx == 0 and self.tb_logger:
                     try:
-                        # Axonal 프루닝 시각화
+                        # Axonal 히트맵 시각화
                         if 'axonal_parameters' in processing_info:
-                            self.tb_logger.log_axonal_pruning_progress(
+                            self.tb_logger.log_axonal_heatmaps(
                                 processing_info['axonal_parameters'], 
                                 step=self.current_epoch
                             )

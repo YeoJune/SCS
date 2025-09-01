@@ -84,7 +84,7 @@ class SCSTensorBoardLogger:
         elif log_type == "axonal_heatmaps":
             return self.batch_counter % self.log_interval.get("axonal_heatmaps", 200) == 0
         elif log_type == "weight_heatmaps":
-            return self.batch_counter % self.log_interval.get("weight_heatmaps", 500) == 0
+            return self.batch_counter % self.log_interval.get("weight_heatmaps", 200) == 0
         elif log_type == "processing_info":
             return self.batch_counter % self.log_interval.get("processing_info", 100) == 0
         return False
@@ -158,29 +158,6 @@ class SCSTensorBoardLogger:
         except Exception as e:
             warnings.warn(f"처리 정보 시각화 로깅 중 오류: {e}")
     
-    def log_processing_info(self, processing_info: Dict[str, Any]):
-        """처리 정보 스칼라 메트릭 로깅"""
-        # 처리 CLK 수
-        if 'processing_clk' in processing_info:
-            self.writer.add_scalar("Processing/CLK_Count", processing_info['processing_clk'], self.epoch)
-        
-        # 수렴 여부
-        if 'convergence_achieved' in processing_info:
-            convergence = 1.0 if processing_info['convergence_achieved'] else 0.0
-            self.writer.add_scalar("Processing/Convergence", convergence, self.epoch)
-        
-        # 생성된 토큰 수
-        if 'tokens_generated' in processing_info:
-            self.writer.add_scalar("Processing/Tokens_Generated", processing_info['tokens_generated'], self.epoch)
-        
-        # ACC 활동도
-        if 'final_acc_activity' in processing_info:
-            self.writer.add_scalar("Processing/ACC_Activity", processing_info['final_acc_activity'], self.epoch)
-        
-        # 배치 크기
-        if 'batch_size' in processing_info:
-            self.writer.add_scalar("Processing/Batch_Size", processing_info['batch_size'], self.epoch)
-    
     def log_loss_components(self, loss_components: Dict[str, float]):
         """손실 구성요소 로깅"""
         for component, value in loss_components.items():
@@ -188,46 +165,6 @@ class SCSTensorBoardLogger:
                 self.writer.add_scalar(f"Loss_Components/{component}", value, self.global_step)
             elif isinstance(value, torch.Tensor) and value.numel() == 1:
                 self.writer.add_scalar(f"Loss_Components/{component}", value.item(), self.global_step)
-    
-    def log_axonal_pruning_progress(self, axonal_data: List[Dict[str, Any]], step: Optional[int] = None):
-        """축삭 프루닝 진행 상황을 TensorBoard에 로깅"""
-        if not axonal_data or not self.should_log("axonal_heatmaps"):
-            return
-        
-        step = step if step is not None else self.epoch
-        
-        try:
-            for conn_data in axonal_data:
-                gates = conn_data['gates']
-                transforms = conn_data['transforms']
-                conn_name = conn_data['connection_name']
-                
-                # 3뷰 시각화 생성
-                gate_fig, source_fig, target_fig = self.visualizer.create_axonal_pruning_figures(
-                    gates, transforms, conn_name
-                )
-                
-                # TensorBoard에 로깅
-                self.writer.add_figure(f'Axonal_Pruning/Gates/{conn_name}', gate_fig, step)
-                self.writer.add_figure(f'Axonal_Pruning/Source_Fixed/{conn_name}', source_fig, step)
-                self.writer.add_figure(f'Axonal_Pruning/Target_Fixed/{conn_name}', target_fig, step)
-                
-                # Figure 메모리 해제
-                plt.close(gate_fig)
-                plt.close(source_fig)
-                plt.close(target_fig)
-                
-        except Exception as e:
-            warnings.warn(f"Axonal 프루닝 시각화 로깅 중 오류: {e}")
-            
-            self.writer.add_figure('Processing_Info/Node_Activities', activity_fig, step)
-            self.writer.add_figure('Processing_Info/Total_Spikes', spike_count_fig, step)
-            
-            plt.close(activity_fig)
-            plt.close(spike_count_fig)
-            
-        except Exception as e:
-            warnings.warn(f"처리 정보 시각화 로깅 중 오류: {e}")
     
     def log_processing_info(self, processing_info: Dict[str, Any]):
         """처리 정보 스칼라 메트릭 로깅"""
@@ -260,11 +197,8 @@ class SCSTensorBoardLogger:
             elif isinstance(value, torch.Tensor) and value.numel() == 1:
                 self.writer.add_scalar(f"Loss_Components/{component}", value.item(), self.global_step)
     
-    def log_axonal_pruning_progress(self, axonal_data: List[Dict[str, Any]], step: Optional[int] = None):
+    def log_axonal_heatmaps(self, axonal_data: List[Dict[str, Any]], step: Optional[int] = None):
         """축삭 프루닝 진행 상황을 TensorBoard에 로깅"""
-        if not axonal_data or not self.should_log("axonal_heatmaps") or self.visualizer is None:
-            return
-        
         step = step if step is not None else self.epoch
         
         try:
@@ -274,14 +208,14 @@ class SCSTensorBoardLogger:
                 conn_name = conn_data['connection_name']
                 
                 # 3뷰 시각화 생성
-                gate_fig, source_fig, target_fig = self.visualizer.create_axonal_pruning_figures(
+                gate_fig, source_fig, target_fig = self.visualizer.create_axonal_figures(
                     gates, transforms, conn_name
                 )
                 
                 # TensorBoard에 로깅
-                self.writer.add_figure(f'Axonal_Pruning/Gates/{conn_name}', gate_fig, step)
-                self.writer.add_figure(f'Axonal_Pruning/Source_Fixed/{conn_name}', source_fig, step)
-                self.writer.add_figure(f'Axonal_Pruning/Target_Fixed/{conn_name}', target_fig, step)
+                self.writer.add_figure(f'Axonal_Heatmaps/Gates/{conn_name}', gate_fig, step)
+                self.writer.add_figure(f'Axonal_Heatmaps/Source_Fixed/{conn_name}', source_fig, step)
+                self.writer.add_figure(f'Axonal_Heatmaps/Target_Fixed/{conn_name}', target_fig, step)
                 
                 # Figure 메모리 해제
                 plt.close(gate_fig)

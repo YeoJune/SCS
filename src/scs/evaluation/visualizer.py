@@ -28,7 +28,7 @@ class SCSVisualizer:
         self.save_dpi = save_dpi
         self.figsize_scale = figsize_scale
     
-    def create_axonal_pruning_figures(
+    def create_axonal_figures(
         self, 
         gates: torch.Tensor, 
         transforms: torch.Tensor, 
@@ -462,14 +462,14 @@ class SCSVisualizer:
                 # 6. Axonal 프루닝 시각화 저장
                 if hasattr(model, '_get_axonal_parameters'):
                     axonal_data = model._get_axonal_parameters()
-                    axonal_dir = vis_dir / "axonal_pruning"
-                    
+                    axonal_dir = vis_dir / "axonal_heatmaps"
+
                     for conn_data in axonal_data:
                         gates = conn_data['gates']
                         transforms = conn_data['transforms']
                         conn_name = conn_data['connection_name']
 
-                        gate_fig, source_fig, target_fig = self.create_axonal_pruning_figures(gates, transforms, conn_name)
+                        gate_fig, source_fig, target_fig = self.create_axonal_figures(gates, transforms, conn_name)
 
                         self.save_figure(gate_fig, axonal_dir / f"{conn_name}_gates.png")
                         self.save_figure(source_fig, axonal_dir / f"{conn_name}_source_fixed.png")

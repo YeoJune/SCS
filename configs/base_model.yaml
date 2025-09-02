@@ -111,13 +111,13 @@ learning:
   guide_weight: 1.0
 
   length_penalty_weight: 0.0
-  orthogonal_reg_weight: 0.0
+  orthogonal_reg_weight: 50e-5
 
-  gate_pruning_weight: 0.0 # 패치 게이트 L1 정규화 가중치
+  gate_pruning_weight: 1e-5 # 패치 게이트 L1 정규화 가중치
   gate_temperature: 0.1 # 패치 게이트 온도
-  inner_pruning_weight: 0.0 # 내부 연결 L1 정규화 가중치
+  inner_pruning_weight: 1e-5 # 내부 연결 L1 정규화 가중치
   inner_temperature: 0.1 # 내부 연결 온도
-  axon_strength_reg_weight: 0.0 # 축삭 연결 강도 정규화 가중치
+  axon_strength_reg_weight: 5e-5 # 축삭 연결 강도 정규화 가중치
 
   # 점진적 커리큘럼 학습
   use_curriculum_learning: false
@@ -134,15 +134,12 @@ learning:
       - "output_interface.transformer_decoder"
       - "output_interface.final_projection"
       - "output_interface.hidden_norm"
-
-      - "output_interface.spatial_compressor"
-      - "input_interface.pattern_mapper"
     unfreeze_schedule: # 에포크별 해제 스케줄
       1000:
         - "output_interface.spatial_compressor"
         - "input_interface.pattern_mapper"
     freeze_schedule:
-      5:
+      0:
         - "output_interface.spatial_compressor"
         - "input_interface.pattern_mapper"
 

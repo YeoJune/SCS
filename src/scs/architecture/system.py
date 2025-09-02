@@ -77,7 +77,7 @@ class AxonalConnections(nn.Module):
             
             inner_transforms = torch.randn(
                 num_patches, target_patch_size, source_patch_size, device=self.device
-            ) * 0.1 + 1.0
+            ) * 0.0 + 1.0
             self.patch_transforms[conn_key] = nn.Parameter(inner_transforms)
     
     def forward(self, node_spikes: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:

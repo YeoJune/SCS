@@ -691,19 +691,21 @@ class SCSTrainer:
 
 
 class GradualUnfreezingScheduler:
-    """점진적 언프리징 스케줄러 - 동결 패턴 기반"""
+    """점진적 언프리징/프리징 스케줄러 - 동결 패턴 기반"""
     
-    def __init__(self, model, frozen_patterns: List[str], unfreeze_schedule: Dict[int, List[str]], logger=None):
+    def __init__(self, model, frozen_patterns: List[str], unfreeze_schedule: Dict[int, List[str]] = None, freeze_schedule: Dict[int, List[str]] = None, logger=None):
         """
         Args:
             model: SCS 모델
             frozen_patterns: 초기에 동결할 파라미터 패턴들
             unfreeze_schedule: {epoch: [patterns]} 형태의 해제 스케줄
+            freeze_schedule: {epoch: [patterns]} 형태의 동결 스케줄
             logger: 로깅 객체
         """
         self.model = model
         self.frozen_patterns = frozen_patterns
-        self.unfreeze_schedule = unfreeze_schedule
+        self.unfreeze_schedule = unfreeze_schedule or {}
+        self.freeze_schedule = freeze_schedule or {}
         self.logger = logger
         self.current_epoch = -1
         self.unfrozen_patterns = set()  # 이미 해제된 패턴들 추적
@@ -758,7 +760,7 @@ class GradualUnfreezingScheduler:
     
     def step(self, epoch: int) -> bool:
         """
-        에포크 진행 시 호출. 새로운 패턴이 해제되면 True 반환
+        에포크 진행 시 호출. 새로운 패턴이 변경되면 True 반환
         
         Args:
             epoch: 현재 에포크
@@ -770,7 +772,23 @@ class GradualUnfreezingScheduler:
             return False
             
         self.current_epoch = epoch
+        optimizer_needs_update = False
         
+        # freeze schedule 처리 (추가된 부분)
+        if epoch in self.freeze_schedule:
+            if self.logger:
+                self.logger.info(f"📅 에포크 {epoch}: 점진적 동결 실행")
+            
+            patterns_to_freeze = self.freeze_schedule[epoch]
+            self._freeze_by_patterns(patterns_to_freeze)
+            
+            # 해제된 패턴에서 제거
+            for pattern in patterns_to_freeze:
+                self.unfrozen_patterns.discard(pattern)
+            
+            optimizer_needs_update = True
+        
+        # unfreeze schedule 처리 (기존 코드)
         if epoch in self.unfreeze_schedule:
             if self.logger:
                 self.logger.info(f"📅 에포크 {epoch}: 점진적 해제 실행")
@@ -779,15 +797,15 @@ class GradualUnfreezingScheduler:
             newly_unfrozen = self._unfreeze_by_patterns(patterns_to_unfreeze)
             
             if newly_unfrozen:
-                # 학습 가능한 파라미터 통계 출력
-                total_params = sum(p.numel() for p in self.model.parameters())
-                trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-                
-                if self.logger:
-                    self.logger.info(f"📊 현재 학습 가능 파라미터: {trainable_params:,}/{total_params:,} "
-                                   f"({100*trainable_params/total_params:.1f}%)")
-                
-                return True  # 옵티마이저 재생성 필요
+                optimizer_needs_update = True
         
-        return False
-    
+        # 상태 변경이 있었다면 통계 출력
+        if optimizer_needs_update:
+            total_params = sum(p.numel() for p in self.model.parameters())
+            trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+            
+            if self.logger:
+                self.logger.info(f"📊 현재 학습 가능 파라미터: {trainable_params:,}/{total_params:,} "
+                               f"({100*trainable_params/total_params:.1f}%)")
+        
+        return optimizer_needs_update

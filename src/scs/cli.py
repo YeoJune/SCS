@@ -143,8 +143,8 @@ def train_mode(args: argparse.Namespace):
             app_config.logging.tensorboard.port = args.tb_port
             app_config.logging.tensorboard.auto_launch = args.tb_launch
             logger.info(f"📊 TensorBoard 활성화: 포트 {args.tb_port}, 자동 시작: {args.tb_launch}")
-        
-        save_config(app_config.dict(), experiment_dir / "config.yaml")
+
+        save_config(app_config.model_dump(), experiment_dir / "config.yaml")
         logger.info("✅ 설정 파일 로딩 및 검증 완료")
 
         # 3. 데이터 로더 생성
@@ -244,7 +244,7 @@ def train_mode(args: argparse.Namespace):
         logger.info("🎯 학습 시작...")
         
         # 점진적 해제 설정
-        unfreezing_config = learning_config.gradual_unfreezing.dict() if learning_config.gradual_unfreezing else None
+        unfreezing_config = learning_config.gradual_unfreezing.model_dump() if learning_config.gradual_unfreezing else None
         
         trainer = SCSTrainer(
             model=model, 

@@ -114,6 +114,7 @@ class GradualUnfreezingConfig(BaseModel):
     enabled: bool = Field(default=False)
     initial_frozen_patterns: List[str] = Field(default_factory=list)
     unfreeze_schedule: Dict[int, List[str]] = Field(default_factory=dict)
+    freeze_schedule: Dict[int, List[str]] = Field(default_factory=dict)
 
 
 class LearningConfig(BaseModel):

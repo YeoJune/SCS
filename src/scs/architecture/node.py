@@ -100,7 +100,7 @@ class SpikeNode(nn.Module):
         spikes = self._surrogate_spike_function(threshold_exceeded)
         
         # 휴지기 마스크 적용 (벡터화: 2차원 element-wise 곱셈)
-        return spikes * not_refractory
+        return spikes #* not_refractory
     
     def update_state(
         self,

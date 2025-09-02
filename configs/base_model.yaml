@@ -104,7 +104,7 @@ learning:
   sync_target_end: 0.0 # 종료 시점 동기화 목표
 
   use_temporal_weighting: true
-  initial_temporal_weight: 2.0 # 초기 CLK에 높은 중요도
+  initial_temporal_weight: 100.0 # 초기 CLK에 높은 중요도
   final_temporal_weight: 1.0 # 나중 CLK에 기본 중요도
 
   guide_sep_token_id: 32057

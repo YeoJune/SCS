@@ -129,6 +129,7 @@ learning:
     initial_frozen_patterns: # 시작할 때 동결할 파라미터들
       - "input_interface.token_embedding"
       - "input_interface.transformer_encoder"
+      - "input_interface.pattern_mapper"
 
       - "output_interface.token_embedding"
       - "output_interface.transformer_decoder"
@@ -139,7 +140,7 @@ learning:
         - "output_interface.spatial_compressor"
         - "input_interface.pattern_mapper"
     freeze_schedule:
-      0:
+      1000:
         - "output_interface.spatial_compressor"
         - "input_interface.pattern_mapper"
 

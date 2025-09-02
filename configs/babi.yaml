@@ -41,8 +41,13 @@ brain_regions:
 axonal_connections:
   connections:
     - source: "IN"
+      target: "PASS"
+      patch_size: 2
+      patch_weight_scale: 1.0
+      inner_weight_scale: 1.0
+    - source: "PASS"
       target: "OUT"
-      patch_size: 1
+      patch_size: 2
       patch_weight_scale: 1.0
       inner_weight_scale: 1.0
 
@@ -55,7 +60,7 @@ task:
 
 # === 학습 설정 오버라이드 ===
 learning:
-  epochs: 1
+  epochs: 31
   learning_rate: 5e-4
   eta_min: 1e-4
   max_clk_training: 128
@@ -72,9 +77,9 @@ learning:
 
 timing_manager:
   train_fixed_ref: "start"
-  train_fixed_offset: 2
+  train_fixed_offset: 3
   evaluate_fixed_ref: "start"
-  evaluate_fixed_offset: 2
+  evaluate_fixed_offset: 3
   sync_ema_alpha: 0.1 # EMA 필터링 강도
   sync_threshold_start: 0.3 # 시작 임계값
   sync_threshold_end: 0.1 # 종료 임계값

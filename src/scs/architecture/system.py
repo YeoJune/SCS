@@ -68,7 +68,7 @@ class AxonalConnections(nn.Module):
             target_patch_w = target_w // source_patches_w
             
             # 패치별 게이트 가중치 [num_patches]
-            patch_gates = torch.randn(num_patches, device=self.device) * 0.1 + 1.0
+            patch_gates = torch.randn(num_patches, device=self.device) * 0.0 + 1.0
             self.patch_gates[conn_key] = nn.Parameter(patch_gates.abs())
             
             # 패치별 내부 변환 행렬 [num_patches, target_patch_size, source_patch_size]

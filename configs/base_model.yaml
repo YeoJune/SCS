@@ -111,7 +111,7 @@ learning:
   guide_weight: 1.0
 
   length_penalty_weight: 0.0
-  orthogonal_reg_weight: 50e-5
+  orthogonal_reg_weight: 50.0
 
   gate_pruning_weight: 1e-5 # 패치 게이트 L1 정규화 가중치
   gate_temperature: 0.1 # 패치 게이트 온도

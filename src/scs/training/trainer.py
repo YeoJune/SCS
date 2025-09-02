@@ -46,10 +46,13 @@ class SCSTrainer:
         if unfreezing_config and unfreezing_config.get('enabled', False):
             frozen_patterns = unfreezing_config.get('initial_frozen_patterns', [])
             unfreeze_schedule = unfreezing_config.get('unfreeze_schedule', {})
+            freeze_schedule = unfreezing_config.get('freeze_schedule', {})
+
             self.unfreezing_scheduler = GradualUnfreezingScheduler(
                 model=self.model,
                 frozen_patterns=frozen_patterns,
                 unfreeze_schedule=unfreeze_schedule,
+                freeze_schedule=freeze_schedule,
                 logger=self.logger
             )
         

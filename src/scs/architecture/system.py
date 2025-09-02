@@ -228,7 +228,7 @@ class SCSSystem(nn.Module):
                 input_tokens, clk, attention_mask
             )
             self._update_states(external_input, pure_spikes, spikes_with_grad)
-            final_acc_spikes = pure_spikes.get(self.acc_node) # 순전파 값이므로 pure_spikes 사용
+            final_acc_spikes = spikes_with_grad.get(self.acc_node) # 순전파 값이므로 pure_spikes 사용
             
             # Phase 2: TimingManager 업데이트
             self.timing_manager.step(
@@ -249,8 +249,7 @@ class SCSSystem(nn.Module):
                     max_len_for_decoder = min(max_len_for_decoder, self.decoder_window_size)
                     decoder_batch = self.decoder_sequences[:, :max_len_for_decoder]
                     
-                    # 로짓 생성 시에는 순전파 값이므로 pure_spikes 사용
-                    logits = self._generate_logits(pure_spikes, decoder_batch)
+                    logits = self._generate_logits(spikes_with_grad, decoder_batch)
                     
                     self._update_outputs_and_decoder(
                         logits, all_logits, self.decoder_sequences,
@@ -483,7 +482,7 @@ class SCSSystem(nn.Module):
             influence = self.nodes[node_name].influence_strength
             # 지역 연결은 순전파 값이므로 pure_spikes를 사용해도 무방합니다.
             internal_input = self.local_connections[node_name](
-                pure_spikes[node_name] * influence
+                spikes_with_grad[node_name] * influence
             )
             
             axonal_input = axonal_inputs.get(node_name)

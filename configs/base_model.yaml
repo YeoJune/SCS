@@ -139,7 +139,7 @@ learning:
         - "output_interface.spatial_compressor"
         - "input_interface.pattern_mapper"
     freeze_schedule:
-      1000:
+      0:
         - "output_interface.spatial_compressor"
         - "input_interface.pattern_mapper"
 

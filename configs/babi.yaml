@@ -60,7 +60,7 @@ task:
 
 # === 학습 설정 오버라이드 ===
 learning:
-  epochs: 151
+  epochs: 51
   learning_rate: 5e-4
   eta_min: 1e-4
   max_clk_training: 128
@@ -73,7 +73,11 @@ learning:
   # 점진적 커리큘럼 학습
   use_curriculum_learning: true
   curriculum_schedule:
-    0: 20
+    0: 12
+    10: 17
+    20: 22
+    30: 27
+    40: 32
 
 timing_manager:
   train_fixed_ref: "start"

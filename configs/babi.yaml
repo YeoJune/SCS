@@ -68,7 +68,7 @@ learning:
   # 점진적 커리큘럼 학습
   use_curriculum_learning: true
   curriculum_schedule:
-    0: 12
+    0: 50
 
 timing_manager:
   train_fixed_ref: "start"

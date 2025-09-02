@@ -71,7 +71,7 @@ learning:
   early_stopping_patience: 100
 
   # 점진적 커리큘럼 학습
-  use_curriculum_learning: false
+  use_curriculum_learning: true
   curriculum_schedule:
     0: 20
 

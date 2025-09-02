@@ -276,8 +276,10 @@ class LocalConnectivity(nn.Module):
         weights = torch.exp(-distances / self.distance_tau)
         
         # 학습 가능한 파라미터로 등록
-        self.distance_weights = nn.Parameter(weights)
+        #self.distance_weights = nn.Parameter(weights)
         
+        self.distance_weights = weights
+
     def _precompute_shift_patterns(self):
         """거리별 shift 패턴을 미리 계산하여 저장"""
         self.shift_patterns = {}

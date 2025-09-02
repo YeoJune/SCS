@@ -194,21 +194,6 @@ class SCSSystem(nn.Module):
     ) -> Dict[str, Any]:
         """
         완전한 시퀀스 처리: CLK 루프를 내부에서 관리
-        
-        Args:
-            input_tokens: [B, input_seq_len] 입력 토큰들
-            target_tokens: [B, target_seq_len] 타겟 토큰들 (학습시에만)
-            attention_mask: [B, input_seq_len] 어텐션 마스크
-            training: 학습 모드 여부
-            scheduled_sampling_prob: Teacher forcing 확률 (1.0 = 항상 teacher forcing)
-            max_output_length: 최대 출력 길이 (추론시)
-            tensorboard_logger: TensorBoard 로거 (선택적)
-            
-        Returns:
-            Dict containing:
-                - output_logits: [B, output_seq_len, vocab_size] 생성된 로짓들
-                - generated_tokens: [B, output_seq_len] 생성된 토큰들
-                - processing_info: 처리 정보 딕셔너리
         """
         batch_size = input_tokens.shape[0]
         input_seq_len = input_tokens.shape[1]
@@ -230,22 +215,22 @@ class SCSSystem(nn.Module):
             device=self.device
         )
         
-        # CLK 루프 - 순서 수정
+        # CLK 루프
         final_clk = 0
         final_acc_spikes = None
         
         for clk in range(self.max_clk):
             final_clk = clk
             
-            # Phase 1: 스파이크 계산 및 상태 업데이트
-            current_spikes = self._compute_spikes()
+            # Phase 1: 스파이크 계산 및 상태 업데이트 (수정됨)
+            pure_spikes, spikes_with_grad = self._compute_spikes()
             external_input = self._get_external_input_at_clk(
                 input_tokens, clk, attention_mask
             )
-            self._update_states(external_input, current_spikes)
-            final_acc_spikes = current_spikes.get(self.acc_node)
+            self._update_states(external_input, pure_spikes, spikes_with_grad)
+            final_acc_spikes = pure_spikes.get(self.acc_node) # 순전파 값이므로 pure_spikes 사용
             
-            # Phase 2: TimingManager 업데이트 (generated_length 증가)
+            # Phase 2: TimingManager 업데이트
             self.timing_manager.step(
                 current_clk=clk,
                 acc_node_spikes=final_acc_spikes,
@@ -254,19 +239,19 @@ class SCSSystem(nn.Module):
                 target_seq_len=target_seq_len
             )
             
-            # Phase 3: 출력 생성 및 저장 (TimingManager 업데이트 후)
+            # Phase 3: 출력 생성 및 저장
             active_mask = self.timing_manager.get_active_mask()
             if active_mask.any():
-                # 현재 generated_length를 기준으로 로짓 생성
                 current_generated_length = self.timing_manager.generated_length
                 max_len_for_decoder = current_generated_length.max().item()
                 
                 if max_len_for_decoder > 0:
                     max_len_for_decoder = min(max_len_for_decoder, self.decoder_window_size)
                     decoder_batch = self.decoder_sequences[:, :max_len_for_decoder]
-                    logits = self._generate_logits(current_spikes, decoder_batch)
                     
-                    # 로짓 저장 및 디코더 업데이트
+                    # 로짓 생성 시에는 순전파 값이므로 pure_spikes 사용
+                    logits = self._generate_logits(pure_spikes, decoder_batch)
+                    
                     self._update_outputs_and_decoder(
                         logits, all_logits, self.decoder_sequences,
                         target_tokens, training, scheduled_sampling_prob
@@ -300,19 +285,17 @@ class SCSSystem(nn.Module):
             "orthogonal_reg_loss": self._get_orthogonal_regularization()
         }
         
-        # 처리 정보 로깅 (새로 추가)
         if tensorboard_logger and hasattr(tensorboard_logger, 'log_processing_info'):
             try:
                 tensorboard_logger.log_processing_info(processing_info)
             except Exception as e:
-                # 로깅 실패는 무시
                 pass
         
         return {
             'output_logits': output_logits,
             'generated_tokens': generated_tokens,
             'processing_info': processing_info,
-            'decoder_sequences': self.decoder_sequences  # 디버깅용
+            'decoder_sequences': self.decoder_sequences
         }
     
     def _update_outputs_and_decoder(
@@ -467,36 +450,43 @@ class SCSSystem(nn.Module):
         
         return None
     
-    def _compute_spikes(self) -> Dict[str, torch.Tensor]:
-        """현재 막전위 기준 스파이크 계산"""
-        current_spikes = {}
+    def _compute_spikes(self) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
+        """
+        순전파용(pure) 스파이크와 역전파용(with_grad) 스파이크를 분리하여 계산합니다.
+        
+        Returns:
+            Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]: 
+            (pure_spikes_for_forward, spikes_for_backward)
+        """
+        pure_spikes_for_forward = {}
+        spikes_for_backward = {}
         for node_name, node in self.nodes.items():
-            node.compute_spikes() # 내부 계산
-            with torch.no_grad():
-                threshold_exceeded = node.membrane_potential - node.spike_threshold
-                not_refractory = (node.refractory_counter == 0).float()
-                pure_spikes = (threshold_exceeded > 0).float() * not_refractory
-                current_spikes[node_name] = pure_spikes
-        return current_spikes
+            pure_spikes, spikes_with_grad = node.compute_spikes()
+            pure_spikes_for_forward[node_name] = pure_spikes
+            spikes_for_backward[node_name] = spikes_with_grad
+        return pure_spikes_for_forward, spikes_for_backward
     
     def _update_states(
         self,
         external_input: Optional[torch.Tensor],
-        current_spikes: Dict[str, torch.Tensor]
+        pure_spikes: Dict[str, torch.Tensor],
+        spikes_with_grad: Dict[str, torch.Tensor]
     ):
-        """입력 통합 및 상태 업데이트"""
-
-        # 축삭 연결용: 순수한 스파이크
-        axonal_inputs = self.axonal_connections(current_spikes)
+        """
+        입력 통합 및 상태 업데이트.
+        그래디언트 경로 유지를 위해 axonal_connections에는 spikes_with_grad를 사용합니다.
+        """
+        # 축삭 연결(노드 간 연결)에는 반드시 그래디언트 경로가 있는 텐서를 사용합니다.
+        axonal_inputs = self.axonal_connections(spikes_with_grad)
         
         for node_name, node in self.nodes.items():
             influence = self.nodes[node_name].influence_strength
+            # 지역 연결은 순전파 값이므로 pure_spikes를 사용해도 무방합니다.
             internal_input = self.local_connections[node_name](
-                current_spikes[node_name] * influence  # 지역 연결은 influence 적용
+                pure_spikes[node_name] * influence
             )
             
-            axonal_input = axonal_inputs.get(node_name)  # 축삭은 순수 스파이크
-            
+            axonal_input = axonal_inputs.get(node_name)
             node_external_input = external_input if node_name == self.input_node else None
             
             node.update_state(
@@ -505,9 +495,9 @@ class SCSSystem(nn.Module):
                 axonal_input=axonal_input
             )
         
-        # 스파이크 후처리
+        # 스파이크 후처리 (순전파 값이므로 pure_spikes 사용)
         for node_name, node in self.nodes.items():
-            spikes = current_spikes[node_name]
+            spikes = pure_spikes[node_name]
             node.post_spike_update(spikes)
     
     def _generate_logits(self, current_spikes: Dict[str, torch.Tensor], decoder_input_ids: torch.Tensor) -> torch.Tensor:

@@ -82,25 +82,29 @@ class SpikeNode(nn.Module):
             batch_size, self.grid_height, self.grid_width, device=self.device
         )
 
-    def compute_spikes(self) -> torch.Tensor:
+    def compute_spikes(self) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        현재 막전위 기반으로 스파이크 출력 계산 (2차원 격자, 상태 변경 없음)
+        순전파용 pure_spikes와 역전파용 spikes_for_grad를 모두 계산하여 튜플로 반환합니다.
         
-        문서 명세 구현:
-        s_i(t) = H(V_i(t) - θ) * 1[R_i(t) = 0]
-        벡터화: 2차원 격자 전체에 동시 임계값 비교
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: (pure_spikes, spikes_for_grad)
         """
-        # 임계값 초과 계산 (벡터화)
+        # 막전위가 임계값을 초과했는지 계산
         threshold_exceeded = self.membrane_potential - self.spike_threshold
         
-        # 휴지기가 아닌 뉴런 마스크 (벡터화)
+        # 휴지기가 아닌 뉴런 마스크
         not_refractory = (self.refractory_counter == 0).float()
         
-        # Surrogate gradient 적용 (벡터화)
-        spikes = self._surrogate_spike_function(threshold_exceeded)
+        # 1. 순전파에 사용할 깨끗한 0/1 스파이크 (그래디언트 추적 없음)
+        with torch.no_grad():
+            pure_spikes = (threshold_exceeded > 0).float() * not_refractory
+
+        # 2. 역전파 경로를 위한 STE(Straight-Through Estimator) 적용 스파이크
+        # _surrogate_spike_function은 STE가 적용된 텐서를 반환합니다.
+        spikes_with_grad_path = self._surrogate_spike_function(threshold_exceeded)
+        spikes_for_grad = spikes_with_grad_path * not_refractory
         
-        # 휴지기 마스크 적용 (벡터화: 2차원 element-wise 곱셈)
-        return spikes #* not_refractory
+        return pure_spikes, spikes_for_grad
     
     def update_state(
         self,

@@ -134,6 +134,8 @@ learning:
       - "output_interface.transformer_decoder"
       - "output_interface.final_projection"
       - "output_interface.hidden_norm"
+      - "output_interface.spatial_compressor"
+      - "input_interface.pattern_mapper"
     unfreeze_schedule: # 에포크별 해제 스케줄
       1000: # 에포크 1000에 T5 임베딩 해제
         - "output_interface.spatial_compressor"

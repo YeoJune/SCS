@@ -50,8 +50,6 @@ class AxonalConnections(nn.Module):
             source = conn["source"]
             target = conn["target"]
             patch_size = conn.get("patch_size", 4)
-            patch_weight_scale = conn.get("patch_weight_scale", 1.0)
-            inner_weight_scale = conn.get("inner_weight_scale", 1.0)
             
             conn_key = f"{source}_to_{target}"
             

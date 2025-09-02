@@ -380,15 +380,15 @@ class SCSVisualizer:
         
         for clk in range(max_clk):
             try:
-                current_spikes = model._compute_spikes()
+                pure_spikes, spikes_with_grad = model._compute_spikes()
                 external_input = model._get_external_input_at_clk(input_tokens, clk, attention_mask)
-                model._update_states(external_input, current_spikes)
-                final_acc_spikes = current_spikes.get(model.acc_node)
-                
+                model._update_states(external_input, pure_spikes, spikes_with_grad)
+                final_acc_spikes = pure_spikes.get(model.acc_node)
+
                 # 스파이크 패턴 저장
-                if current_spikes:
+                if pure_spikes:
                     spike_pattern = {}
-                    for node_name, spikes in current_spikes.items():
+                    for node_name, spikes in pure_spikes.items():
                         if spikes is not None:
                             spike_pattern[node_name] = spikes[0].cpu().numpy()
                     all_spike_patterns.append(spike_pattern)

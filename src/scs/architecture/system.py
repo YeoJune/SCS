@@ -228,7 +228,7 @@ class SCSSystem(nn.Module):
                 input_tokens, clk, attention_mask
             )
             self._update_states(external_input, pure_spikes, spikes_with_grad)
-            final_acc_spikes = spikes_with_grad.get(self.acc_node) # 순전파 값이므로 pure_spikes 사용
+            final_acc_spikes = pure_spikes.get(self.acc_node) # 순전파 값이므로 pure_spikes 사용
             
             # Phase 2: TimingManager 업데이트
             self.timing_manager.step(

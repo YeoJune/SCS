@@ -64,9 +64,12 @@ class AxonalConnections(nn.Module):
             # 타겟 패치 크기 (동일한 패치 수 맞추기)
             target_patch_h = target_h // source_patches_h
             target_patch_w = target_w // source_patches_w
+
+            AXON_MEAN = 1.0
+            AXON_STD = 0.01
             
             # 패치별 게이트 가중치 [num_patches]
-            patch_gates = torch.randn(num_patches, device=self.device) * 0.0 + 1.0
+            patch_gates = torch.randn(num_patches, device=self.device) * AXON_STD + AXON_MEAN
             self.patch_gates[conn_key] = nn.Parameter(patch_gates.abs())
             
             # 패치별 내부 변환 행렬 [num_patches, target_patch_size, source_patch_size]
@@ -75,7 +78,7 @@ class AxonalConnections(nn.Module):
             
             inner_transforms = torch.randn(
                 num_patches, target_patch_size, source_patch_size, device=self.device
-            ) * 0.0 + 1.0
+            ) * AXON_STD + AXON_MEAN
             self.patch_transforms[conn_key] = nn.Parameter(inner_transforms)
     
     def forward(self, node_spikes: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:

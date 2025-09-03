@@ -28,7 +28,7 @@ spike_dynamics:
   spike_threshold: 1.0
   refractory_base: 1
   refractory_adaptive_factor: 5.0
-  surrogate_beta: 10.0
+  surrogate_beta: 12.0
   ema_alpha: 0.1
 
 # === 연결성 설정 ===

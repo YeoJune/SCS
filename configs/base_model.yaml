@@ -113,8 +113,8 @@ learning:
   length_penalty_weight: 0.0
   orthogonal_reg_weight: 25.0
 
-  gate_pruning_weight: 0.5 # 패치 게이트 L1 정규화 가중치
-  gate_temperature: 0.2 # 패치 게이트 온도
+  gate_pruning_weight: 1.0 # 패치 게이트 L1 정규화 가중치
+  gate_temperature: 0.5 # 패치 게이트 온도
   inner_pruning_weight: 1.0 # 내부 연결 L1 정규화 가중치
   inner_temperature: 0.1 # 내부 연결 온도
   axon_strength_reg_weight: 5.0 # 축삭 연결 강도 정규화 가중치

@@ -63,7 +63,7 @@ class SCSVisualizer:
                 node = model.nodes[node_name]
                 influence = node.influence_strength.detach().cpu().numpy()
                 
-                im = axes[i].imshow(influence, cmap='coolwarm', vmin=-2, vmax=2)
+                im = axes[i].imshow(influence, cmap='coolwarm', vmin=-1.5, vmax=1.5)
                 axes[i].set_title(f'{node_name}\nInfluence Strength')
                 axes[i].set_xlabel('Width')
                 axes[i].set_ylabel('Height')

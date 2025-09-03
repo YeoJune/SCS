@@ -7,16 +7,16 @@ brain_regions:
   IN:
     grid_size: [64, 64]
     decay_rate: 1.0
-    distance_tau: 0.95
+    distance_tau: 0.7
   ACC:
     grid_size: [64, 64]
     decay_rate: 1.0
-    distance_tau: 0.95
+    distance_tau: 0.7
   PASS:
     grid_size: [64, 64]
     decay_rate: 1.0
-    distance_tau: 0.95
+    distance_tau: 0.7
   OUT:
     grid_size: [64, 64]
     decay_rate: 1.0
-    distance_tau: 0.95
+    distance_tau: 0.7

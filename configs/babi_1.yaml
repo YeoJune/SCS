@@ -1,0 +1,6 @@
+# === 기본 설정 상속 ===
+defaults:
+  - babi
+
+learning:
+  spike_reg_weight: 1e+4

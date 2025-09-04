@@ -54,7 +54,7 @@ io_system:
     encoder_heads: 8
     encoder_dropout: 0.1
     dim_feedforward: 2048
-    input_power: 0.03
+    input_power: 0.05
     softmax_temperature: 0.2
     t5_model_name: "t5-small"
 
@@ -120,7 +120,7 @@ learning:
   axon_strength_reg_weight: 0.0 # 축삭 연결 강도 정규화 가중치
 
   spike_reg_weight: 1e+5
-  target_spike_rate: 0.00
+  target_spike_rate: 0.03
 
   # 점진적 커리큘럼 학습
   use_curriculum_learning: false

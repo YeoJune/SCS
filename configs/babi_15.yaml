@@ -11,8 +11,8 @@ io_system:
     encoder_heads: 8
     encoder_dropout: 0.1
     dim_feedforward: 2048
-    input_power: 0.04
-    softmax_temperature: 0.15
+    input_power: 0.02
+    softmax_temperature: 0.2
     t5_model_name: "t5-small"
 
   output_interface:

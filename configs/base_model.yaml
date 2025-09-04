@@ -61,7 +61,7 @@ io_system:
   output_interface:
     embedding_dim: 512
     window_size: 16
-    decoder_layers: 2
+    decoder_layers: 1
     decoder_heads: 8
     dim_feedforward: 2048
     dropout: 0.1

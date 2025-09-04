@@ -210,6 +210,8 @@ class SCSSystem(nn.Module):
         # 시스템 초기화
         self.reset_state(batch_size)
         
+        all_spikes_for_reg = [] # 스파이크 정보를 저장할 리스트
+
         # 출력 상태 초기화
         vocab_size = self.output_interface.vocab_size
         all_logits = torch.zeros(
@@ -227,6 +229,7 @@ class SCSSystem(nn.Module):
             
             # Phase 1: 스파이크 계산 및 상태 업데이트 (수정됨)
             pure_spikes, spikes_with_grad = self._compute_spikes()
+            all_spikes_for_reg.append(spikes_with_grad)
             external_input = self._get_external_input_at_clk(
                 input_tokens, clk, attention_mask
             )
@@ -284,7 +287,8 @@ class SCSSystem(nn.Module):
             "final_acc_activity": final_acc_spikes.mean().item() if final_acc_spikes is not None else 0.0,
             "generation_clks": torch.arange(max_generated, device=self.device),
             "axonal_parameters": self._get_axonal_parameters(),
-            "orthogonal_reg_loss": self._get_orthogonal_regularization()
+            "orthogonal_reg_loss": self._get_orthogonal_regularization(),
+            "all_spikes": all_spikes_for_reg
         }
         
         if tensorboard_logger and hasattr(tensorboard_logger, 'log_processing_info'):

@@ -24,6 +24,8 @@ class SCSLoss(nn.Module):
         axon_strength_reg_weight: float = 0.0,
         length_penalty_weight: float = 0.0,
         orthogonal_reg_weight: float = 0.0,
+        spike_reg_weight: float = 0.0,
+        target_spike_rate: float = 0.0,
         use_temporal_weighting: bool = False,
         initial_temporal_weight: float = 2.0,
         final_temporal_weight: float = 1.0
@@ -42,6 +44,8 @@ class SCSLoss(nn.Module):
         self.length_penalty_weight = length_penalty_weight
         self.orthogonal_reg_weight = orthogonal_reg_weight  
         self.use_temporal_weighting = use_temporal_weighting
+        self.spike_reg_weight = spike_reg_weight
+        self.target_spike_rate = target_spike_rate
         self.initial_temporal_weight = initial_temporal_weight
         self.final_temporal_weight = final_temporal_weight
         
@@ -132,6 +136,11 @@ class SCSLoss(nn.Module):
         if self.orthogonal_reg_weight > 0.0 and 'orthogonal_reg_loss' in processing_info:
             orthogonal_loss = self.orthogonal_reg_weight * processing_info['orthogonal_reg_loss']
             total_loss += orthogonal_loss
+            
+        spike_loss = torch.tensor(0.0, device=outputs.device)
+        if self.spike_reg_weight > 0.0:
+            spike_loss = self.spike_reg_weight * self._compute_spike_regularization_loss(processing_info)
+            total_loss += spike_loss
         
         # 길이 패널티 (기존 코드 유지)
         length_penalty = torch.tensor(0.0, device=outputs.device)
@@ -333,6 +342,41 @@ class SCSLoss(nn.Module):
         strength_loss = self.axon_strength_reg_weight * strength_loss
 
         return pruning_loss, strength_loss
+    
+    def _compute_spike_regularization_loss(self, processing_info: Dict[str, Any]) -> torch.Tensor:
+        """
+        전체 시뮬레이션 동안의 평균 스파이크율을 계산하고 목표치와의 MSE 손실을 반환합니다.
+        """
+        # SCSSystem으로부터 all_spikes 리스트를 전달받습니다.
+        all_spikes = processing_info.get("all_spikes")
+        device = processing_info.get("device", "cpu") # 디바이스 정보 가져오기
+
+        if not all_spikes:
+            return torch.tensor(0.0, device=device)
+
+        total_spike_count = 0.0
+        total_neuron_count = 0.0
+
+        # 모든 CLK에 걸쳐 스파이크 수와 뉴런 수를 누적합니다.
+        for spikes_at_clk in all_spikes:
+            for node_name, node_spikes in spikes_at_clk.items():
+                # IN 노드만 제어하고 싶다면 여기서 필터링 가능: if node_name == 'IN':
+                total_spike_count += node_spikes.sum()
+                total_neuron_count += node_spikes.numel()
+
+        if total_neuron_count == 0:
+            return torch.tensor(0.0, device=device)
+
+        # 실제 관측된 평균 스파이크율
+        observed_rate = total_spike_count / total_neuron_count
+        
+        # 목표 스파이크율 텐서 생성
+        target_rate = torch.tensor(self.target_spike_rate, device=device, dtype=observed_rate.dtype)
+        
+        # MSE 손실 계산
+        spike_loss = F.mse_loss(observed_rate, target_rate)
+        
+        return spike_loss
 
 
 class TimingLoss(SCSLoss):

@@ -213,6 +213,8 @@ def train_mode(args: argparse.Namespace):
             guide_weight=learning_config.guide_weight,
             length_penalty_weight=learning_config.length_penalty_weight,
             orthogonal_reg_weight=learning_config.orthogonal_reg_weight,
+            spike_reg_weight=learning_config.spike_reg_weight,
+            target_spike_rate=learning_config.target_spike_rate,
             use_temporal_weighting=learning_config.use_temporal_weighting,
             initial_temporal_weight=learning_config.initial_temporal_weight,
             final_temporal_weight=learning_config.final_temporal_weight,

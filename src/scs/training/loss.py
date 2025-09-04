@@ -156,6 +156,7 @@ class SCSLoss(nn.Module):
                     'axon_pruning_loss': pruning_loss.item() if hasattr(pruning_loss, 'item') else float(pruning_loss),
                     'axon_strength_loss': strength_loss.item() if hasattr(strength_loss, 'item') else float(strength_loss),
                     'orthogonal_reg_loss': orthogonal_loss.item() if hasattr(orthogonal_loss, 'item') else float(orthogonal_loss),
+                    'spike_reg_loss': spike_loss.item() if hasattr(spike_loss, 'item') else float(spike_loss),
                     'length_penalty': length_penalty.item() if hasattr(length_penalty, 'item') else float(length_penalty),
                     'total_loss': total_loss.item() if hasattr(total_loss, 'item') else float(total_loss)
                 }

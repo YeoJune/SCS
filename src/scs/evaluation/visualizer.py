@@ -147,15 +147,20 @@ class SCSVisualizer:
             for i, node_name in enumerate(node_names):
                 if node_name in spike_pattern:
                     spikes = spike_pattern[node_name]
-                    im = axes[i].imshow(spikes, cmap='magma', vmin=0, vmax=1)
-                    axes[i].set_title(f'{node_name}\nCLK {clk}')
+                    # 스파이크율 계산 (전체 픽셀 대비 활성화된 픽셀 비율)
+                    total_pixels = spikes.size
+                    active_pixels = np.sum(spikes > 0)
+                    spike_rate = (active_pixels / total_pixels * 100) if total_pixels > 0 else 0
+                    
+                    im = axes[i].imshow(spikes, cmap='gray', vmin=0, vmax=1)
+                    axes[i].set_title(f'{node_name}\nCLK {clk} ({spike_rate:02.0f}%)')
                     axes[i].set_xlabel('Width')
                     axes[i].set_ylabel('Height')
                     plt.colorbar(im, ax=axes[i])
                 else:
                     axes[i].text(0.5, 0.5, f'{node_name}\nNo Data', 
-                               transform=axes[i].transAxes, ha='center', va='center')
-                    axes[i].set_title(f'{node_name}\nCLK {clk}')
+                            transform=axes[i].transAxes, ha='center', va='center')
+                    axes[i].set_title(f'{node_name}\nCLK {clk} (00%)')
             
             plt.tight_layout()
             figures_with_clk.append((fig, clk))

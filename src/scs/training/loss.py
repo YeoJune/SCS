@@ -139,7 +139,7 @@ class SCSLoss(nn.Module):
             
         spike_loss = torch.tensor(0.0, device=outputs.device)
         if self.spike_reg_weight > 0.0:
-            spike_loss = self.spike_reg_weight * self._compute_spike_regularization_loss(processing_info)
+            spike_loss = self.spike_reg_weight * self._compute_spike_regularization_loss(processing_info, outputs.device)
             total_loss += spike_loss
         
         # 길이 패널티 (기존 코드 유지)
@@ -343,14 +343,13 @@ class SCSLoss(nn.Module):
         strength_loss = self.axon_strength_reg_weight * strength_loss
 
         return pruning_loss, strength_loss
-    
-    def _compute_spike_regularization_loss(self, processing_info: Dict[str, Any]) -> torch.Tensor:
+
+    def _compute_spike_regularization_loss(self, processing_info: Dict[str, Any], device: torch.device) -> torch.Tensor:
         """
         전체 시뮬레이션 동안의 평균 스파이크율을 계산하고 목표치와의 MSE 손실을 반환합니다.
         """
         # SCSSystem으로부터 all_spikes 리스트를 전달받습니다.
         all_spikes = processing_info.get("all_spikes")
-        device = processing_info.get("device", "cpu") # 디바이스 정보 가져오기
 
         if not all_spikes:
             return torch.tensor(0.0, device=device)

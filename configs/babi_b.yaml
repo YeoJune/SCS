@@ -1,0 +1,23 @@
+# === 기본 설정 상속 ===
+defaults:
+  - babi
+
+learning:
+  gradual_unfreezing:
+    enabled: true
+    initial_frozen_patterns: # 시작할 때 동결할 파라미터들
+      - "input_interface.token_embedding"
+      - "input_interface.transformer_encoder"
+
+      - "output_interface.token_embedding"
+      - "output_interface.transformer_decoder"
+      - "output_interface.final_projection"
+      - "output_interface.hidden_norm"
+    unfreeze_schedule: # 에포크별 해제 스케줄
+      1000:
+        - "output_interface.spatial_compressor"
+        - "input_interface.pattern_mapper"
+    freeze_schedule:
+      1000:
+        - "output_interface.spatial_compressor"
+        - "input_interface.pattern_mapper"

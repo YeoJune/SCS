@@ -2,8 +2,16 @@
 defaults:
   - babi
 
-timing_manager:
-  train_fixed_ref: "start"
-  train_fixed_offset: 5
-  evaluate_fixed_ref: "start"
-  evaluate_fixed_offset: 5
+# === 축삭 연결 (완전 오버라이드) ===
+axonal_connections:
+  connections:
+    - source: "IN"
+      target: "PASS"
+      patch_size: 2
+      patch_weight_scale: 1.0
+      inner_weight_scale: 0.5
+    - source: "PASS"
+      target: "OUT"
+      patch_size: 2
+      patch_weight_scale: 1.0
+      inner_weight_scale: 0.5

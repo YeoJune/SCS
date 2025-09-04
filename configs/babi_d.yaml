@@ -16,6 +16,7 @@ learning:
     unfreeze_schedule: # 에포크별 해제 스케줄
       0:
         - "output_interface.transformer_decoder.layers.0.multihead_attn"
+        - "output_interface.transformer_decoder.layers.1.multihead_attn"
     freeze_schedule:
       1000:
         - "output_interface.spatial_compressor"

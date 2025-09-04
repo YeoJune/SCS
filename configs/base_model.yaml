@@ -10,16 +10,16 @@ system_roles:
 # === 뇌 영역 구성 (단순한 IN→OUT 구조) ===
 brain_regions:
   IN:
-    grid_size: [16, 16]
-    decay_rate: 0.8
+    grid_size: [32, 32]
+    decay_rate: 0.9
     distance_tau: 1.0
   OUT:
-    grid_size: [16, 16]
-    decay_rate: 0.8
+    grid_size: [32, 32]
+    decay_rate: 0.9
     distance_tau: 1.0
   ACC:
-    grid_size: [16, 16]
-    decay_rate: 0.8
+    grid_size: [32, 32]
+    decay_rate: 0.9
     distance_tau: 1.0
 
 # === 스파이크 역학 ===

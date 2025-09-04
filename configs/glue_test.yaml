@@ -21,15 +21,15 @@ system_roles:
 brain_regions:
   IN:
     grid_size: [64, 64]
-    decay_rate: 0.8
+    decay_rate: 0.85
     distance_tau: 1.0
   ACC:
     grid_size: [64, 64]
-    decay_rate: 0.8
+    decay_rate: 0.85
     distance_tau: 1.0
   OUT:
     grid_size: [64, 64]
-    decay_rate: 0.8
+    decay_rate: 0.85
     distance_tau: 1.0
 
 # === 축삭 연결 ===

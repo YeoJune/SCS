@@ -114,7 +114,7 @@ class TimingManager:
             return torch.full_like(self.output_started, start_condition, dtype=torch.bool)
             
         elif self.evaluate_fixed_ref == 'end':
-            start_condition = current_clk >= (input_seq_len - self.evaluate_fixed_offset)
+            start_condition = current_clk >= (input_seq_len + self.evaluate_fixed_offset)
             return torch.full_like(self.output_started, start_condition, dtype=torch.bool)
             
         else:  # adaptive
@@ -163,7 +163,7 @@ class TimingManager:
         if self.train_fixed_ref == 'start':
             self.target_start_clk = self.train_fixed_offset
         elif self.train_fixed_ref == 'end':
-            self.target_start_clk = input_len - self.train_fixed_offset
+            self.target_start_clk = input_len + self.train_fixed_offset
         
         # 학습 시 길이는 항상 target_len
         self.target_end_clk = self.target_start_clk + target_len - 1

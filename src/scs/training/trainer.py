@@ -355,7 +355,7 @@ class SCSTrainer:
                     pass
 
         return loss.item(), batch_metrics
-    
+
     def _validate_epoch(self, val_loader: DataLoader) -> Dict[str, float]:
         """검증 - 개별 샘플 정확도로 수정됨"""
         self.model.eval()
@@ -392,18 +392,24 @@ class SCSTrainer:
                         
                     batch_loss = self.loss_fn(output_logits, target_subset, processing_info)
                     
-                    # 개별 샘플 정확도 계산 (evaluate()와 동일한 방식)
+                    # 개별 샘플 정확도 계산 (evaluate()와 완전히 동일한 방식)
                     batch_size = output_logits.shape[0]
                     for sample_idx in range(batch_size):
                         sample_output = output_logits[sample_idx:sample_idx+1]
-                        sample_target = target_subset[sample_idx:sample_idx+1]
+                        sample_target = target_tokens[sample_idx:sample_idx+1].to(output_logits.device)
                         
-                        sample_accuracy = SCSMetrics.accuracy(
-                            sample_output, 
-                            sample_target, 
-                            pad_token_id=self.config.pad_token_id, 
-                            guide_sep_token_id=self.config.guide_sep_token_id
-                        )
+                        # evaluate()와 동일한 길이 조정 방식
+                        if sample_output.shape[1] > 0:
+                            adjusted_target = sample_target[:, :sample_output.shape[1]]
+                            sample_accuracy = SCSMetrics.accuracy(
+                                sample_output,
+                                adjusted_target,
+                                pad_token_id=self.config.pad_token_id, 
+                                guide_sep_token_id=self.config.guide_sep_token_id
+                            )
+                        else:
+                            sample_accuracy = 0.0
+                        
                         all_sample_accuracies.append(sample_accuracy)
                         
                 else:

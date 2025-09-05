@@ -21,14 +21,21 @@ class SCSMetrics:
             # 배치 크기 일치 확인
             assert batch_size == batch_size_t, f"Batch size mismatch: {batch_size} vs {batch_size_t}"
             
-            # 길이 불일치 처리
-            if output_seq_len != target_seq_len:
-                min_len = min(output_seq_len, target_seq_len)
-                outputs = outputs[:, :min_len, :]
-                targets = targets[:, :min_len]
-            
             preds = outputs.argmax(dim=-1)  # [B, min_len]
             
+            if output_seq_len != target_seq_len:
+                max_len = max(output_seq_len, target_seq_len)
+                
+                if output_seq_len < max_len:
+                    pad_size = max_len - output_seq_len
+                    pad_preds = torch.full((preds.shape[0], pad_size), pad_token_id, dtype=preds.dtype, device=preds.device)
+                    preds = torch.cat([preds, pad_preds], dim=1)
+
+                if target_seq_len < max_len:
+                    pad_size = max_len - target_seq_len
+                    pad_labels = torch.full((targets.shape[0], pad_size), pad_token_id, dtype=targets.dtype, device=targets.device)
+                    targets = torch.cat([targets, pad_labels], dim=1)
+
             # 기본 마스크 생성 (패딩 토큰 제외)
             if pad_token_id is not None:
                 mask = (targets != pad_token_id) & (targets != eos_token_id)

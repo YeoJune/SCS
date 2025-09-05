@@ -495,7 +495,7 @@ class SCSTrainer:
             if output_logits.shape[1] > 0:
                 accuracy = SCSMetrics.accuracy(
                     output_logits,
-                    target_tokens[:, :output_logits.shape[1]],
+                    target_tokens[:, :result['output_logits'].shape[1]],
                     pad_token_id=self.config.pad_token_id,
                     guide_sep_token_id=self.config.guide_sep_token_id
                 )

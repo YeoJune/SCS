@@ -202,7 +202,7 @@ class SCSSystem(nn.Module):
         input_seq_len = input_tokens.shape[1]
         
         # 타겟 길이 결정
-        if training and target_tokens is not None:
+        if target_tokens is not None:
             target_seq_len = target_tokens.shape[1]
         else:
             target_seq_len = max_output_length or input_seq_len

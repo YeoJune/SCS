@@ -400,10 +400,9 @@ class SCSTrainer:
                         
                         # evaluate()와 동일한 길이 조정 방식
                         if sample_output.shape[1] > 0:
-                            adjusted_target = sample_target[:, :sample_output.shape[1]]
                             sample_accuracy = SCSMetrics.accuracy(
                                 sample_output,
-                                adjusted_target,
+                                sample_target,
                                 pad_token_id=self.config.pad_token_id, 
                                 guide_sep_token_id=self.config.guide_sep_token_id
                             )
@@ -518,7 +517,7 @@ class SCSTrainer:
             if output_logits.shape[1] > 0:
                 accuracy = SCSMetrics.accuracy(
                     output_logits,
-                    target_tokens[:, :output_logits.shape[1]],
+                    target_tokens,
                     pad_token_id=self.config.pad_token_id,
                     guide_sep_token_id=self.config.guide_sep_token_id
                 )

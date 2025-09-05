@@ -382,19 +382,45 @@ class SCSTrainer:
                 # 손실 및 정확도 계산
                 output_logits = result['output_logits']
                 processing_info = result['processing_info']
+                # ==================== 요청하신 수정 부분 ====================
+                batch_size = output_logits.shape[0]
+
+                # 배치 내 누적 변수
+                batch_total_loss = 0.0
+                batch_total_accuracy = 0.0
+                num_valid_samples_in_batch = 0
                 
-                if output_logits.shape[1] > 0:
-                    target_subset = target_tokens[:, :output_logits.shape[1]]
-                    
-                    # 손실 함수에 tb_logger 설정
-                    if self.tb_logger:
-                        self.loss_fn._tb_logger = self.tb_logger
+                # for 루프를 통해 각 샘플을 개별적으로 처리
+                for i in range(batch_size):
+                    sample_logits = output_logits[i:i+1] # shape: [1, OutLen, V]
+                    sample_target = target_tokens[i:i+1] # shape: [1, FullPadLen]
+
+                    if sample_logits.shape[1] > 0:
+                        # `evaluate`와 동일한 방식으로 target 길이 맞춤
+                        target_subset = sample_target[:, :sample_logits.shape[1]]
+
+                        # 손실 계산 (샘플 단위)
+                        # processing_info는 배치 전체에 대한 것이지만, loss 계산에 사용
+                        sample_loss = self.loss_fn(sample_logits, target_subset, processing_info)
                         
-                    batch_loss = self.loss_fn(output_logits, target_subset, processing_info)
-                    batch_accuracy = SCSMetrics.accuracy(output_logits, target_subset, pad_token_id=self.config.pad_token_id, guide_sep_token_id=self.config.guide_sep_token_id)
+                        # 정확도 계산 (샘플 단위)
+                        sample_accuracy = SCSMetrics.accuracy(
+                            sample_logits, 
+                            target_subset, 
+                            pad_token_id=self.config.pad_token_id, 
+                            guide_sep_token_id=self.config.guide_sep_token_id
+                        )
+
+                        batch_total_loss += sample_loss.item()
+                        batch_total_accuracy += sample_accuracy
+                        num_valid_samples_in_batch += 1
+
+                # 배치 평균 손실 (유효 샘플 기준)
+                if num_valid_samples_in_batch > 0:
+                    batch_loss = batch_total_loss / num_valid_samples_in_batch
                 else:
-                    batch_loss = torch.tensor(float('inf'))
-                    batch_accuracy = 0.0
+                    batch_loss = 0.0 # 혹은 torch.tensor(float('inf')).item()
+                # =========================================================
 
                 # 검증 중 다양한 시각화 로깅 (첫 번째 배치만)
                 if batch_idx == 0 and self.tb_logger:
@@ -445,7 +471,6 @@ class SCSTrainer:
                 attention_mask = batch['attention_mask'].to(self.device)
                 
                 batch_size = input_tokens.shape[0]
-                print(batch_size)
                 
                 # 🚀 시스템이 완전한 추론 처리!
                 result = self.model(
@@ -456,51 +481,45 @@ class SCSTrainer:
                     scheduled_sampling_prob=0.0,  # 완전 auto-regressive
                 )
                 
-                # 손실 및 정확도 계산
-                output_logits = result['output_logits']
-
-                print(result)
-                
-                if output_logits.shape[1] > 0:
-                    target_subset = target_tokens[:, :output_logits.shape[1]]
+                # 배치 결과를 개별 샘플로 분해
+                for sample_idx in range(batch_size):
+                    sample_result = self._extract_sample_from_result(
+                        batch, result, sample_idx, total_samples
+                    )
                     
-                    # 배치 결과를 개별 샘플로 분해
-                    for sample_idx in range(batch_size):
-                        sample_result = self._extract_sample_from_result(
-                            input_tokens, output_logits, target_subset, sample_idx, total_samples, result
-                        )
-                        
-                        all_sample_results.append(sample_result)
-                        total_samples += 1
-                        
-                        if len(saved_examples) < save_examples:
-                            saved_examples.append(sample_result)
+                    all_sample_results.append(sample_result)
+                    total_samples += 1
+                    
+                    if len(saved_examples) < save_examples:
+                        saved_examples.append(sample_result)
         
         return self._aggregate_evaluation_results(all_sample_results, saved_examples, total_samples)
 
     def _extract_sample_from_result(
         self, 
-        input_tokens: torch.Tensor,
-        output_logits: torch.Tensor,
-        target_subset: torch.Tensor,
+        batch: Dict[str, torch.Tensor], 
+        result: Dict[str, Any], 
         sample_idx: int, 
-        global_idx: int,
-        result: Dict[str, Any]
+        global_idx: int
     ) -> Dict[str, Any]:
         """시스템 결과에서 개별 샘플 결과 추출"""
         try:
             # 텍스트 복원
-            input_text = self._decode_tokens_to_text(input_tokens[sample_idx])
-            target_text = self._decode_tokens_to_text(target_subset[sample_idx])
+            input_text = self._decode_tokens_to_text(batch['input_tokens'][sample_idx])
+            target_text = self._decode_tokens_to_text(batch['target_tokens'][sample_idx])
             
             # 생성 결과 추출
             generated_tokens = result['generated_tokens'][sample_idx]
             generated_text = self._decode_tokens_to_text(generated_tokens) if generated_tokens.numel() > 0 else "[빈 출력]"
-        
+            
+            # 정확도 계산
+            output_logits = result['output_logits'][sample_idx:sample_idx+1]
+            target_tokens = batch['target_tokens'][sample_idx:sample_idx+1].to(output_logits.device)
+            
             if output_logits.shape[1] > 0:
                 accuracy = SCSMetrics.accuracy(
-                    output_logits[sample_idx:sample_idx+1],
-                    target_subset[sample_idx:sample_idx+1],
+                    output_logits,
+                    target_tokens[:, :output_logits.shape[1]],
                     pad_token_id=self.config.pad_token_id,
                     guide_sep_token_id=self.config.guide_sep_token_id
                 )

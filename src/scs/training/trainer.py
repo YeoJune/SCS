@@ -442,9 +442,7 @@ class SCSTrainer:
             for batch_idx, batch in enumerate(test_loader):
                 input_tokens = batch['input_tokens'].to(self.device)
                 target_tokens = batch['target_tokens'].to(self.device)
-                attention_mask = batch.get('attention_mask')
-                if attention_mask is not None:
-                    attention_mask = attention_mask.to(self.device)
+                attention_mask = batch['attention_mask'].to(self.device)
                 
                 batch_size = input_tokens.shape[0]
                 
@@ -457,45 +455,49 @@ class SCSTrainer:
                     scheduled_sampling_prob=0.0,  # 완전 auto-regressive
                 )
                 
-                # 배치 결과를 개별 샘플로 분해
-                for sample_idx in range(batch_size):
-                    sample_result = self._extract_sample_from_result(
-                        batch, result, sample_idx, total_samples
-                    )
+                # 손실 및 정확도 계산
+                output_logits = result['output_logits']
+                
+                if output_logits.shape[1] > 0:
+                    target_subset = target_tokens[:, :output_logits.shape[1]]
                     
-                    all_sample_results.append(sample_result)
-                    total_samples += 1
-                    
-                    if len(saved_examples) < save_examples:
-                        saved_examples.append(sample_result)
+                    # 배치 결과를 개별 샘플로 분해
+                    for sample_idx in range(batch_size):
+                        sample_result = self._extract_sample_from_result(
+                            input_tokens, output_logits, target_subset, sample_idx, total_samples, result
+                        )
+                        
+                        all_sample_results.append(sample_result)
+                        total_samples += 1
+                        
+                        if len(saved_examples) < save_examples:
+                            saved_examples.append(sample_result)
         
         return self._aggregate_evaluation_results(all_sample_results, saved_examples, total_samples)
 
     def _extract_sample_from_result(
         self, 
-        batch: Dict[str, torch.Tensor], 
-        result: Dict[str, Any], 
+        input_tokens: torch.Tensor,
+        output_logits: torch.Tensor,
+        target_subset: torch.Tensor,
         sample_idx: int, 
-        global_idx: int
+        global_idx: int,
+        result: Dict[str, Any]
     ) -> Dict[str, Any]:
         """시스템 결과에서 개별 샘플 결과 추출"""
         try:
             # 텍스트 복원
-            input_text = self._decode_tokens_to_text(batch['input_tokens'][sample_idx])
-            target_text = self._decode_tokens_to_text(batch['target_tokens'][sample_idx])
+            input_text = self._decode_tokens_to_text(input_tokens[sample_idx])
+            target_text = self._decode_tokens_to_text(target_subset[sample_idx])
             
             # 생성 결과 추출
             generated_tokens = result['generated_tokens'][sample_idx]
             generated_text = self._decode_tokens_to_text(generated_tokens) if generated_tokens.numel() > 0 else "[빈 출력]"
-            
-            # 정확도 계산
-            output_logits = result['output_logits'][sample_idx:sample_idx+1]
-            target_tokens = batch['target_tokens'][sample_idx:sample_idx+1].to(output_logits.device)
-            
+        
             if output_logits.shape[1] > 0:
                 accuracy = SCSMetrics.accuracy(
-                    output_logits,
-                    target_tokens[:, :result['output_logits'].shape[1]],
+                    output_logits[sample_idx:sample_idx+1],
+                    target_subset[sample_idx:sample_idx+1],
                     pad_token_id=self.config.pad_token_id,
                     guide_sep_token_id=self.config.guide_sep_token_id
                 )

@@ -577,6 +577,65 @@ class SCSTrainer:
         torch.save(checkpoint, best_model_path)
         return best_model_path
 
+    def _extract_sample_from_result(
+        self, 
+        batch: Dict[str, torch.Tensor], 
+        result: Dict[str, Any], 
+        sample_idx: int, 
+        global_idx: int
+    ) -> Dict[str, Any]:
+        """시스템 결과에서 개별 샘플 결과 추출"""
+        try:
+            # 텍스트 복원
+            input_text = self._decode_tokens_to_text(batch['input_tokens'][sample_idx])
+            target_text = self._decode_tokens_to_text(batch['target_tokens'][sample_idx])
+            
+            # 생성 결과 추출
+            generated_tokens = result['generated_tokens'][sample_idx]
+            generated_text = self._decode_tokens_to_text(generated_tokens) if generated_tokens.numel() > 0 else "[빈 출력]"
+            
+            # 정확도 계산
+            output_logits = result['output_logits'][sample_idx:sample_idx+1]
+            target_tokens = batch['target_tokens'][sample_idx:sample_idx+1].to(output_logits.device)
+            
+            if output_logits.shape[1] > 0:
+                accuracy = SCSMetrics.accuracy(
+                    output_logits,
+                    target_tokens[:, :output_logits.shape[1]],
+                    pad_token_id=self.config.pad_token_id,
+                    guide_sep_token_id=self.config.guide_sep_token_id
+                )
+            else:
+                accuracy = 0.0
+            
+            processing_info = result['processing_info']
+            
+            return {
+                'input_text': input_text,
+                'target_text': target_text,
+                'generated_text': generated_text,
+                'accuracy': accuracy,
+                'processing_clk': processing_info['processing_clk'],
+                'tokens_generated': processing_info['tokens_generated'],
+                'convergence_achieved': processing_info['convergence_achieved'],
+                'generation_method': 'system_complete_processing',
+                'global_index': global_idx,
+            }
+            
+        except Exception as e:
+            return {
+                'input_text': "[추출 실패]",
+                'target_text': "[추출 실패]",
+                'generated_text': "[추론 실패]",
+                'accuracy': 0.0,
+                'processing_clk': self.config.max_clk_training,
+                'tokens_generated': 0,
+                'convergence_achieved': False,
+                'generation_method': 'error',
+                'global_index': global_idx,
+                'error': str(e)
+            }
+
     def _save_checkpoint(self, save_path: str, epoch: int):
         """정기 체크포인트 저장"""
         save_dir = Path(save_path)

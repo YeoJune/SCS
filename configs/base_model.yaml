@@ -50,7 +50,7 @@ io_system:
   input_interface:
     embedding_dim: 512
     window_size: 16
-    encoder_layers: 1
+    encoder_layers: 2
     encoder_heads: 8
     encoder_dropout: 0.1
     dim_feedforward: 2048
@@ -61,7 +61,7 @@ io_system:
   output_interface:
     embedding_dim: 512
     window_size: 16
-    decoder_layers: 1
+    decoder_layers: 2
     decoder_heads: 8
     dim_feedforward: 2048
     dropout: 0.1
@@ -139,9 +139,9 @@ learning:
       - "output_interface.final_projection"
       - "output_interface.hidden_norm"
     unfreeze_schedule: # 에포크별 해제 스케줄
-      1000:
-        - "output_interface.spatial_compressor"
-        - "input_interface.pattern_mapper"
+      0:
+        - "output_interface.transformer_decoder.layers.0.multihead_attn"
+        - "output_interface.transformer_decoder.layers.1.multihead_attn"
     freeze_schedule:
       1000:
         - "output_interface.spatial_compressor"

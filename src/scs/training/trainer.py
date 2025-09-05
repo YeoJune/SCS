@@ -445,6 +445,7 @@ class SCSTrainer:
                 attention_mask = batch['attention_mask'].to(self.device)
                 
                 batch_size = input_tokens.shape[0]
+                print(batch_size)
                 
                 # 🚀 시스템이 완전한 추론 처리!
                 result = self.model(
@@ -457,6 +458,8 @@ class SCSTrainer:
                 
                 # 손실 및 정확도 계산
                 output_logits = result['output_logits']
+
+                print(result)
                 
                 if output_logits.shape[1] > 0:
                     target_subset = target_tokens[:, :output_logits.shape[1]]

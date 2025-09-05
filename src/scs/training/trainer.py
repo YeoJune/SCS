@@ -359,12 +359,9 @@ class SCSTrainer:
     def _validate_epoch(self, val_loader: DataLoader) -> Dict[str, float]:
         """검증 - 간소화됨"""
         self.model.eval()
-        
-        # 에폭 전체의 누적 변수
-        total_loss_sum = 0.0
-        total_accuracy_sum = 0.0
-        total_samples_processed = 0
-        num_batches = 0
+        total_loss = 0.0
+        total_accuracy = 0.0
+        num_samples = 0
         
         with torch.no_grad():
             for batch_idx, batch in enumerate(val_loader):
@@ -385,45 +382,19 @@ class SCSTrainer:
                 # 손실 및 정확도 계산
                 output_logits = result['output_logits']
                 processing_info = result['processing_info']
-                # ==================== 요청하신 수정 부분 ====================
-                batch_size = output_logits.shape[0]
-
-                # 배치 내 누적 변수
-                batch_total_loss = 0.0
-                batch_total_accuracy = 0.0
-                num_valid_samples_in_batch = 0
                 
-                # for 루프를 통해 각 샘플을 개별적으로 처리
-                for i in range(batch_size):
-                    sample_logits = output_logits[i:i+1] # shape: [1, OutLen, V]
-                    sample_target = target_tokens[i:i+1] # shape: [1, FullPadLen]
-
-                    if sample_logits.shape[1] > 0:
-                        # `evaluate`와 동일한 방식으로 target 길이 맞춤
-                        target_subset = sample_target[:, :sample_logits.shape[1]]
-
-                        # 손실 계산 (샘플 단위)
-                        # processing_info는 배치 전체에 대한 것이지만, loss 계산에 사용
-                        sample_loss = self.loss_fn(sample_logits, target_subset, processing_info)
+                if output_logits.shape[1] > 0:
+                    target_subset = target_tokens[:, :output_logits.shape[1]]
+                    
+                    # 손실 함수에 tb_logger 설정
+                    if self.tb_logger:
+                        self.loss_fn._tb_logger = self.tb_logger
                         
-                        # 정확도 계산 (샘플 단위)
-                        sample_accuracy = SCSMetrics.accuracy(
-                            sample_logits, 
-                            target_subset, 
-                            pad_token_id=self.config.pad_token_id, 
-                            guide_sep_token_id=self.config.guide_sep_token_id
-                        )
-
-                        batch_total_loss += sample_loss.item()
-                        batch_total_accuracy += sample_accuracy
-                        num_valid_samples_in_batch += 1
-
-                # 배치 평균 손실 (유효 샘플 기준)
-                if num_valid_samples_in_batch > 0:
-                    batch_loss = batch_total_loss / num_valid_samples_in_batch
+                    batch_loss = self.loss_fn(output_logits, target_subset, processing_info)
+                    batch_accuracy = SCSMetrics.accuracy(output_logits, target_subset, pad_token_id=self.config.pad_token_id, guide_sep_token_id=self.config.guide_sep_token_id)
                 else:
-                    batch_loss = 0.0 # 혹은 torch.tensor(float('inf')).item()
-                # =========================================================
+                    batch_loss = torch.tensor(float('inf'))
+                    batch_accuracy = 0.0
 
                 # 검증 중 다양한 시각화 로깅 (첫 번째 배치만)
                 if batch_idx == 0 and self.tb_logger:
@@ -445,16 +416,14 @@ class SCSTrainer:
                     except Exception as e:
                         pass
                     
-                # 에폭 전체 합산 변수에 누적 (배치 평균이 아닌, 샘플 결과의 합을 누적)
-                total_loss_sum += batch_total_loss
-                total_accuracy_sum += batch_total_accuracy
-                total_samples_processed += num_valid_samples_in_batch
-                num_batches += 1
-        
+                total_loss += batch_loss.item()
+                total_accuracy += batch_accuracy * input_tokens.size(0)
+                num_samples += input_tokens.size(0)
+
         # 평균 메트릭 계산
-        avg_loss = total_loss_sum / total_samples_processed if total_samples_processed > 0 else 0.0
-        avg_accuracy = total_accuracy_sum / total_samples_processed if total_samples_processed > 0 else 0.0
-        
+        avg_loss = total_loss / num_samples
+        avg_accuracy = total_accuracy / num_samples
+
         # TensorBoard 로깅
         if self.tb_logger:
             self.tb_logger.log_validation_step({'loss': avg_loss, 'accuracy': avg_accuracy})

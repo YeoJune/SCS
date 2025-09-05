@@ -12,59 +12,79 @@ class SCSMetrics:
     
     @staticmethod
     def accuracy(outputs: torch.Tensor, targets: torch.Tensor, pad_token_id: int = None, guide_sep_token_id: int = None) -> float:
-        """정확도 계산 (배치 처리 지원, 길이 불일치 처리, guide 영역 제외)"""
+        """
+        [수정됨] 정확도 계산. 내부적으로 샘플 단위(B=1)로 처리하여 결과를 합산.
+        """
         eos_token_id = 1 # TEMP
-        if outputs.dim() == 3:  # [B, seq_len, vocab_size]
-            batch_size, output_seq_len, vocab_size = outputs.shape
-            batch_size_t, target_seq_len = targets.shape
+        if outputs.dim() != 3:
+            # 3D 텐서가 아닌 경우는 기존 로직을 유지 (또는 에러 처리)
+            # 이 부분은 현재 사용 사례와 무관하므로 그대로 둡니다.
+            preds = outputs.argmax(dim=-1)
+            correct = (preds == targets).float()
+            return correct.mean().item()
+
+        # --- 메인 로직 시작 ---
+        batch_size = outputs.shape[0]
+        
+        # 배치 내 모든 샘플의 결과를 합산할 변수 초기화
+        total_correct_in_batch = 0
+        total_valid_in_batch = 0
+        
+        # --- for 루프를 통해 각 샘플을 개별적으로 처리 ---
+        for i in range(batch_size):
+            # i번째 샘플을 [1, seq_len, ...] 형태로 슬라이싱
+            sample_outputs = outputs[i:i+1]
+            sample_targets = targets[i:i+1]
             
-            # 배치 크기 일치 확인
-            assert batch_size == batch_size_t, f"Batch size mismatch: {batch_size} vs {batch_size_t}"
+            # --- 이제부터의 로직은 B=1인 텐서에 대해 수행됨 ---
             
-            preds = outputs.argmax(dim=-1)  # [B, min_len]
+            s_batch_size, s_output_seq_len, s_vocab_size = sample_outputs.shape
+            s_batch_size_t, s_target_seq_len = sample_targets.shape
             
-            if output_seq_len != target_seq_len:
-                max_len = max(output_seq_len, target_seq_len)
+            # 예측 토큰 생성
+            preds = sample_outputs.argmax(dim=-1)
+            
+            # 길이 불일치 시, 더 긴 쪽에 패딩을 추가하여 길이를 맞춤
+            if s_output_seq_len != s_target_seq_len:
+                max_len = max(s_output_seq_len, s_target_seq_len)
                 
-                if output_seq_len < max_len:
-                    pad_size = max_len - output_seq_len
-                    pad_preds = torch.full((preds.shape[0], pad_size), pad_token_id, dtype=preds.dtype, device=preds.device)
+                if s_output_seq_len < max_len:
+                    pad_size = max_len - s_output_seq_len
+                    pad_preds = torch.full((1, pad_size), pad_token_id, dtype=preds.dtype, device=preds.device)
                     preds = torch.cat([preds, pad_preds], dim=1)
 
-                if target_seq_len < max_len:
-                    pad_size = max_len - target_seq_len
-                    pad_labels = torch.full((targets.shape[0], pad_size), pad_token_id, dtype=targets.dtype, device=targets.device)
-                    targets = torch.cat([targets, pad_labels], dim=1)
+                if s_target_seq_len < max_len:
+                    pad_size = max_len - s_target_seq_len
+                    pad_labels = torch.full((1, pad_size), pad_token_id, dtype=sample_targets.dtype, device=sample_targets.device)
+                    sample_targets = torch.cat([sample_targets, pad_labels], dim=1)
 
-            # 기본 마스크 생성 (패딩 토큰 제외)
+            # 이제 preds와 sample_targets의 길이는 max_len으로 동일
+            
+            # 기본 마스크 생성 (패딩 및 EOS 토큰 제외)
             if pad_token_id is not None:
-                mask = (targets != pad_token_id) & (targets != eos_token_id)
+                mask = (sample_targets != pad_token_id) & (sample_targets != eos_token_id)
             else:
-                mask = torch.ones_like(targets, dtype=torch.bool)
+                mask = torch.ones_like(sample_targets, dtype=torch.bool)
             
             # guide_sep_token 이후 부분만 정확도 계산
             if guide_sep_token_id is not None:
-                answer_mask = SCSMetrics._create_answer_mask(targets, guide_sep_token_id)
+                # _create_answer_mask는 배치 입력을 기대하므로 [1, seq_len] 텐서를 그대로 전달
+                answer_mask = SCSMetrics._create_answer_mask(sample_targets, guide_sep_token_id)
                 mask = mask & answer_mask
             
-            correct = (preds == targets) & mask
-            total_valid = mask.sum()
+            # 이 샘플에 대한 결과 계산
+            correct = (preds == sample_targets) & mask
             
-            if total_valid > 0:
-                return (correct.sum().float() / total_valid.float()).item()
-            else:
-                return 0.0
-                
+            # 배치 전체의 합산 변수에 누적
+            total_correct_in_batch += correct.sum()
+            total_valid_in_batch += mask.sum()
+
+        # --- 루프 종료 후 최종 배치 정확도 계산 ---
+        
+        if total_valid_in_batch > 0:
+            return (total_correct_in_batch.float() / total_valid_in_batch.float()).item()
         else:
-            # 1D 또는 2D 텐서 처리 (기존 로직 유지)
-            if outputs.dim() == 1:
-                pred = outputs.argmax().item()
-                target = targets.item()
-                return float(pred == target)
-            else:
-                preds = outputs.argmax(dim=-1)
-                correct = (preds == targets).float()
-                return correct.mean().item()
+            return 0.0
     
     @staticmethod
     def _create_answer_mask(targets: torch.Tensor, guide_sep_token_id: int) -> torch.Tensor:

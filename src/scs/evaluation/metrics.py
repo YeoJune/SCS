@@ -23,18 +23,12 @@ class SCSMetrics:
             
             preds = outputs.argmax(dim=-1)  # [B, min_len]
             
-            if output_seq_len != target_seq_len:
-                max_len = max(output_seq_len, target_seq_len)
-                
-                if output_seq_len < max_len:
-                    pad_size = max_len - output_seq_len
-                    pad_preds = torch.full((preds.shape[0], pad_size), pad_token_id, dtype=preds.dtype, device=preds.device)
-                    preds = torch.cat([preds, pad_preds], dim=1)
-
-                if target_seq_len < max_len:
-                    pad_size = max_len - target_seq_len
-                    pad_labels = torch.full((targets.shape[0], pad_size), pad_token_id, dtype=targets.dtype, device=targets.device)
-                    targets = torch.cat([targets, pad_labels], dim=1)
+            if output_seq_len < target_seq_len:
+                pad_size = target_seq_len - output_seq_len
+                pad_preds = torch.full((preds.shape[0], pad_size), pad_token_id, dtype=preds.dtype, device=preds.device)
+                preds = torch.cat([preds, pad_preds], dim=1)
+            elif output_seq_len > target_seq_len:
+                preds = preds[:, :target_seq_len]
 
             # 기본 마스크 생성 (패딩 토큰 제외)
             if pad_token_id is not None:

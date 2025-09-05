@@ -47,13 +47,20 @@ class SCSMetrics:
                 answer_mask = SCSMetrics._create_answer_mask(targets, guide_sep_token_id)
                 mask = mask & answer_mask
             
-            correct = (preds == targets) & mask
-            total_valid = mask.sum()
+            # 각 샘플별로 정확도 계산
+            correct_per_sample = ((preds == targets) & mask).sum(dim=1)
+            valid_per_sample = mask.sum(dim=1)
             
-            if total_valid > 0:
-                return (correct.sum().float() / total_valid.float()).item()
-            else:
-                return 0.0
+            # 0으로 나누는 것을 방지
+            # valid_per_sample이 0인 샘플의 정확도는 0으로 처리 (예: 정답이 없는 경우)
+            sample_accuracies = torch.where(
+                valid_per_sample > 0,
+                correct_per_sample.float() / valid_per_sample.float(),
+                torch.tensor(0.0, device=outputs.device)
+            )
+            
+            # 배치 내 샘플들의 정확도를 평균내어 최종 결과 반환
+            return sample_accuracies.mean().item()
                 
         else:
             # 1D 또는 2D 텐서 처리 (기존 로직 유지)

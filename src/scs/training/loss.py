@@ -118,10 +118,12 @@ class SCSLoss(nn.Module):
         
         # 길이 불일치 처리
         outputs, targets = self._handle_length_mismatch(outputs, targets, vocab_size)
+
+        total_loss = torch.tensor(0.0, device=outputs.device)
         
         # 기본 분류 손실 계산 (guide weight 포함)
         base_loss = self._compute_base_loss(outputs, targets, processing_info, vocab_size)
-        total_loss = base_loss
+        total_loss += base_loss
         
         # Axon Pruning 손실 - Loss에서 직접 계산 (표준적 접근법)
         pruning_loss = torch.tensor(0.0, device=outputs.device)

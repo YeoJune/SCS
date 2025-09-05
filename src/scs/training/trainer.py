@@ -431,7 +431,6 @@ class SCSTrainer:
         self.model.eval()
         
         # 전체 배치 메트릭 누적용
-        total_loss = 0.0
         total_accuracy = 0.0
         total_samples = 0
         total_convergence_count = 0
@@ -464,22 +463,15 @@ class SCSTrainer:
                 processing_info = result['processing_info']
                 
                 if output_logits.shape[1] > 0:
-                    # 손실 함수에 tb_logger 설정
-                    if self.tb_logger:
-                        self.loss_fn._tb_logger = self.tb_logger
-
-                    batch_loss = self.loss_fn(output_logits, target_tokens, processing_info)
                     batch_accuracy = SCSMetrics.accuracy(
                         output_logits, target_tokens, 
                         pad_token_id=self.config.pad_token_id, 
                         guide_sep_token_id=self.config.guide_sep_token_id
                     )
                 else:
-                    batch_loss = torch.tensor(float('inf'))
                     batch_accuracy = 0.0
                 
                 # 배치 메트릭 누적
-                total_loss += batch_loss.item()
                 total_accuracy += batch_accuracy * batch_size
                 total_samples += batch_size
                 total_convergence_count += processing_info['convergence_achieved'] * batch_size

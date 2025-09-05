@@ -304,11 +304,14 @@ class SCSTrainer:
         processing_info = result['processing_info']
         
         if output_logits.shape[1] > 0:
+            # 타겟과 같은 길이로 맞춤
+            target_subset = target_tokens[:, :output_logits.shape[1]]
+            
             # 손실 함수에 tb_logger 설정
             if self.tb_logger:
                 self.loss_fn._tb_logger = self.tb_logger
-
-            loss = self.loss_fn(output_logits, target_tokens, processing_info)
+                
+            loss = self.loss_fn(output_logits, target_subset, processing_info)
         else:
             loss = torch.tensor(0.0, device=self.device, requires_grad=True)
         
@@ -321,7 +324,8 @@ class SCSTrainer:
         # 정확도 계산
         with torch.no_grad():
             if output_logits.shape[1] > 0:
-                accuracy = SCSMetrics.accuracy(output_logits, target_tokens, pad_token_id=self.config.pad_token_id, guide_sep_token_id=self.config.guide_sep_token_id)
+                target_subset = target_tokens[:, :output_logits.shape[1]]
+                accuracy = SCSMetrics.accuracy(output_logits, target_subset, pad_token_id=self.config.pad_token_id, guide_sep_token_id=self.config.guide_sep_token_id)
             else:
                 accuracy = 0.0
         
@@ -491,7 +495,7 @@ class SCSTrainer:
             if output_logits.shape[1] > 0:
                 accuracy = SCSMetrics.accuracy(
                     output_logits,
-                    target_tokens,
+                    target_tokens[:, :output_logits.shape[1]],
                     pad_token_id=self.config.pad_token_id,
                     guide_sep_token_id=self.config.guide_sep_token_id
                 )

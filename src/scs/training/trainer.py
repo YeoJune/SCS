@@ -259,6 +259,7 @@ class SCSTrainer:
         total_loss = 0.0
         total_accuracy = 0.0
         num_batches = 0
+        num_samples = 0
         
         progress_bar = tqdm(train_loader, desc=f"Epoch {self.current_epoch}")
         
@@ -266,9 +267,10 @@ class SCSTrainer:
             batch_loss, batch_metrics = self._train_batch(batch)
             
             total_loss += batch_loss
-            total_accuracy += batch_metrics['accuracy']
+            total_accuracy += batch_metrics['accuracy'] * batch_metrics['batch_size']
             num_batches += 1
-            
+            num_samples += batch_metrics['batch_size']
+
             progress_bar.set_postfix({
                 'loss': f"{batch_loss:.4f}",
                 'acc': f"{batch_metrics['accuracy']:.4f}"
@@ -276,7 +278,7 @@ class SCSTrainer:
         
         return {
             'loss': total_loss / num_batches,
-            'accuracy': total_accuracy / num_batches
+            'accuracy': total_accuracy / num_samples
         }
     
     def _train_batch(self, batch: Dict[str, torch.Tensor]) -> tuple:
@@ -304,14 +306,11 @@ class SCSTrainer:
         processing_info = result['processing_info']
         
         if output_logits.shape[1] > 0:
-            # 타겟과 같은 길이로 맞춤
-            target_subset = target_tokens[:, :output_logits.shape[1]]
-            
             # 손실 함수에 tb_logger 설정
             if self.tb_logger:
                 self.loss_fn._tb_logger = self.tb_logger
-                
-            loss = self.loss_fn(output_logits, target_subset, processing_info)
+
+            loss = self.loss_fn(output_logits, target_tokens, processing_info)
         else:
             loss = torch.tensor(0.0, device=self.device, requires_grad=True)
         
@@ -324,13 +323,12 @@ class SCSTrainer:
         # 정확도 계산
         with torch.no_grad():
             if output_logits.shape[1] > 0:
-                target_subset = target_tokens[:, :output_logits.shape[1]]
-                accuracy = SCSMetrics.accuracy(output_logits, target_subset, pad_token_id=self.config.pad_token_id, guide_sep_token_id=self.config.guide_sep_token_id)
+                accuracy = SCSMetrics.accuracy(output_logits, target_tokens, pad_token_id=self.config.pad_token_id, guide_sep_token_id=self.config.guide_sep_token_id)
             else:
                 accuracy = 0.0
         
         # 배치 메트릭 구성
-        batch_metrics = {'accuracy': accuracy}
+        batch_metrics = {'accuracy': accuracy, 'batch_size': input_tokens.size(0)}
         
         # TensorBoard 로깅
         if self.tb_logger:
@@ -384,14 +382,12 @@ class SCSTrainer:
                 processing_info = result['processing_info']
                 
                 if output_logits.shape[1] > 0:
-                    target_subset = target_tokens[:, :output_logits.shape[1]]
-                    
                     # 손실 함수에 tb_logger 설정
                     if self.tb_logger:
                         self.loss_fn._tb_logger = self.tb_logger
-                        
-                    batch_loss = self.loss_fn(output_logits, target_subset, processing_info)
-                    batch_accuracy = SCSMetrics.accuracy(output_logits, target_subset, pad_token_id=self.config.pad_token_id, guide_sep_token_id=self.config.guide_sep_token_id)
+
+                    batch_loss = self.loss_fn(output_logits, target_tokens, processing_info)
+                    batch_accuracy = SCSMetrics.accuracy(output_logits, target_tokens, pad_token_id=self.config.pad_token_id, guide_sep_token_id=self.config.guide_sep_token_id)
                 else:
                     batch_loss = torch.tensor(float('inf'))
                     batch_accuracy = 0.0
@@ -469,88 +465,100 @@ class SCSTrainer:
         
         return self._aggregate_evaluation_results(all_sample_results, saved_examples, total_samples)
 
-    def _extract_sample_from_result(
-        self, 
-        batch: Dict[str, torch.Tensor], 
-        result: Dict[str, Any], 
-        sample_idx: int, 
-        global_idx: int
-    ) -> Dict[str, Any]:
-        """시스템 결과에서 개별 샘플 결과 추출"""
-        try:
-            # 텍스트 복원
-            input_text = self._decode_tokens_to_text(batch['input_tokens'][sample_idx])
-            target_text = self._decode_tokens_to_text(batch['target_tokens'][sample_idx])
-            
-            # 생성 결과 추출
-            generated_tokens = result['generated_tokens'][sample_idx]
-            generated_text = self._decode_tokens_to_text(generated_tokens) if generated_tokens.numel() > 0 else "[빈 출력]"
-            
-            # 정확도 계산
-            output_logits = result['output_logits'][sample_idx:sample_idx+1]
-            target_tokens = batch['target_tokens'][sample_idx:sample_idx+1].to(output_logits.device)
-            
-            if output_logits.shape[1] > 0:
-                accuracy = SCSMetrics.accuracy(
-                    output_logits,
-                    target_tokens[:, :output_logits.shape[1]],
-                    pad_token_id=self.config.pad_token_id,
-                    guide_sep_token_id=self.config.guide_sep_token_id
-                )
-            else:
-                accuracy = 0.0
-            
-            processing_info = result['processing_info']
-            
-            return {
-                'input_text': input_text,
-                'target_text': target_text,
-                'generated_text': generated_text,
-                'accuracy': accuracy,
-                'processing_clk': processing_info['processing_clk'],
-                'tokens_generated': processing_info['tokens_generated'],
-                'convergence_achieved': processing_info['convergence_achieved'],
-                'generation_method': 'system_complete_processing',
-                'global_index': global_idx,
-            }
-            
-        except Exception as e:
-            return {
-                'input_text': "[추출 실패]",
-                'target_text': "[추출 실패]",
-                'generated_text': "[추론 실패]",
-                'accuracy': 0.0,
-                'processing_clk': self.config.max_clk_training,
-                'tokens_generated': 0,
-                'convergence_achieved': False,
-                'generation_method': 'error',
-                'global_index': global_idx,
-                'error': str(e)
-            }
-    
-    def _aggregate_evaluation_results(
-        self, 
-        all_results: List[Dict[str, Any]], 
-        saved_examples: List[Dict[str, Any]], 
-        total_samples: int
-    ) -> Dict[str, Any]:
-        """평가 결과 집계"""
-        print(f"\n=== 전체 {total_samples}개 샘플 결과 집계 ===")
+    def evaluate(self, test_loader: DataLoader, save_examples: int = 10) -> Dict[str, Any]:
+        """평가 - 배치 단위 계산으로 최적화"""
+        self.model.eval()
         
-        total_accuracy = sum(result['accuracy'] for result in all_results) / len(all_results)
-        convergence_rate = sum(result['convergence_achieved'] for result in all_results) / len(all_results)
-        avg_processing_clk = sum(result['processing_clk'] for result in all_results if isinstance(result['processing_clk'], (int, float))) / len(all_results)
-        avg_tokens_generated = sum(result['tokens_generated'] for result in all_results if isinstance(result['tokens_generated'], (int, float))) / len(all_results)
+        # 전체 배치 메트릭 누적용
+        total_loss = 0.0
+        total_accuracy = 0.0
+        total_samples = 0
+        total_convergence_count = 0
+        total_processing_clk = 0.0
+        total_tokens_generated = 0.0
+        
+        # 예시 저장용
+        saved_examples = []
+        examples_collected = 0
+        
+        with torch.no_grad():
+            for batch_idx, batch in enumerate(test_loader):
+                input_tokens = batch['input_tokens'].to(self.device)
+                target_tokens = batch['target_tokens'].to(self.device)
+                attention_mask = batch['attention_mask'].to(self.device)
+                
+                batch_size = input_tokens.shape[0]
+                
+                # 🚀 시스템이 완전한 추론 처리!
+                result = self.model(
+                    input_tokens=input_tokens,
+                    target_tokens=target_tokens,
+                    attention_mask=attention_mask,
+                    training=False,
+                    scheduled_sampling_prob=0.0,  # 완전 auto-regressive
+                    tensorboard_logger=self.tb_logger  # TensorBoard 로거 전달
+                )
+                
+                # === 배치 단위 메트릭 계산 ===
+                output_logits = result['output_logits']
+                processing_info = result['processing_info']
+                
+                if output_logits.shape[1] > 0:
+                    # 손실 함수에 tb_logger 설정
+                    if self.tb_logger:
+                        self.loss_fn._tb_logger = self.tb_logger
+
+                    batch_loss = self.loss_fn(output_logits, target_tokens, processing_info)
+                    batch_accuracy = SCSMetrics.accuracy(
+                        output_logits, target_tokens, 
+                        pad_token_id=self.config.pad_token_id, 
+                        guide_sep_token_id=self.config.guide_sep_token_id
+                    )
+                else:
+                    batch_loss = torch.tensor(float('inf'))
+                    batch_accuracy = 0.0
+                
+                # 배치 메트릭 누적
+                total_loss += batch_loss.item()
+                total_accuracy += batch_accuracy * batch_size
+                total_samples += batch_size
+                total_convergence_count += processing_info['convergence_achieved'] * batch_size
+                total_processing_clk += processing_info['processing_clk'] * batch_size
+                total_tokens_generated += processing_info['tokens_generated'] * batch_size
+                
+                # === 예시 수집 (필요한 개수만큼만) ===
+                if examples_collected < save_examples:
+                    samples_to_collect = min(save_examples - examples_collected, batch_size)
+                    
+                    for sample_idx in range(samples_to_collect):
+                        global_idx = total_samples - batch_size + sample_idx
+                        sample_result = self._extract_sample_from_result(
+                            batch, result, sample_idx, global_idx
+                        )
+                        saved_examples.append(sample_result)
+                        examples_collected += 1
+        
+        # === 전체 평균 메트릭 계산 ===
+        avg_accuracy = total_accuracy / total_samples
+        convergence_rate = total_convergence_count / total_samples
+        avg_processing_clk = total_processing_clk / total_samples
+        avg_tokens_generated = total_tokens_generated / total_samples
+        
+        # 종합 점수 계산 (기존과 동일)
         processing_efficiency = max(0.0, 1.0 - (avg_processing_clk / self.config.max_clk_training))
         comprehensive_score = (
             0.4 * convergence_rate +
             0.3 * processing_efficiency +
             0.2 * min(1.0, (avg_tokens_generated / 10.0)) +
-            0.1 * total_accuracy
+            0.1 * avg_accuracy
         )
         
-        results = {
-            'test_accuracy': total_accuracy,
+        # 기존과 동일한 print 및 return
+        print(f"\n=== 전체 {total_samples}개 샘플 결과 집계 ===")
+        print(f"최종 결과: 정확도={avg_accuracy:.4f}, 종합점수={comprehensive_score:.4f}")
+        
+        return {
+            'test_accuracy': avg_accuracy,
             'comprehensive_score': comprehensive_score,
             'convergence_rate': convergence_rate,
             'processing_efficiency': processing_efficiency,
@@ -558,9 +566,6 @@ class SCSTrainer:
             'num_examples_saved': len(saved_examples),
             'total_samples_evaluated': total_samples
         }
-        
-        print(f"최종 결과: 정확도={total_accuracy:.4f}, 종합점수={comprehensive_score:.4f}")
-        return results
     
     def _should_early_stop(self, val_loss: float) -> bool:
         """조기 종료 판단"""

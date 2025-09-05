@@ -318,15 +318,20 @@ class GLUEDataset(BaseDataset):
     
     # 각 태스크별 라벨 매핑 정의
     LABEL_MAPPINGS = {
-        'cola': {0: 'unacceptable', 1: 'acceptable'},
-        'sst2': {0: 'negative', 1: 'positive'},
-        'mrpc': {0: 'not equivalent', 1: 'equivalent'}, 
-        'qqp': {0: 'not duplicate', 1: 'duplicate'},
-        'rte': {0: 'not entailment', 1: 'entailment'},
-        'wnli': {0: 'not entailment', 1: 'entailment'},
-        'mnli': {0: 'entailment', 1: 'neutral', 2: 'contradiction'},
-        'qnli': {0: 'entailment', 1: 'not entailment'},
-        # STS-B는 회귀 태스크이므로 별도 처리
+        # 이진 분류 (Binary Classification) -> 단일 토큰 경향의 단어로 변경
+        'cola': {0: 'incorrect', 1: 'correct'},
+        'sst2': {0: 'bad', 1: 'great'},
+        'mrpc': {0: 'No', 1: 'Yes'},
+        'qqp':  {0: 'No', 1: 'Yes'},
+        'rte':  {0: 'No', 1: 'Yes'},
+        'wnli': {0: 'No', 1: 'Yes'},
+        'qnli': {0: 'No', 1: 'Yes'},
+        
+        # 3지 선다 (Three-way Classification) -> 단일 토큰 경향의 단어로 변경
+        'mnli': {0: 'Yes', 1: 'Maybe', 2: 'No'},
+        
+        # 회귀 (Regression) - 별도 처리
+        'stsb': {} 
     }
     
     # 각 태스크별 프롬프트 템플릿

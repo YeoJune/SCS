@@ -442,13 +442,15 @@ class SCSTrainer:
                     except Exception as e:
                         pass
                     
-                total_loss += batch_loss.item()
-                total_accuracy += batch_accuracy
+                # 에폭 전체 합산 변수에 누적 (배치 평균이 아닌, 샘플 결과의 합을 누적)
+                total_loss_sum += batch_total_loss
+                total_accuracy_sum += batch_total_accuracy
+                total_samples_processed += num_valid_samples_in_batch
                 num_batches += 1
         
         # 평균 메트릭 계산
-        avg_loss = total_loss / num_batches
-        avg_accuracy = total_accuracy / num_batches
+        avg_loss = total_loss_sum / total_samples_processed if total_samples_processed > 0 else 0.0
+        avg_accuracy = total_accuracy_sum / total_samples_processed if total_samples_processed > 0 else 0.0
         
         # TensorBoard 로깅
         if self.tb_logger:

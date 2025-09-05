@@ -359,8 +359,11 @@ class SCSTrainer:
     def _validate_epoch(self, val_loader: DataLoader) -> Dict[str, float]:
         """검증 - 간소화됨"""
         self.model.eval()
-        total_loss = 0.0
-        total_accuracy = 0.0
+        
+        # 에폭 전체의 누적 변수
+        total_loss_sum = 0.0
+        total_accuracy_sum = 0.0
+        total_samples_processed = 0
         num_batches = 0
         
         with torch.no_grad():

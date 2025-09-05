@@ -1,6 +1,6 @@
 # === 기본 설정 상속 ===
 defaults:
-  - babi
+  - mrpc
 
 learning:
   gradual_unfreezing:

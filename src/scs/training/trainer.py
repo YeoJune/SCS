@@ -455,7 +455,6 @@ class SCSTrainer:
                     attention_mask=attention_mask,
                     training=False,
                     scheduled_sampling_prob=0.0,  # 완전 auto-regressive
-                    max_output_length=target_tokens.shape[1]  # 타겟 길이 힌트
                 )
                 
                 # 배치 결과를 개별 샘플로 분해

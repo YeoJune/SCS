@@ -355,12 +355,12 @@ class SCSTrainer:
                     pass
 
         return loss.item(), batch_metrics
-
+    
     def _validate_epoch(self, val_loader: DataLoader) -> Dict[str, float]:
-        """검증 - 간소화됨"""
+        """검증 - 개별 샘플 정확도로 수정됨"""
         self.model.eval()
         total_loss = 0.0
-        total_accuracy = 0.0
+        all_sample_accuracies = []  # 개별 샘플 정확도들을 저장
         num_batches = 0
         
         with torch.no_grad():
@@ -379,7 +379,7 @@ class SCSTrainer:
                     tensorboard_logger=self.tb_logger  # TensorBoard 로거 전달
                 )
                 
-                # 손실 및 정확도 계산
+                # 손실 계산
                 output_logits = result['output_logits']
                 processing_info = result['processing_info']
                 
@@ -391,10 +391,26 @@ class SCSTrainer:
                         self.loss_fn._tb_logger = self.tb_logger
                         
                     batch_loss = self.loss_fn(output_logits, target_subset, processing_info)
-                    batch_accuracy = SCSMetrics.accuracy(output_logits, target_subset, pad_token_id=self.config.pad_token_id, guide_sep_token_id=self.config.guide_sep_token_id)
+                    
+                    # 개별 샘플 정확도 계산 (evaluate()와 동일한 방식)
+                    batch_size = output_logits.shape[0]
+                    for sample_idx in range(batch_size):
+                        sample_output = output_logits[sample_idx:sample_idx+1]
+                        sample_target = target_subset[sample_idx:sample_idx+1]
+                        
+                        sample_accuracy = SCSMetrics.accuracy(
+                            sample_output, 
+                            sample_target, 
+                            pad_token_id=self.config.pad_token_id, 
+                            guide_sep_token_id=self.config.guide_sep_token_id
+                        )
+                        all_sample_accuracies.append(sample_accuracy)
+                        
                 else:
                     batch_loss = torch.tensor(float('inf'))
-                    batch_accuracy = 0.0
+                    # output이 없는 경우 배치의 모든 샘플을 0.0으로 추가
+                    batch_size = input_tokens.shape[0]
+                    all_sample_accuracies.extend([0.0] * batch_size)
 
                 # 검증 중 다양한 시각화 로깅 (첫 번째 배치만)
                 if batch_idx == 0 and self.tb_logger:
@@ -417,12 +433,13 @@ class SCSTrainer:
                         pass
                     
                 total_loss += batch_loss.item()
-                total_accuracy += batch_accuracy
                 num_batches += 1
         
         # 평균 메트릭 계산
         avg_loss = total_loss / num_batches
-        avg_accuracy = total_accuracy / num_batches
+        
+        # 개별 샘플 정확도들의 평균 (evaluate()와 동일한 방식)
+        avg_accuracy = sum(all_sample_accuracies) / len(all_sample_accuracies) if all_sample_accuracies else 0.0
         
         # TensorBoard 로깅
         if self.tb_logger:

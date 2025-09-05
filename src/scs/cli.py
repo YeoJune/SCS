@@ -316,6 +316,7 @@ def evaluate_mode(args: argparse.Namespace):
 
     setup_logging(log_dir=experiment_dir / "logs" / "eval", level=logging.DEBUG if args.debug else logging.INFO)
     logger = logging.getLogger(__name__)
+    set_random_seed(args.seed)
     device = get_device(args.device)
     logger.info(f"📊 평가 모드 시작 | 디바이스: {device}")
     
@@ -366,7 +367,7 @@ def evaluate_mode(args: argparse.Namespace):
         
         # 체크포인트 로드
         checkpoint = torch.load(best_model_path, map_location=device, weights_only=False)
-        model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+        model.load_state_dict(checkpoint['model_state_dict'], strict=True)
         logger.info("✅ 모델 복원 완료")
 
         # 6. 평가 실행

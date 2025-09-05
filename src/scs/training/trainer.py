@@ -425,45 +425,6 @@ class SCSTrainer:
             self.tb_logger.log_validation_step({'loss': avg_loss, 'accuracy': avg_accuracy})
         
         return {'loss': avg_loss, 'accuracy': avg_accuracy}
-    
-    def evaluate(self, test_loader: DataLoader, save_examples: int = 10) -> Dict[str, Any]:
-        """평가 - 대폭 간소화됨"""
-        self.model.eval()
-        
-        all_sample_results = []
-        saved_examples = []
-        total_samples = 0
-        
-        with torch.no_grad():
-            for batch_idx, batch in enumerate(test_loader):
-                input_tokens = batch['input_tokens'].to(self.device)
-                target_tokens = batch['target_tokens'].to(self.device)
-                attention_mask = batch['attention_mask'].to(self.device)
-                
-                batch_size = input_tokens.shape[0]
-                
-                # 🚀 시스템이 완전한 추론 처리!
-                result = self.model(
-                    input_tokens=input_tokens,
-                    target_tokens=target_tokens,
-                    attention_mask=attention_mask,
-                    training=False,
-                    scheduled_sampling_prob=0.0,  # 완전 auto-regressive
-                )
-                
-                # 배치 결과를 개별 샘플로 분해
-                for sample_idx in range(batch_size):
-                    sample_result = self._extract_sample_from_result(
-                        batch, result, sample_idx, total_samples
-                    )
-                    
-                    all_sample_results.append(sample_result)
-                    total_samples += 1
-                    
-                    if len(saved_examples) < save_examples:
-                        saved_examples.append(sample_result)
-        
-        return self._aggregate_evaluation_results(all_sample_results, saved_examples, total_samples)
 
     def evaluate(self, test_loader: DataLoader, save_examples: int = 10) -> Dict[str, Any]:
         """평가 - 배치 단위 계산으로 최적화"""
@@ -496,7 +457,6 @@ class SCSTrainer:
                     attention_mask=attention_mask,
                     training=False,
                     scheduled_sampling_prob=0.0,  # 완전 auto-regressive
-                    tensorboard_logger=self.tb_logger  # TensorBoard 로거 전달
                 )
                 
                 # === 배치 단위 메트릭 계산 ===

@@ -108,15 +108,15 @@ learning:
   final_temporal_weight: 1.0 # 나중 CLK에 기본 중요도
 
   guide_sep_token_id: 32057
-  guide_weight: 1.0
+  guide_weight: 0.4
 
   length_penalty_weight: 0.0
   orthogonal_reg_weight: 25.0
 
-  gate_pruning_weight: 5.0 # 패치 게이트 L1 정규화 가중치
+  gate_pruning_weight: 0.5 # 패치 게이트 L1 정규화 가중치
   gate_temperature: 1.0 # 패치 게이트 온도
-  inner_pruning_weight: 5.0 # 내부 연결 L1 정규화 가중치
-  inner_temperature: 0.5 # 내부 연결 온도
+  inner_pruning_weight: 0.5 # 내부 연결 L1 정규화 가중치
+  inner_temperature: 0.8 # 내부 연결 온도
   axon_strength_reg_weight: 0.0 # 축삭 연결 강도 정규화 가중치
 
   spike_reg_weight: 1e+7

@@ -87,19 +87,26 @@ class SCSLoss(nn.Module):
     def _create_guide_weight_mask(self, targets: torch.Tensor) -> torch.Tensor:
         """guide_sep_token 이전까지 guide_weight 적용하는 마스크 생성"""
         batch_size, seq_len = targets.shape
+        
+        # 1. 기본 가중치 마스크 생성
         guide_mask = torch.ones_like(targets, dtype=torch.float)
         
-        # 각 배치별로 guide_sep_token 위치 찾기
         for batch_idx in range(batch_size):
             sep_positions = (targets[batch_idx] == self.guide_sep_token_id).nonzero(as_tuple=False)
             
             if len(sep_positions) > 0:
-                # 첫 번째 guide_sep_token 위치까지 guide_weight 적용
                 first_sep_pos = sep_positions[0].item()
-                guide_mask[batch_idx, :first_sep_pos] = self.guide_weight
-                # guide_sep_token 이후는 기본 가중치 1.0 유지
+                # guide_sep_token을 포함한 이전까지 guide_weight 적용
+                guide_mask[batch_idx, :first_sep_pos + 1] = self.guide_weight
         
-        return guide_mask
+        # 2. 정규화
+        current_mean = guide_mask.mean()
+        
+        # 평균값이 0에 가까우면 (모든 값이 0인 경우 등) 1로 나눠서 에러 방지
+        if current_mean < 1e-9:
+            return guide_mask
+        else:
+            return guide_mask / current_mean
     
     def forward(
         self, 

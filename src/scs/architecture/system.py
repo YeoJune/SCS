@@ -66,7 +66,7 @@ class AxonalConnections(nn.Module):
             target_patch_w = target_w // source_patches_w
 
             AXON_MEAN = 1.0
-            AXON_STD = 0.05
+            AXON_STD = 0.03
             
             # 패치별 게이트 가중치 [num_patches]
             patch_gates = torch.randn(num_patches, device=self.device) * AXON_STD + AXON_MEAN

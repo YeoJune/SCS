@@ -698,7 +698,7 @@ class SCSTrainer:
             if hasattr(self.tokenizer, 'decode'):
                 return self.tokenizer.decode(valid_tokens.tolist())
             elif hasattr(self.tokenizer, 'tokenizer'):
-                return self.tokenizer.tokenizer.decode(valid_tokens.tolist(), skip_special_tokens=True)
+                return self.tokenizer.tokenizer.decode(valid_tokens.tolist(), skip_special_tokens=False)
             else:
                 return f"tokens: {valid_tokens.tolist()}"
                 

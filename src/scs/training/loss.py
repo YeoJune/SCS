@@ -363,29 +363,35 @@ class SCSLoss(nn.Module):
         if not all_spikes:
             return torch.tensor(0.0, device=device)
 
-        total_spike_count = 0.0
-        total_neuron_count = 0.0
+        # 노드별로 스파이크 수와 뉴런 수를 저장할 딕셔너리
+        node_spike_counts = {}
+        node_neuron_counts = {}
 
-        # 모든 CLK에 걸쳐 스파이크 수와 뉴런 수를 누적합니다.
+        # 모든 CLK에 걸쳐 노드별로 스파이크/뉴런 수 누적
         for spikes_at_clk in all_spikes:
             for node_name, node_spikes in spikes_at_clk.items():
-                # IN 노드만 제어하고 싶다면 여기서 필터링 가능: if node_name == 'IN':
-                total_spike_count += node_spikes.sum()
-                total_neuron_count += node_spikes.numel()
+                if node_name not in node_spike_counts:
+                    node_spike_counts[node_name] = 0.0
+                    node_neuron_counts[node_name] = 0.0
+                
+                node_spike_counts[node_name] += node_spikes.sum()
+                node_neuron_counts[node_name] += node_spikes.numel()
+            
+        total_loss = torch.tensor(0.0, device=device)
+        target_rate = torch.tensor(self.target_spike_rate, device=device)
 
-        if total_neuron_count == 0:
-            return torch.tensor(0.0, device=device)
+        for node_name in node_spike_counts:
+            total_spikes = node_spike_counts[node_name]
+            total_neurons = node_neuron_counts[node_name]
 
-        # 실제 관측된 평균 스파이크율
-        observed_rate = total_spike_count / total_neuron_count
-        
-        # 목표 스파이크율 텐서 생성
-        target_rate = torch.tensor(self.target_spike_rate, device=device, dtype=observed_rate.dtype)
-        
-        # MSE 손실 계산
-        spike_loss = F.mse_loss(observed_rate, target_rate)
-        
-        return spike_loss
+            if total_neurons > 0:
+                avg_spike_rate = total_spikes / total_neurons
+                total_loss += F.mse_loss(avg_spike_rate, target_rate)
+
+        if len(node_spike_counts) != 0:
+            total_loss = total_loss / len(node_spike_counts)
+
+        return total_loss
 
 
 class TimingLoss(SCSLoss):

@@ -338,16 +338,28 @@ class SCSLoss(nn.Module):
                     target_gate_mean = torch.tensor(gate_scale, device=device)
                     strength_loss += F.mse_loss(current_gate_mean, target_gate_mean)
 
-                # --- 3b. Inner Transform 강도 정규화 (에너지 보존) ---
+                # --- 3b. Inner Transform 강도 정규화 (패치별로 계산하도록 수정) ---
                 if target_size > 0:
-                    # 목표: 가중치의 평균값이 (inner_scale / target_size)가 되도록.
-                    # inner_scale이 1.0이면 에너지 보존, 0.1이면 에너지 1/10로 감쇠.
+                    # 목표: 각 패치별 가중치 평균이 (inner_scale / target_size)가 되도록.
                     target_mean_val = inner_scale / target_size
+                    target_mean_tensor = torch.tensor(target_mean_val, device=device)
+                    transform_loss = torch.tensor(0.0, device=device)
+
+                    # 각 패치(patch)에 대해 손실을 계산하고 합산합니다.
+                    # 'p'는 0부터 num_patches-1 까지의 인덱스.
+                    for p in range(num_patches):
+                        # p번째 패치의 transform 행렬을 가져옵니다.
+                        patch_transform = transforms[p, :, :]
+                        
+                        # 해당 패치의 평균값만 계산합니다.
+                        current_patch_mean = patch_transform.mean()
+                        
+                        # 이 패치에 대한 MSE 손실을 누적합니다.
+                        transform_loss += F.mse_loss(current_patch_mean, target_mean_tensor)
                     
-                    current_mean = transforms.mean()
-                    target_mean = torch.tensor(target_mean_val, device=device)
-                    
-                    strength_loss += F.mse_loss(current_mean, target_mean)
+                    # 이렇게 하면 손실 스케일이 패치 수에 따라 변하지 않습니다.
+                    strength_loss += transform_loss / num_patches
+
         pruning_loss = self.gate_pruning_weight * gate_loss + 0.5 * self.inner_pruning_weight * inner_loss
         strength_loss = self.axon_strength_reg_weight * strength_loss
 

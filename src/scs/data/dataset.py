@@ -78,7 +78,7 @@ class BaseDataset(Dataset):
     def _tokenize_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
         """토큰화"""
         input_tokens = self.tokenizer.tokenize(item['input_text'], self.max_length)
-        target_tokens = self.tokenizer.tokenize(item['target_text'], self.max_length // 4)
+        target_tokens = self.tokenizer.tokenize(item['target_text'], self.max_length)
         
         return {
             'input_tokens': input_tokens,

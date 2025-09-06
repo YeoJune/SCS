@@ -90,7 +90,7 @@ learning:
   eval_every: 5
   save_every: 10
   early_stopping_patience: 20
-  max_clk_training: 128
+  max_clk_training: 138
   optimizer: "adamw"
 
   # Scheduled Sampling

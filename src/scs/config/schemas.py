@@ -44,6 +44,10 @@ class SpikeDynamicsConfig(BaseModel):
     influence_init_mean: float = Field(default=1.0)
     influence_init_std: float = Field(default=0.01)
     excitatory_ratio: float = Field(default=1.0)
+    gate_init_mean: float = Field(default=1.0)
+    gate_init_std: float = Field(default=0.03)
+    transform_init_mean: float = Field(default=1.0)
+    transform_init_std: float = Field(default=0.03)
 
 
 class ConnectivityConfig(BaseModel):

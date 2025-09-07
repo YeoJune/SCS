@@ -17,7 +17,7 @@ class AxonalConnections(nn.Module):
     패치 기반 축삭 연결 - 계층적 가중치를 가진 완전 비공유 패치 연결
     
     핵심 아이디어:
-    - 소스를 patch_size×patch_size 패치로 분할
+    - 소스를 [patch_size, patch_size] 패치로 분할
     - 타겟은 동일한 패치 수가 되도록 자동 조정
     - 각 패치별로 독립적인 게이트 가중치 + 내부 변환 행렬
     """
@@ -26,12 +26,20 @@ class AxonalConnections(nn.Module):
         self,
         connections: List[Dict[str, Any]],
         node_grid_sizes: Dict[str, tuple] = None,
+        gate_init_mean: float = 1.0,
+        gate_init_std: float = 0.03,
+        transform_init_mean: float = 1.0,
+        transform_init_std: float = 0.03,
         device: str = "cuda"
     ):
         super().__init__()
         
         self.connections = connections
         self.node_grid_sizes = node_grid_sizes or {}
+        self.gate_init_mean = gate_init_mean
+        self.gate_init_std = gate_init_std
+        self.transform_init_mean = transform_init_mean
+        self.transform_init_std = transform_init_std
         self.device = device
         
         # 패치별 게이트 가중치와 내부 변환 행렬
@@ -64,12 +72,9 @@ class AxonalConnections(nn.Module):
             # 타겟 패치 크기 (동일한 패치 수 맞추기)
             target_patch_h = target_h // source_patches_h
             target_patch_w = target_w // source_patches_w
-
-            AXON_MEAN = 1.0
-            AXON_STD = 0.03
             
             # 패치별 게이트 가중치 [num_patches]
-            patch_gates = torch.randn(num_patches, device=self.device) * AXON_STD + AXON_MEAN
+            patch_gates = torch.randn(num_patches, device=self.device) * self.gate_init_std + self.gate_init_mean
             self.patch_gates[conn_key] = nn.Parameter(patch_gates.abs())
             
             # 패치별 내부 변환 행렬 [num_patches, target_patch_size, source_patch_size]
@@ -78,7 +83,7 @@ class AxonalConnections(nn.Module):
             
             inner_transforms = torch.randn(
                 num_patches, target_patch_size, source_patch_size, device=self.device
-            ) * AXON_STD + AXON_MEAN
+            ) * self.transform_init_std + self.transform_init_mean
             self.patch_transforms[conn_key] = nn.Parameter(inner_transforms)
     
     def forward(self, node_spikes: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:

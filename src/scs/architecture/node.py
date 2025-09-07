@@ -262,8 +262,9 @@ class LocalConnectivity(nn.Module):
         self.device = device
         
         # 거리별 가중치 초기화
-        self.distance_weights = self._initialize_distance_weights()
-        
+        distance_weights = self._initialize_distance_weights()
+        self.register_buffer('distance_weights', distance_weights)
+
         # 최적화: shift 패턴 사전 계산
         self.shift_patterns = self._precompute_shift_patterns()
         

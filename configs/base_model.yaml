@@ -33,6 +33,10 @@ spike_dynamics:
   influence_init_mean: 1.0
   influence_init_std: 0.01
   excitatory_ratio: 0.8
+  gate_init_mean: 1.0
+  gate_init_std: 0.03
+  transform_init_mean: 1.0
+  transform_init_std: 0.03
 
 # === 연결성 설정 ===
 connectivity:

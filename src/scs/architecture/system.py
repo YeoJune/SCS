@@ -551,14 +551,14 @@ class SCSSystem(nn.Module):
         return axonal_params
     def _get_orthogonal_regularization(self) -> torch.Tensor:
         """
-        spatial_compressor와 pattern_mapper의 직교 정규화 손실 계산 (MSE 기반 수정)
+        output_mapper와 input_mapper의 직교 정규화 손실 계산 (MSE 기반 수정)
         - 두 행렬 간의 평균 제곱 오차를 계산하여 스케일을 직관적으로 만듦
         """
         device = next(self.parameters()).device
         
-        # 1. spatial_compressor 직교 정규화
+        # 1. output_mapper 직교 정규화
         # W_spatial: [E, N], 행(row)들이 직교하도록 강제
-        W_spatial = self.output_interface.spatial_compressor.weight
+        W_spatial = self.output_interface.output_mapper.weight
         E_spatial, N_spatial = W_spatial.shape
         
         # W @ W.T 가 단위행렬 I_E 에 가까워지도록 함
@@ -568,9 +568,9 @@ class SCSSystem(nn.Module):
         # MSE Loss 계산: (X - I)의 모든 원소를 제곱하여 평균
         loss_spatial = F.mse_loss(WW_T_spatial, I_spatial, reduction='mean')
 
-        # 2. pattern_mapper 직교 정규화  
+        # 2. input_mapper 직교 정규화  
         # W_pattern: [N, E], 열(column)들이 직교하도록 강제
-        W_pattern = self.input_interface.pattern_mapper.weight
+        W_pattern = self.input_interface.input_mapper.weight
         N_pattern, E_pattern = W_pattern.shape
 
         # W.T @ W 가 단위행렬 I_E 에 가까워지도록 함

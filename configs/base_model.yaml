@@ -132,7 +132,7 @@ learning:
     initial_frozen_patterns: # 시작할 때 동결할 파라미터들
       - "input_interface.token_embedding"
       - "input_interface.transformer_encoder"
-      - "input_interface.pattern_mapper"
+      - "input_interface.input_mapper"
 
       - "output_interface.token_embedding"
     unfreeze_schedule: # 에포크별 해제 스케줄
@@ -141,8 +141,8 @@ learning:
         - "output_interface.transformer_decoder.layers.1.multihead_attn"
     freeze_schedule:
       1000:
-        - "output_interface.spatial_compressor"
-        - "input_interface.pattern_mapper"
+        - "output_interface.output_mapper"
+        - "input_interface.input_mapper"
 
 data:
   guide_sep_token: <extra_id_42>

@@ -24,12 +24,15 @@ class SpikeNode(nn.Module):
         self,
         grid_height: int,
         grid_width: int,
-        decay_rate: float = 0.8,
+        decay_rate: float = 0.85,
         refractory_damping_factor: float = 0.2,
         spike_threshold: float = 1.0,
         refractory_base: int = 1,
         refractory_adaptive_factor: float = 5.0,
-        surrogate_beta: float = 3.0,
+        surrogate_beta: float = 12.0,
+        influence_init_mean: float = 1.0,
+        influence_init_std: float = 0.01,
+        excitatory_ratio: float = 0.8,
         ema_alpha: float = 0.1,  # EMA 감쇠 계수
         device: str = "cuda"
     ):
@@ -46,14 +49,11 @@ class SpikeNode(nn.Module):
         self.ema_alpha = ema_alpha
         self.device = device
 
-        INF_MEAN = 1.0
-        INF_STD = 0.01
-
         # 약 80% 흥분성, 20% 억제성
-        influence_init = torch.randn(grid_height, grid_width, device=device) * INF_STD + INF_MEAN
+        influence_init = torch.randn(grid_height, grid_width, device=device) * influence_init_std + influence_init_mean
 
         # 생물학적 현실성을 위한 바이어스
-        excitatory_mask = torch.rand(grid_height, grid_width, device=device) < 0.8
+        excitatory_mask = torch.rand(grid_height, grid_width, device=device) < excitatory_ratio
         influence_init = torch.where(
             excitatory_mask, 
             torch.abs(influence_init),  # 흥분성: 양수 바이어스
@@ -62,10 +62,6 @@ class SpikeNode(nn.Module):
         
         self.influence_strength = nn.Parameter(influence_init)
 
-        self.input_normalizer = nn.LayerNorm(
-            [grid_height, grid_width], elementwise_affine=False
-        )
-        
         # 상태 초기화 (단일 샘플용)
         self.reset_state()
         
@@ -253,7 +249,7 @@ class LocalConnectivity(nn.Module):
         self,
         grid_height: int,
         grid_width: int,
-        distance_tau: float = 2.0,
+        distance_tau: float = 1.0,
         max_distance: int = 5,
         device: str = "cuda"
     ):
@@ -266,10 +262,10 @@ class LocalConnectivity(nn.Module):
         self.device = device
         
         # 거리별 가중치 초기화
-        self._initialize_distance_weights()
+        self.distance_weights = self._initialize_distance_weights()
         
         # 최적화: shift 패턴 사전 계산
-        self._precompute_shift_patterns()
+        self.shift_patterns = self._precompute_shift_patterns()
         
     def _initialize_distance_weights(self):
         """
@@ -280,16 +276,12 @@ class LocalConnectivity(nn.Module):
         """
         # 모든 거리에 대한 가중치 계산 (벡터화)
         distances = torch.arange(1, self.max_distance + 1, device=self.device).float()
-        weights = torch.exp(-distances / self.distance_tau)
-        
-        # 학습 가능한 파라미터로 등록
-        #self.distance_weights = nn.Parameter(weights)
-        
-        self.distance_weights = weights
+        distance_weights = torch.exp(-distances / self.distance_tau)
+        return distance_weights
 
     def _precompute_shift_patterns(self):
         """거리별 shift 패턴을 미리 계산하여 저장"""
-        self.shift_patterns = {}
+        shift_patterns = {}
         for distance in range(1, self.max_distance + 1):
             shifts = []
             for dx in range(-distance, distance + 1):
@@ -297,21 +289,18 @@ class LocalConnectivity(nn.Module):
                     if abs(dx) + abs(dy) == distance:  # 맨하탄 거리
                         shifts.append((dx, dy))
             self.shift_patterns[distance] = shifts
+        return shift_patterns
         
     def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:
         """
         2차원 격자에서 Roll 연산 기반 지역적 연결 처리 (항상 배치 처리)
         
         Args:
-            grid_spikes: 2차원 격자 스파이크 [B, H, W] 또는 [H, W]
+            grid_spikes: 2차원 격자 스파이크 [B, H, W]
             
         Returns:
             연결된 신호 [B, H, W]
         """
-        # 입력을 배치 형태로 정규화
-        if grid_spikes.dim() == 2:  # [H, W] -> [1, H, W]
-            grid_spikes = grid_spikes.unsqueeze(0)
-        
         # 모든 거리의 이웃 기여도를 한번에 계산
         neighbor_contributions = []
         for distance in range(1, self.max_distance + 1):

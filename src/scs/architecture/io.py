@@ -135,7 +135,7 @@ class OutputInterface(nn.Module):
     def _create_hidden_vector(self, grid_spikes: Tensor) -> Tensor:
         spikes_flat = grid_spikes.view(grid_spikes.shape[0], -1)
         hidden_vector = self.output_mapper(spikes_flat)
-        #hidden_vector = self.hidden_norm(hidden_vector)
+        hidden_vector = self.hidden_norm(hidden_vector)
         return hidden_vector
     
     def update_hidden_window(self, grid_spikes: Tensor, batch_size: int):

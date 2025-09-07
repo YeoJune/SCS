@@ -41,6 +41,9 @@ class SpikeDynamicsConfig(BaseModel):
     refractory_adaptive_factor: float = Field(default=5.0)
     surrogate_beta: float = Field(default=3.0)
     ema_alpha: float = Field(default=0.1)
+    influence_init_mean: float = Field(default=1.0)
+    influence_init_std: float = Field(default=0.01)
+    excitatory_ratio: float = Field(default=1.0)
 
 
 class ConnectivityConfig(BaseModel):

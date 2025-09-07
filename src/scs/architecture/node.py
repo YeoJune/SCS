@@ -30,10 +30,10 @@ class SpikeNode(nn.Module):
         refractory_base: int = 1,
         refractory_adaptive_factor: float = 5.0,
         surrogate_beta: float = 12.0,
+        ema_alpha: float = 0.1,
         influence_init_mean: float = 1.0,
         influence_init_std: float = 0.01,
         excitatory_ratio: float = 0.8,
-        ema_alpha: float = 0.1,  # EMA 감쇠 계수
         device: str = "cuda"
     ):
         super().__init__()
@@ -288,7 +288,7 @@ class LocalConnectivity(nn.Module):
                 for dy in range(-distance, distance + 1):
                     if abs(dx) + abs(dy) == distance:  # 맨하탄 거리
                         shifts.append((dx, dy))
-            self.shift_patterns[distance] = shifts
+            shift_patterns[distance] = shifts
         return shift_patterns
         
     def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:

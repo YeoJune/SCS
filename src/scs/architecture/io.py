@@ -1,8 +1,6 @@
-# =src/scs/architecture/io.py
+# src/scs/architecture/io.py
 """
-SCS 입출력 인터페이스 v7.0 (Refactored Final)
-- Transformer 아키텍처는 transformer.py 모듈로 분리.
-- 학습 가능한 위치 인코딩 제거 (T5 상대 위치 편향으로 대체).
+SCS 입출력 인터페이스
 """
 
 import torch
@@ -18,20 +16,7 @@ from .transformer import (
     transplant_t5_encoder_weights, transplant_t5_decoder_weights
 )
 
-# ============================================================================
-# Helper Classes & Functions
-# ============================================================================
-class RMSNorm(nn.Module):
-    def __init__(self, dim, eps=1e-6):
-        super().__init__()
-        self.scale = nn.Parameter(torch.ones(dim))
-        self.eps = eps
-    
-    def forward(self, x):
-        rms = torch.sqrt(torch.mean(x**2, dim=-1, keepdim=True) + self.eps)
-        return self.scale * x / rms
-
-def load_t5_model_data(model_name: str = "t5-base"):
+def load_t5_model_data(model_name: str = "t5-small"):
     print(f"Loading T5 model and embeddings from {model_name}...")
     try:
         t5_model = T5ForConditionalGeneration.from_pretrained(model_name)
@@ -47,13 +32,10 @@ def load_t5_model_data(model_name: str = "t5-base"):
         print(f"Warning: Failed to load T5 model ({e}). Using random initialization.")
         return { 'full_model': None }
 
-# ============================================================================
-# Input/Output Interfaces
-# ============================================================================
 class InputInterface(nn.Module):
     def __init__(
         self, vocab_size: int, grid_height: int, grid_width: int,
-        embedding_dim: int = 512, window_size: int = 32, encoder_layers: int = 6,
+        embedding_dim: int = 512, window_size: int = 16, encoder_layers: int = 2,
         encoder_heads: int = 8, encoder_dropout: float = 0.1, dim_feedforward: int = 2048,
         input_power: float = 0.5, softmax_temperature: float = 1.0,
         t5_model_name: Optional[str] = None, device: str = "cuda"
@@ -83,9 +65,9 @@ class InputInterface(nn.Module):
         if t5_data.get('full_model'):
             transplant_t5_encoder_weights(self.transformer_encoder, t5_data['full_model'].encoder)
         
-        self.pattern_mapper = nn.Linear(self.embedding_dim, self.grid_height * self.grid_width)
-        torch.nn.init.orthogonal_(self.pattern_mapper.weight)
-    
+        self.input_mapper = nn.Linear(self.embedding_dim, self.grid_height * self.grid_width)
+        torch.nn.init.orthogonal_(self.input_mapper.weight)
+
     def forward(self, token_window: Tensor) -> Optional[Tensor]:
         if token_window is None or token_window.numel() == 0:
             return None
@@ -94,7 +76,7 @@ class InputInterface(nn.Module):
         encoder_output = self.transformer_encoder(token_embeds)
         context_vector = encoder_output[:, -1, :]
         
-        membrane_logits = self.pattern_mapper(context_vector)
+        membrane_logits = self.input_mapper(context_vector)
         pattern_probs = F.softmax(membrane_logits / self.softmax_temperature, dim=-1)
         
         total_energy = self.grid_height * self.grid_width * self.input_power
@@ -105,7 +87,7 @@ class InputInterface(nn.Module):
 class OutputInterface(nn.Module):
     def __init__(
         self, vocab_size: int, grid_height: int, grid_width: int, pad_token_id: int,
-        embedding_dim: int = 512, window_size: int = 32, decoder_layers: int = 6,
+        embedding_dim: int = 512, window_size: int = 16, decoder_layers: int = 2,
         decoder_heads: int = 8, dim_feedforward: int = 2048, dropout: float = 0.1,
         t5_model_name: Optional[str] = None, transplant_cross_attention: bool = False,
         device: str = "cuda"
@@ -131,9 +113,9 @@ class OutputInterface(nn.Module):
             self.token_embedding = nn.Embedding(self.vocab_size, self.embedding_dim, padding_idx=self.pad_token_id)
             self.final_projection = nn.Linear(self.embedding_dim, self.vocab_size)
 
-        self.spatial_compressor = nn.Linear(self.grid_height * self.grid_width, self.embedding_dim)
-        torch.nn.init.orthogonal_(self.spatial_compressor.weight)
-        
+        self.output_mapper = nn.Linear(self.grid_height * self.grid_width, self.embedding_dim)
+        torch.nn.init.orthogonal_(self.output_mapper.weight)
+
         self.hidden_norm = nn.LayerNorm(self.embedding_dim, eps=1e-6)
         
         decoder_layer = TransformerDecoderLayer(
@@ -152,20 +134,19 @@ class OutputInterface(nn.Module):
     
     def _create_hidden_vector(self, grid_spikes: Tensor) -> Tensor:
         spikes_flat = grid_spikes.view(grid_spikes.shape[0], -1)
-        hidden_vector = self.spatial_compressor(spikes_flat)
-        hidden_vector = self.hidden_norm(hidden_vector)
+        hidden_vector = self.output_mapper(spikes_flat)
+        #hidden_vector = self.hidden_norm(hidden_vector)
         return hidden_vector
     
-    def update_hidden_window(self, grid_spikes: Tensor):
+    def update_hidden_window(self, grid_spikes: Tensor, batch_size: int):
         current_hidden = self._create_hidden_vector(grid_spikes)
-        batch_size = current_hidden.shape[0]
         if self.hidden_window is None or self.hidden_window.shape[0] != batch_size:
             self.reset_state(batch_size)
         
         self.hidden_window[:, self.window_ptr, :] = current_hidden
         self.window_ptr = (self.window_ptr + 1) % self.window_size
         
-    def forward(self, decoder_input_ids: Tensor, return_pre_norm: bool = False) -> Tensor:
+    def forward(self, decoder_input_ids: Tensor) -> Tensor:
         target_embeds = self.token_embedding(decoder_input_ids)
         
         rolled_window = torch.roll(self.hidden_window, shifts=-self.window_ptr, dims=1)
@@ -174,15 +155,12 @@ class OutputInterface(nn.Module):
         causal_mask = torch.triu(torch.ones(tgt_len, tgt_len, device=self.device, dtype=torch.bool), diagonal=1)
         causal_mask = causal_mask.masked_fill(causal_mask, float('-inf'))
         
-        # Decoder의 for-loop 부분을 직접 실행 (transformer.py의 Decoder.forward와 동일)
-        decoder_output = target_embeds
-        for mod in self.transformer_decoder.layers:
-            decoder_output = mod(decoder_output, memory=rolled_window, tgt_mask=causal_mask)
-        
-        # 시뮬레이션을 위해 pre-norm 값을 반환하는 옵션 추가
-        if return_pre_norm:
-            return decoder_output
+        decoder_output = self.transformer_decoder(
+            tgt=target_embeds,
+            memory=rolled_window,
+            tgt_mask=causal_mask
+        )
 
-        # 원래 로직
         final_output = self.transformer_decoder.norm(decoder_output)
+
         return self.final_projection(final_output)

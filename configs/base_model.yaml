@@ -119,8 +119,8 @@ learning:
   inner_temperature: 0.8 # 내부 연결 온도
   axon_strength_reg_weight: 1.0 # 축삭 연결 강도 정규화 가중치
 
-  spike_reg_weight: 1e+3
-  target_spike_rate: 0.03
+  spike_reg_weight: 50
+  target_spike_rate: 0.05
 
   # 점진적 커리큘럼 학습
   use_curriculum_learning: false

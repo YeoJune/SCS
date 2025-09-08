@@ -137,7 +137,7 @@ def analyze_io_pipeline(model, test_loader, output_dir: Path, device: str):
                     
                     # 케이스 1: 완전 비활성화 스파이크로 윈도우 업데이트
                     zero_spikes = torch.zeros(batch_size, grid_h, grid_w, device=device)
-                    model.output_interface.update_hidden_window(zero_spikes)
+                    model.output_interface.update_hidden_window(zero_spikes, batch_size)
                     
                     # 케이스 2: 스파스 활성화 (10개 뉴런)로 윈도우 업데이트
                     sparse_spikes = torch.zeros(batch_size, grid_h, grid_w, device=device)
@@ -145,7 +145,7 @@ def analyze_io_pipeline(model, test_loader, output_dir: Path, device: str):
                     indices = torch.randperm(grid_h * grid_w)[:10]
                     flat_sparse[:, indices] = 1.0
                     sparse_spikes = flat_sparse.view(batch_size, grid_h, grid_w)
-                    model.output_interface.update_hidden_window(sparse_spikes)
+                    model.output_interface.update_hidden_window(sparse_spikes, batch_size)
                     
                     # 현재 히든 윈도우 상태 분석
                     current_hidden_window = model.output_interface.hidden_window  # [B, window_size, embedding_dim]

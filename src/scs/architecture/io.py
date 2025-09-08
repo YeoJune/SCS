@@ -32,7 +32,6 @@ def load_t5_model_data(model_name: str = "t5-small"):
         print(f"Warning: Failed to load T5 model ({e}). Using random initialization.")
         return { 'full_model': None }
 
-
 class InputInterface(nn.Module):
     def __init__(
         self, vocab_size: int, grid_height: int, grid_width: int,
@@ -47,14 +46,6 @@ class InputInterface(nn.Module):
         self.input_power = input_power
         self.softmax_temperature = softmax_temperature
         self.device = device
-        self.pad_token_id = 0
-
-        # 청크 크기를 window_size와 동일하게 설정 (가장 효율적)
-        self.chunk_size = self.window_size
-
-        # 캐시 초기화
-        self.cache = {}
-        self.cached_input_tokens_id = -1 # 어떤 input_tokens에 대한 캐시인지 확인용
         
         t5_data = load_t5_model_data(t5_model_name) if t5_model_name else {}
         self.vocab_size = t5_data.get('vocab_size', vocab_size)
@@ -77,135 +68,22 @@ class InputInterface(nn.Module):
         self.input_mapper = nn.Linear(self.embedding_dim, self.grid_height * self.grid_width)
         torch.nn.init.orthogonal_(self.input_mapper.weight)
 
-    def reset_state(self, batch_size: int):
-        """새로운 시퀀스 처리를 위해 캐시를 초기화합니다."""
-        self.cache = {}
-        self.cached_input_tokens_id = -1
-
-    def forward(
-        self,
-        input_tokens: Tensor,
-        clk: int,
-        attention_mask: Optional[Tensor] = None
-    ) -> Optional[Tensor]:
-        """
-        특정 clk에 대한 external_input을 반환합니다.
-        내부적으로 청크 단위로 계산하고 결과를 캐싱합니다.
-        """
-        if input_tokens is None or input_tokens.numel() == 0 or clk >= input_tokens.shape[1]:
+    def forward(self, token_window: Tensor) -> Optional[Tensor]:
+        if token_window is None or token_window.numel() == 0:
             return None
-
-        # 새로운 input_tokens가 들어오면 캐시 리셋
-        if id(input_tokens) != self.cached_input_tokens_id:
-            self.reset_state(input_tokens.shape[0])
-            self.cached_input_tokens_id = id(input_tokens)
-
-        # 현재 clk가 속한 청크의 시작 clk를 계산
-        chunk_start_clk = (clk // self.chunk_size) * self.chunk_size
-
-        # 캐시에 해당 청크가 있는지 확인 (Cache Hit)
-        if chunk_start_clk in self.cache:
-            patterns_chunk = self.cache[chunk_start_clk]
-        else:
-            # 캐시에 없으면 새로 계산 (Cache Miss)
-            patterns_chunk = self._forward_chunk(
-                input_tokens,
-                chunk_start_clk,
-                self.chunk_size,
-                attention_mask
-            )
-            # 계산된 청크를 캐시에 저장
-            self.cache[chunk_start_clk] = patterns_chunk
-
-        if patterns_chunk is None:
-            return None
-
-        # 청크 내에서 현재 clk에 해당하는 인덱스 계산
-        offset_in_chunk = clk - chunk_start_clk
         
-        # 청크의 길이가 계산된 offset보다 짧은 경우 처리 (마지막 청크)
-        if offset_in_chunk >= patterns_chunk.shape[1]:
-            return None
-
-        return patterns_chunk[:, offset_in_chunk]
-
-    def _forward_chunk(
-        self,
-        input_tokens: Tensor,
-        chunk_start_clk: int,
-        chunk_size: int,
-        attention_mask: Optional[Tensor] = None
-    ) -> Optional[Tensor]:
-        """
-        (내부용) 청크 단위 처리 - unfold와 permute를 사용한 '중앙 컨텍스트' 알고리즘
-        """
-        batch_size, input_seq_len = input_tokens.shape
-        extended_window_size = self.window_size * 2
-
-        # 실제 청크의 끝 위치 (시퀀스 길이를 넘지 않도록)
-        actual_chunk_end_clk = min(chunk_start_clk + chunk_size, input_seq_len)
-        actual_chunk_size = actual_chunk_end_clk - chunk_start_clk
-
-        if actual_chunk_size <= 0:
-            return None
-
-        # 청크 처리에 필요한 전체 토큰 범위를 계산 (알고리즘에 따라 대칭적으로 확장)
-        context_start = max(0, chunk_start_clk - self.window_size)
-        context_end = min(input_seq_len, (actual_chunk_end_clk - 1) + self.window_size + 1)
+        token_embeds = self.token_embedding(token_window)
+        encoder_output = self.transformer_encoder(token_embeds)
+        context_vector = encoder_output[:, -1, :]
         
-        if context_end <= context_start:
-             return torch.zeros(batch_size, actual_chunk_size, self.grid_height, self.grid_width, device=self.device)
-
-        # 필요한 토큰 슬라이싱 및 임베딩
-        tokens_slice = input_tokens[:, context_start:context_end]
-        if attention_mask is not None:
-            mask_slice = attention_mask[:, context_start:context_end]
-            tokens_slice = tokens_slice * mask_slice.long()
-        embeddings_slice = self.token_embedding(tokens_slice)
-
-        # unfold를 위해 필요한 총 길이 계산 및 패딩
-        required_len_for_unfold = actual_chunk_size + extended_window_size - 1
-        current_len = embeddings_slice.shape[1]
-        
-        pad_total = required_len_for_unfold - current_len
-        if pad_total > 0:
-            pad_left = pad_total // 2
-            pad_right = pad_total - pad_left
-            padded_embeddings = F.pad(embeddings_slice, (0, 0, pad_left, pad_right), 'constant', 0)
-        else:
-            padded_embeddings = embeddings_slice
-
-        # unfold와 permute로 슬라이딩 윈도우 생성
-        unfolded = padded_embeddings.unfold(1, extended_window_size, 1)
-        permuted_windows = unfolded.permute(0, 1, 3, 2)
-        
-        # 필요한 chunk_size 만큼의 윈도우만 선택
-        chunk_windows = permuted_windows[:, :actual_chunk_size, :, :]
-        
-        # Transformer Encoder 실행
-        B, C, W, E = chunk_windows.shape
-        flattened_windows = chunk_windows.reshape(B * C, W, E)
-        attended_windows = self.transformer_encoder(flattened_windows)
-        
-        # 중앙 위치의 컨텍스트 벡터 추출
-        attended_windows = attended_windows.view(B, C, W, E)
-        center_idx = self.window_size // 2
-        center_contexts = attended_windows[:, :, center_idx, :]
-        
-        return self._create_membrane_pattern(center_contexts)
-
-    def _create_membrane_pattern(self, context_vectors: Tensor) -> Tensor:
-        """컨텍스트 벡터들로부터 막전위 패턴 생성"""
-        membrane_logits = self.input_mapper(context_vectors)
+        membrane_logits = self.input_mapper(context_vector)
         pattern_probs = F.softmax(membrane_logits / self.softmax_temperature, dim=-1)
-        total_energy = self.grid_height * self.grid_width * self.input_power
-        scaled_patterns = pattern_probs * total_energy
-        # 차원에 따라 view를 다르게 적용
-        if context_vectors.dim() == 2: # [B*C, E] -> [B*C, H, W]
-            return scaled_patterns.view(-1, self.grid_height, self.grid_width)
-        else: # [B, C, E] -> [B, C, H, W]
-            return scaled_patterns.view(context_vectors.shape[0], context_vectors.shape[1], self.grid_height, self.grid_width)
         
+        total_energy = self.grid_height * self.grid_width * self.input_power
+        scaled_pattern = pattern_probs * total_energy
+        
+        return scaled_pattern.view(-1, self.grid_height, self.grid_width)
+
 class OutputInterface(nn.Module):
     def __init__(
         self, vocab_size: int, grid_height: int, grid_width: int, pad_token_id: int,

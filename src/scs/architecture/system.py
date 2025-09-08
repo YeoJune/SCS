@@ -235,10 +235,8 @@ class SCSSystem(nn.Module):
             # Phase 1: 스파이크 계산 및 상태 업데이트 (수정됨)
             pure_spikes, spikes_with_grad = self._compute_spikes()
             all_spikes_for_reg.append(spikes_with_grad)
-            external_input = self.input_interface(
-                input_tokens,
-                clk,
-                attention_mask
+            external_input = self._get_external_input_at_clk(
+                input_tokens, clk, attention_mask
             )
             self._update_states(external_input, pure_spikes, spikes_with_grad)
             final_acc_spikes = pure_spikes.get(self.acc_node) # 순전파 값이므로 pure_spikes 사용

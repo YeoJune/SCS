@@ -268,6 +268,8 @@ class LocalConnectivity(nn.Module):
         # 최적화: shift 패턴 사전 계산
         self.shift_patterns = self._precompute_shift_patterns()
         
+        self._precompute_unfold_kernel()
+        
     def _initialize_distance_weights(self):
         """
         거리 기반 가중치 초기화
@@ -353,3 +355,49 @@ class LocalConnectivity(nn.Module):
         
         # 벡터화된 합산 (기존의 순차적 덧셈과 수학적으로 동일)
         return torch.stack(shifted_grids, dim=0).sum(dim=0)
+    
+    def _precompute_unfold_kernel(self):
+        # unfold로 추출될 패치의 크기
+        self.patch_size = self.max_distance * 2 + 1
+        
+        # 패치 내에서 각 위치의 맨해튼 거리를 계산
+        center = self.max_distance
+        rel_coords = torch.cartesian_prod(torch.arange(self.patch_size), torch.arange(self.patch_size))
+        manhattan_dist = torch.abs(rel_coords[:, 0] - center) + torch.abs(rel_coords[:, 1] - center)
+        
+        # 각 거리에 해당하는 가중치를 룩업 테이블처럼 만듦
+        dist_weights = torch.cat([
+            torch.tensor([0.0], device=self.device), # 거리 0은 0
+            self.distance_weights # 거리가 1부터 max_distance까지
+        ])
+        
+        # 패치 내 각 위치에 해당하는 가중치를 매핑
+        # manhattan_dist가 0~max_distance 범위 내에 있도록 clamp
+        clamped_dist = torch.clamp(manhattan_dist, 0, self.max_distance).long()
+        # unfold 커널 shape: [patch_H * patch_W]
+        self.unfold_kernel = dist_weights[clamped_dist].to(self.device)
+
+    def forward(self, influenced_spikes: torch.Tensor) -> torch.Tensor:
+        # influenced_spikes = grid_spikes * influence
+        if influenced_spikes.dim() == 2:
+            influenced_spikes = influenced_spikes.unsqueeze(0) # [H, W] -> [1, H, W]
+        
+        B, H, W = influenced_spikes.shape
+        
+        # 1. unfold로 모든 이웃 패치를 한 번에 추출
+        # 패딩을 추가하여 경계에서도 동일한 크기의 패치를 추출
+        padding = self.max_distance
+        # patches shape: [B, patch_H * patch_W, H * W]
+        patches = F.unfold(influenced_spikes.unsqueeze(1), 
+                           kernel_size=self.patch_size, 
+                           padding=padding)
+
+        # 2. 행렬 곱셈으로 모든 internal_input을 한 번에 계산
+        # (패치와 커널의 element-wise 곱셈 후 합산)
+        # self.unfold_kernel shape: [patch_H * patch_W]
+        # patches shape:             [B, patch_H * patch_W, L] (L = H*W)
+        # einsum('k, bkl -> bl'): k에 대해 곱하고 합산
+        internal_input_flat = torch.einsum('k,bkl->bl', self.unfold_kernel, patches)
+
+        # 3. 원래 그리드 형태로 복원
+        return internal_input_flat.view(B, H, W)

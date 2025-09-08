@@ -33,7 +33,7 @@ spike_dynamics:
   influence_init_mean: 1.0
   influence_init_std: 0.01
   excitatory_ratio: 0.8
-  gate_init_mean: 0.0
+  gate_init_mean: 1.0
   gate_init_std: 0.01
   transform_init_mean: 1.0
   transform_init_std: 0.01

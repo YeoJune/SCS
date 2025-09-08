@@ -92,8 +92,8 @@ def analyze_io_pipeline(model, test_loader, output_dir: Path, device: str):
                         "description": "T5 encoder 출력, 마지막 토큰을 context로 사용"
                     })
                     
-                    # Step 5: Pattern Mapper
-                    membrane_logits = model.input_interface.pattern_mapper(context_vector)
+                    # Step 5: Input Mapper
+                    membrane_logits = model.input_interface.input_mapper(context_vector)
                     traced_data["steps"].append({
                         "name": "membrane_logits",
                         "shape": list(membrane_logits.shape),

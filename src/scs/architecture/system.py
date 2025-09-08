@@ -22,7 +22,7 @@ class AxonalConnections(nn.Module):
         self,
         connections: List[Dict[str, Any]],
         node_grid_sizes: Dict[str, tuple] = None,
-        temperature: float = 1.0,
+        temperature: float = 0.07,
         gate_init_mean: float = 0.0,
         gate_init_std: float = 0.01,
         transform_init_mean: float = 1.0,

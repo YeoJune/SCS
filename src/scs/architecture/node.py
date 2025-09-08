@@ -294,36 +294,6 @@ class LocalConnectivity(nn.Module):
             shift_patterns[distance] = shifts
         return shift_patterns
         
-    def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:
-        """
-        2차원 격자에서 Roll 연산 기반 지역적 연결 처리 (항상 배치 처리)
-        
-        Args:
-            grid_spikes: 2차원 격자 스파이크 [B, H, W]
-            
-        Returns:
-            연결된 신호 [B, H, W]
-        """
-        # 모든 거리의 이웃 기여도를 한번에 계산
-        neighbor_contributions = []
-        for distance in range(1, self.max_distance + 1):
-            neighbors = self._get_neighbors_at_distance(grid_spikes, distance)
-            neighbor_contributions.append(neighbors)
-        
-        # 모든 거리별 기여도를 스택으로 쌓기
-        if neighbor_contributions:
-            all_neighbors = torch.stack(neighbor_contributions, dim=0)  # [max_distance, B, H, W]
-            
-            # 가중치를 브로드캐스팅으로 적용
-            weights = self.distance_weights.view(-1, 1, 1, 1)  # [max_distance, 1, 1, 1]
-            weighted_neighbors = all_neighbors * weights
-            
-            # 모든 거리의 기여도 합산
-            total_input = weighted_neighbors.sum(dim=0)  # [B, H, W]
-        else:
-            total_input = torch.zeros_like(grid_spikes)
-        
-        return total_input  # 항상 [B, H, W]
     
     def _get_neighbors_at_distance(self, grid_spikes: torch.Tensor, distance: int) -> torch.Tensor:
         """

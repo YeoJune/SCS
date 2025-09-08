@@ -42,14 +42,14 @@ axonal_connections:
   connections:
     - source: "IN"
       target: "PASS"
-      patch_size: 2
+      patch_size: 8
       patch_weight_scale: 1.0
-      inner_weight_scale: 1.0
+      inner_weight_scale: 1.2
     - source: "PASS"
       target: "OUT"
-      patch_size: 2
+      patch_size: 8
       patch_weight_scale: 1.0
-      inner_weight_scale: 1.0
+      inner_weight_scale: 1.2
 
 # === 작업 설정 오버라이드 ===
 task:
@@ -59,7 +59,7 @@ task:
 
 # === 학습 설정 오버라이드 ===
 learning:
-  epochs: 71
+  epochs: 21
   learning_rate: 5e-4
   eta_min: 1e-4
   max_clk_training: 138
@@ -95,7 +95,7 @@ data_loading:
     max_length: 128
 
 data:
-  train_samples: 2000
+  train_samples: -1
   val_samples: -1
   test_samples: -1
 

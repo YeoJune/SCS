@@ -192,8 +192,8 @@ logging:
     max_images_per_batch: 10
     histogram_freq: 100
     log_interval:
-      scalars: 1 # N 배치마다 스칼라 로깅
-      histograms: 10 # N 배치마다 히스토그램 로깅
-      images: 5 # N 배치마다 이미지 로깅
-      axonal_heatmaps: 5 # N 배치마다 축삭 연결 히트맵 로깅
-      weight_heatmaps: 5 # N 배치마다 가중치 히트맵 로깅
+      scalars: 5 # N 배치마다 스칼라 로깅
+      histograms: 1000 # N 배치마다 히스토그램 로깅
+      images: 50 # N 배치마다 이미지 로깅
+      axonal_heatmaps: 50 # N 배치마다 축삭 연결 히트맵 로깅
+      weight_heatmaps: 50 # N 배치마다 가중치 히트맵 로깅

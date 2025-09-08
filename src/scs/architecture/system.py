@@ -14,35 +14,37 @@ from .timing import TimingManager
 
 class AxonalConnections(nn.Module):
     """
-    패치 기반 축삭 연결 - 계층적 가중치를 가진 완전 비공유 패치 연결
-    
-    핵심 아이디어:
-    - 소스를 [patch_size, patch_size] 패치로 분할
-    - 타겟은 동일한 패치 수가 되도록 자동 조정
-    - 각 패치별로 독립적인 게이트 가중치 + 내부 변환 행렬
+    패치 기반 축삭 연결 - 방식 D 적용 최종본
+    - 출력 = softmax(Transform/T) * (Transform_Strength + Gate)
+    - 초기화를 통해 초기 입출력 힘(strength)을 보존
     """
-    
     def __init__(
         self,
         connections: List[Dict[str, Any]],
         node_grid_sizes: Dict[str, tuple] = None,
-        gate_init_mean: float = 1.0,
-        gate_init_std: float = 0.03,
+        temperature: float = 1.0,
+        gate_init_mean: float = 0.0,
+        gate_init_std: float = 0.01,
         transform_init_mean: float = 1.0,
-        transform_init_std: float = 0.03,
+        transform_init_std: float = 0.01,
         device: str = "cuda"
     ):
         super().__init__()
         
         self.connections = connections
         self.node_grid_sizes = node_grid_sizes or {}
+        self.device = device
+
+        # 방식 D를 위한 하이퍼파라미터
+        self.temperature = temperature
+        
+        # 초기화를 위한 파라미터
         self.gate_init_mean = gate_init_mean
         self.gate_init_std = gate_init_std
         self.transform_init_mean = transform_init_mean
         self.transform_init_std = transform_init_std
-        self.device = device
         
-        # 패치별 게이트 가중치와 내부 변환 행렬
+        # 학습 가능한 파라미터 (기존과 동일)
         self.patch_gates = nn.ParameterDict()
         self.patch_transforms = nn.ParameterDict()
         
@@ -53,7 +55,7 @@ class AxonalConnections(nn.Module):
         return self.node_grid_sizes.get(node_name, (64, 64))
     
     def _create_patch_connections(self):
-        """패치 기반 연결 생성"""
+        """요구사항에 맞춘 초기화가 적용된 패치 기반 연결 생성"""
         for conn in self.connections:
             source = conn["source"]
             target = conn["target"]
@@ -64,45 +66,36 @@ class AxonalConnections(nn.Module):
             source_h, source_w = self._get_grid_size(source)
             target_h, target_w = self._get_grid_size(target)
             
-            # 소스 기준 패치 수 계산
             source_patches_h = source_h // patch_size
             source_patches_w = source_w // patch_size
             num_patches = source_patches_h * source_patches_w
             
-            # 타겟 패치 크기 (동일한 패치 수 맞추기)
             target_patch_h = target_h // source_patches_h
             target_patch_w = target_w // source_patches_w
-            
-            # 패치별 게이트 가중치 [num_patches]
-            patch_gates = torch.randn(num_patches, device=self.device) * self.gate_init_std + self.gate_init_mean
-            self.patch_gates[conn_key] = nn.Parameter(patch_gates.abs())
-            
-            # 패치별 내부 변환 행렬 [num_patches, target_patch_size, source_patch_size]
+
             source_patch_size = patch_size * patch_size
             target_patch_size = target_patch_h * target_patch_w
             
+            # 3. G의 초기값 설정 (gate_init_mean 기본값 0)
+            patch_gates = torch.randn(num_patches, device=self.device) * self.gate_init_std + self.gate_init_mean
+            self.patch_gates[conn_key] = nn.Parameter(patch_gates)
+            
+            # 4. Transform 초기값 설정 및 정규화
             inner_transforms = torch.randn(
                 num_patches, target_patch_size, source_patch_size, device=self.device
             ) * self.transform_init_std + self.transform_init_mean
-            self.patch_transforms[conn_key] = nn.Parameter(inner_transforms)
-    
-    def forward(self, node_spikes: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """
-        패치 기반 축삭 신호 전파
-        
-        Args:
-            node_spikes: {node_name: [B, H, W]} 노드별 스파이크
             
-        Returns:
-            axonal_inputs: {node_name: [B, H, W]} 노드별 축삭 입력
-        """
+            self.patch_transforms[conn_key] = nn.Parameter(inner_transforms)
+
+    def forward(self, node_spikes: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """방식 D 로직이 적용된 포워드 패스"""
         axonal_inputs = {}
         
         for conn in self.connections:
             source = conn["source"]
             target = conn["target"]
             
-            if source not in node_spikes:
+            if source not in node_spikes or node_spikes[source] is None:
                 continue
             
             source_spikes = node_spikes[source]
@@ -119,38 +112,48 @@ class AxonalConnections(nn.Module):
             target_patch_h = target_h // (source_h // patch_size)
             target_patch_w = target_w // (source_w // patch_size)
             
-            # 1. unfold를 사용한 패치 추출
+            # 1. unfold를 사용한 패치 추출 (기존과 동일)
             source_patches = F.unfold(
                 source_spikes.unsqueeze(1),
                 kernel_size=patch_size,
                 stride=patch_size
-            )
-            source_patches = source_patches.transpose(1, 2)
+            ).transpose(1, 2) # Shape: [B, num_patches, source_patch_size]
             
-            patch_transforms = self.patch_transforms[conn_key]
+            # --- 방식 D 핵심 로직 시작 ---
+            
+            # 2. Transform: patch_transforms와 행렬 곱셈
+            X = torch.einsum('bps,pts->bpt', source_patches, self.patch_transforms[conn_key])
+            # X shape: [B, num_patches, target_patch_size]
 
-            transformed_patches = torch.einsum('bps,pts->bpt', source_patches, patch_transforms)
+            # 3. Softmax (분포 계산)
+            softmax_dist = F.softmax(X / self.temperature, dim=-1)
+
+            # 4. 스케일 텀 계산
+            X_strength = X.mean(dim=-1, keepdim=True)
+            G = self.patch_gates[conn_key].view(1, -1, 1) # [1, num_patches, 1]
+            final_scale = X_strength + G
+
+            # 5. 최종 출력 계산
+            scaled_patches = softmax_dist * final_scale
             
-            # 4. 게이트 가중치 적용
-            patch_gates = self.patch_gates[conn_key]
-            gated_patches = transformed_patches * patch_gates.view(1, -1, 1)
+            # --- 방식 D 핵심 로직 종료 ---
             
-            # 5. fold를 사용한 타겟 그리드 재구성
+            # 6. fold를 사용한 타겟 그리드 재구성 (기존과 동일)
             target_output = F.fold(
-                gated_patches.transpose(1, 2),
+                scaled_patches.transpose(1, 2),
                 output_size=(target_h, target_w),
                 kernel_size=(target_patch_h, target_patch_w),
                 stride=(target_patch_h, target_patch_w)
             ).squeeze(1)
             
-            # 6. 다중 소스 신호 누적
+            # 7. 다중 소스 신호 누적 (기존과 동일)
             if target not in axonal_inputs:
                 axonal_inputs[target] = target_output
             else:
                 axonal_inputs[target] += target_output
         
         return axonal_inputs
-
+    
 class SCSSystem(nn.Module):
     """
     SCS 시스템: 전체 시퀀스 처리를 담당하는 완전한 시스템

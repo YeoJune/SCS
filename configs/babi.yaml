@@ -89,15 +89,15 @@ timing_manager:
 
 # === 데이터 로딩 오버라이드 ===
 data_loading:
-  batch_size: 16
+  batch_size: 1
   tokenizer:
     name: "t5-small"
     max_length: 128
 
 data:
-  train_samples: 16
-  val_samples: 16
-  test_samples: 16
+  train_samples: 1
+  val_samples: 1
+  test_samples: 1
 
 # === 평가 설정 ===
 evaluation:

@@ -81,10 +81,12 @@ class ModelBuilder:
             axonal_connections = AxonalConnections(
                 connections=connection_list,
                 node_grid_sizes=node_grid_sizes,
-                gate_init_mean=config.spike_dynamics.gate_init_mean,
-                gate_init_std=config.spike_dynamics.gate_init_std,
-                transform_init_mean=config.spike_dynamics.transform_init_mean,
-                transform_init_std=config.spike_dynamics.transform_init_std,
+                axon_temperature=config.axonal_connections.axon_temperature,
+                gate_init_mean=config.axonal_connections.gate_init_mean,
+                gate_init_std=config.axonal_connections.gate_init_std,
+                transform_init_mode=config.axonal_connections.transform_init_mode,
+                transform_init_mean=config.axonal_connections.transform_init_mean,
+                transform_init_std=config.axonal_connections.transform_init_std,
                 device=device
             )
             

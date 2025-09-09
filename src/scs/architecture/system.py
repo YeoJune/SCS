@@ -17,16 +17,18 @@ class AxonalConnections(nn.Module):
     패치 기반 축삭 연결 - 방식 D 적용 최종본
     - 출력 = softmax(Transform/T) * (Transform_Strength + Gate)
     - 초기화를 통해 초기 입출력 힘(strength)을 보존
+    - 'normal' 또는 'gaussian' 초기화 방식 선택 가능
     """
     def __init__(
         self,
         connections: List[Dict[str, Any]],
         node_grid_sizes: Dict[str, tuple] = None,
-        temperature: float = 0.05,
-        gate_init_mean: float = 0.0,
+        axon_temperature: float = 1.5,
+        gate_init_mean: float = 3.0,
         gate_init_std: float = 0.01,
+        transform_init_mode: str = 'gaussian', # 'normal' 또는 'gaussian' 선택
         transform_init_mean: float = 1.0,
-        transform_init_std: float = 0.01,
+        transform_init_std: float = 0.02,
         device: str = "cuda"
     ):
         super().__init__()
@@ -36,13 +38,17 @@ class AxonalConnections(nn.Module):
         self.device = device
 
         # 방식 D를 위한 하이퍼파라미터
-        self.temperature = temperature
+        self.axon_temperature = axon_temperature
         
         # 초기화를 위한 파라미터
         self.gate_init_mean = gate_init_mean
         self.gate_init_std = gate_init_std
+        self.transform_init_mode = transform_init_mode
         self.transform_init_mean = transform_init_mean
         self.transform_init_std = transform_init_std
+        
+        if self.transform_init_mode not in ['normal', 'gaussian']:
+            raise ValueError(f"transform_init_mode must be 'normal' or 'gaussian', but got {self.transform_init_mode}")
         
         # 학습 가능한 파라미터 (기존과 동일)
         self.patch_gates = nn.ParameterDict()
@@ -76,15 +82,39 @@ class AxonalConnections(nn.Module):
             source_patch_size = patch_size * patch_size
             target_patch_size = target_patch_h * target_patch_w
             
-            # 3. G의 초기값 설정 (gate_init_mean 기본값 0)
+            # G의 초기값 설정
             patch_gates = torch.randn(num_patches, device=self.device) * self.gate_init_std + self.gate_init_mean
             self.patch_gates[conn_key] = nn.Parameter(patch_gates)
             
-            # 4. Transform 초기값 설정 및 정규화
-            inner_transforms = torch.randn(
-                num_patches, target_patch_size, source_patch_size, device=self.device
-            ) * self.transform_init_std + self.transform_init_mean
+            # --- Transform 초기화 방식 분기 ---
+            if self.transform_init_mode == 'normal':
+                # 방식 1: 정규분포(가우시안 노이즈) 초기화
+                inner_transforms = torch.randn(
+                    num_patches, target_patch_size, source_patch_size, device=self.device
+                ) * self.transform_init_std + self.transform_init_mean
             
+            elif self.transform_init_mode == 'gaussian':
+                # 방식 2: 가우시안 커널 초기화
+                # 1. 커널 생성을 위한 2D 좌표 그리드 생성
+                coords = torch.stack(torch.meshgrid(
+                    torch.arange(patch_size, device=self.device), 
+                    torch.arange(patch_size, device=self.device), 
+                    indexing='ij'
+                ), dim=-1)
+                center = (patch_size - 1) / 2.0
+                distances_sq = ((coords - center)**2).sum(dim=-1)
+
+                GAUSSIAN_STD_FACTOR = 1 / 3.0
+
+                # 2. 적절한 표준편차 계산 (편향과 유연성의 균형)
+                std = patch_size * GAUSSIAN_STD_FACTOR
+
+                # 3. 가우시안 커널 계산
+                kernel = self.transform_init_mean * torch.exp(-distances_sq / (2 * std**2))
+                
+                # 4. 최종 가중치 생성: 커널을 모든 연결에 적용하고 작은 노이즈 추가
+                inner_transforms = kernel.flatten().unsqueeze(0).unsqueeze(0).repeat(num_patches, target_patch_size, 1)
+
             self.patch_transforms[conn_key] = nn.Parameter(inner_transforms)
 
     def forward(self, node_spikes: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
@@ -112,21 +142,19 @@ class AxonalConnections(nn.Module):
             target_patch_h = target_h // (source_h // patch_size)
             target_patch_w = target_w // (source_w // patch_size)
             
-            # 1. unfold를 사용한 패치 추출 (기존과 동일)
+            # 1. unfold를 사용한 패치 추출
             source_patches = F.unfold(
                 source_spikes.unsqueeze(1),
                 kernel_size=patch_size,
                 stride=patch_size
             ).transpose(1, 2) # Shape: [B, num_patches, source_patch_size]
             
-            # --- 방식 D 핵심 로직 시작 ---
-            
             # 2. Transform: patch_transforms와 행렬 곱셈
             X = torch.einsum('bps,pts->bpt', source_patches, self.patch_transforms[conn_key])
             # X shape: [B, num_patches, target_patch_size]
 
             # 3. Softmax (분포 계산)
-            softmax_dist = F.softmax(X / self.temperature, dim=-1)
+            softmax_dist = F.softmax(X / self.axon_temperature, dim=-1)
 
             # 4. 스케일 텀 계산
             X_strength = X.mean(dim=-1, keepdim=True)
@@ -136,9 +164,7 @@ class AxonalConnections(nn.Module):
             # 5. 최종 출력 계산
             scaled_patches = softmax_dist * final_scale
             
-            # --- 방식 D 핵심 로직 종료 ---
-            
-            # 6. fold를 사용한 타겟 그리드 재구성 (기존과 동일)
+            # 6. fold를 사용한 타겟 그리드 재구성
             target_output = F.fold(
                 scaled_patches.transpose(1, 2),
                 output_size=(target_h, target_w),
@@ -146,14 +172,14 @@ class AxonalConnections(nn.Module):
                 stride=(target_patch_h, target_patch_w)
             ).squeeze(1)
             
-            # 7. 다중 소스 신호 누적 (기존과 동일)
+            # 7. 다중 소스 신호 누적
             if target not in axonal_inputs:
                 axonal_inputs[target] = target_output
             else:
                 axonal_inputs[target] += target_output
         
         return axonal_inputs
-    
+
 class SCSSystem(nn.Module):
     """
     SCS 시스템: 전체 시퀀스 처리를 담당하는 완전한 시스템

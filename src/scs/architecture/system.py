@@ -156,7 +156,7 @@ class AxonalConnections(nn.Module):
                 kernel_size=patch_size,
                 stride=patch_size
             ).transpose(1, 2) # Shape: [B, num_patches, source_patch_size]
-            
+
             # 2. Transform: patch_transforms와 행렬 곱셈
             X = torch.einsum('bps,pts->bpt', source_patches, self.patch_transforms[conn_key])
             # X shape: [B, num_patches, target_patch_size]
@@ -171,6 +171,10 @@ class AxonalConnections(nn.Module):
 
             # 5. 최종 출력 계산
             scaled_patches = softmax_dist * final_scale
+
+            input_strength = source_patches.sum(dim=-1, keepdim=True) # [B, num_patches, 1]
+            output_mask = (input_strength > 0).float()
+            scaled_patches = scaled_patches * output_mask
             
             # 6. fold를 사용한 타겟 그리드 재구성
             target_output = F.fold(

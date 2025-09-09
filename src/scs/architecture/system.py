@@ -23,11 +23,11 @@ class AxonalConnections(nn.Module):
         self,
         connections: List[Dict[str, Any]],
         node_grid_sizes: Dict[str, tuple] = None,
-        axon_temperature: float = 1.5,
-        gate_init_mean: float = 3.0,
+        axon_temperature: float = 0.2,
+        gate_init_mean: float = 0.6,
         gate_init_std: float = 0.01,
         transform_init_mode: str = 'gaussian', # 'normal' 또는 'gaussian' 선택
-        transform_init_mean: float = 1.0,
+        transform_init_mean: float = 0.1,
         transform_init_std: float = 0.02,
         device: str = "cuda"
     ):
@@ -61,7 +61,10 @@ class AxonalConnections(nn.Module):
         return self.node_grid_sizes.get(node_name, (64, 64))
     
     def _create_patch_connections(self):
-        """요구사항에 맞춘 초기화가 적용된 패치 기반 연결 생성"""
+        """
+        요구사항에 맞춘 초기화가 적용된 패치 기반 연결 생성.
+        'normal' (가우시안 노이즈) 또는 'gaussian' (토폴로지 보존 커널) 모드를 지원.
+        """
         for conn in self.connections:
             source = conn["source"]
             target = conn["target"]
@@ -82,38 +85,43 @@ class AxonalConnections(nn.Module):
             source_patch_size = patch_size * patch_size
             target_patch_size = target_patch_h * target_patch_w
             
-            # G의 초기값 설정
-            patch_gates = torch.randn(num_patches, device=self.device) * self.gate_init_std + self.gate_init_mean
+            # Gate 파라미터 G의 초기값 설정
+            patch_gates = (torch.randn(num_patches, device=self.device) * self.gate_init_std + self.gate_init_mean) * target_patch_size
             self.patch_gates[conn_key] = nn.Parameter(patch_gates)
             
             # --- Transform 초기화 방식 분기 ---
             if self.transform_init_mode == 'normal':
                 # 방식 1: 정규분포(가우시안 노이즈) 초기화
+                # 모든 연결이 구조 없이, 독립적인 랜덤 가중치를 가짐. 최고의 유연성.
                 inner_transforms = torch.randn(
                     num_patches, target_patch_size, source_patch_size, device=self.device
                 ) * self.transform_init_std + self.transform_init_mean
             
             elif self.transform_init_mode == 'gaussian':
-                # 방식 2: 가우시안 커널 초기화
-                # 1. 커널 생성을 위한 2D 좌표 그리드 생성
-                coords = torch.stack(torch.meshgrid(
-                    torch.arange(patch_size, device=self.device), 
-                    torch.arange(patch_size, device=self.device), 
-                    indexing='ij'
-                ), dim=-1)
-                center = (patch_size - 1) / 2.0
-                distances_sq = ((coords - center)**2).sum(dim=-1)
-
-                GAUSSIAN_STD_FACTOR = 1 / 3.0
-
-                # 2. 적절한 표준편차 계산 (편향과 유연성의 균형)
-                std = patch_size * GAUSSIAN_STD_FACTOR
-
-                # 3. 가우시안 커널 계산
-                kernel = self.transform_init_mean * torch.exp(-distances_sq / (2 * std**2))
+                # 방식 2: 토폴로지 보존 가우시안 커널 초기화
+                # "연결은 가까울수록 강하다"는 구조적 사전 지식을 주입하여 학습을 안정화.
                 
-                # 4. 최종 가중치 생성: 커널을 모든 연결에 적용하고 작은 노이즈 추가
-                inner_transforms = kernel.flatten().unsqueeze(0).unsqueeze(0).repeat(num_patches, target_patch_size, 1)
+                # 1. 소스와 타겟 뉴런의 패치 내 상대 좌표 생성
+                #    (소스와 타겟의 패치 크기가 같다고 가정)
+                coords = torch.stack(torch.meshgrid(
+                    torch.arange(patch_size, device=self.device, dtype=torch.float32), 
+                    torch.arange(patch_size, device=self.device, dtype=torch.float32), 
+                    indexing='ij'
+                ), dim=-1).view(-1, 2) # [patch_size*patch_size, 2]
+
+                # 2. 모든 소스-타겟 쌍 사이의 거리의 제곱 계산 (Broadcasting 활용)
+                dist_sq = ((coords.unsqueeze(1) - coords.unsqueeze(0))**2).sum(dim=-1)
+                # dist_sq shape: [target_patch_size, source_patch_size]
+
+                # 3. 논의를 통해 결정된, patch_size에 적응적인 표준편차 계산
+                std = patch_size / 3.0
+
+                # 4. 소스-타겟 거리에 기반한 가우시안 커널 계산
+                kernel = self.transform_init_mean * torch.exp(-dist_sq / (2 * std**2))
+                
+                # 5. 최종 가중치 생성: 모든 패치에 이 토폴로지 보존 커널을 동일하게 적용
+                #    (입력 스파이크의 비대칭성이 대칭성을 깨주므로 추가 노이즈는 불필요)
+                inner_transforms = kernel.unsqueeze(0).repeat(num_patches, 1, 1)
 
             self.patch_transforms[conn_key] = nn.Parameter(inner_transforms)
 
@@ -157,7 +165,7 @@ class AxonalConnections(nn.Module):
             softmax_dist = F.softmax(X / self.axon_temperature, dim=-1)
 
             # 4. 스케일 텀 계산
-            X_strength = X.mean(dim=-1, keepdim=True)
+            X_strength = X.sum(dim=-1, keepdim=True)
             G = self.patch_gates[conn_key].view(1, -1, 1) # [1, num_patches, 1]
             final_scale = X_strength + G
 

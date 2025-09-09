@@ -86,7 +86,7 @@ class AxonalConnections(nn.Module):
             target_patch_size = target_patch_h * target_patch_w
             
             # Gate 파라미터 G의 초기값 설정
-            patch_gates = (torch.randn(num_patches, device=self.device) * self.gate_init_std + self.gate_init_mean) * target_patch_size
+            patch_gates = torch.randn(num_patches, device=self.device) * self.gate_init_std + self.gate_init_mean
             self.patch_gates[conn_key] = nn.Parameter(patch_gates)
             
             # --- Transform 초기화 방식 분기 ---
@@ -156,7 +156,7 @@ class AxonalConnections(nn.Module):
                 kernel_size=patch_size,
                 stride=patch_size
             ).transpose(1, 2) # Shape: [B, num_patches, source_patch_size]
-
+            
             # 2. Transform: patch_transforms와 행렬 곱셈
             X = torch.einsum('bps,pts->bpt', source_patches, self.patch_transforms[conn_key])
             # X shape: [B, num_patches, target_patch_size]
@@ -167,14 +167,10 @@ class AxonalConnections(nn.Module):
             # 4. 스케일 텀 계산
             X_strength = X.sum(dim=-1, keepdim=True)
             G = self.patch_gates[conn_key].view(1, -1, 1) # [1, num_patches, 1]
-            final_scale = X_strength + G
+            final_scale = X_strength * G
 
             # 5. 최종 출력 계산
             scaled_patches = softmax_dist * final_scale
-
-            input_strength = source_patches.sum(dim=-1, keepdim=True) # [B, num_patches, 1]
-            output_mask = (input_strength > 0).float()
-            scaled_patches = scaled_patches * output_mask
             
             # 6. fold를 사용한 타겟 그리드 재구성
             target_output = F.fold(

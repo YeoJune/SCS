@@ -152,7 +152,11 @@ class AxonalConnections(nn.Module):
             # 3. Affine 변환 (Gain * X + Bias)
             G = self.patch_gates[conn_key].view(1, -1, 1)    # Gain
             B = self.patch_biases[conn_key].view(1, -1, 1)   # Bias
-            final_patches = X * G + B
+
+            input_strength = source_patches.sum(dim=-1, keepdim=True)
+            mask = (input_strength > 0).float()
+            
+            final_patches = (X * G + B) * mask
             
             # 4. fold를 사용한 타겟 그리드 재구성
             target_output = F.fold(

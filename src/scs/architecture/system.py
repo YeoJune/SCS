@@ -25,8 +25,8 @@ class AxonalConnections(nn.Module):
         node_grid_sizes: Dict[str, tuple] = None,
         gate_init_mean: float = 1.0,      # 초기 Gain
         gate_init_std: float = 0.01,
-        bias_init_mean: float = 1.0,      # 초기 Bias
-        bias_init_std: float = 0.01,
+        bias_init_mean: float = 0.6,      # 초기 Bias
+        bias_init_std: float = 0.0,
         transform_init_mode: str = 'gaussian',
         transform_init_mean: float = 1.0, # 평균 1
         transform_init_std: float = 0.1,
@@ -106,8 +106,8 @@ class AxonalConnections(nn.Module):
                 dist_sq = ((coords.unsqueeze(1) - coords.unsqueeze(0))**2).sum(dim=-1)
                 std = patch_size / 3.0
                 # 평균이 0인 '멕시칸 햇' 형태를 만들기 위해 진폭(std) 사용
-                kernel = self.transform_init_std * torch.exp(-dist_sq / (2 * std**2))
-                kernel = kernel - kernel.mean()
+                kernel = torch.exp(-dist_sq / (2 * std**2))
+                kernel = kernel - kernel.mean() + self.transform_init_mean
                 inner_transforms = kernel.unsqueeze(0).repeat(num_patches, 1, 1)
 
             self.patch_transforms[conn_key] = nn.Parameter(inner_transforms)

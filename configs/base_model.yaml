@@ -45,8 +45,8 @@ axonal_connections:
   gate_init_mean: 1.0
   gate_init_std: 0.01
   transform_init_mode: "gaussian"
-  transform_init_mean: 0.1
-  transform_init_std: 0.02
+  transform_init_mean: 1.0
+  transform_init_std: 0.1
   connections:
     - source: "IN"
       target: "OUT"
@@ -126,7 +126,7 @@ learning:
   gate_temperature: 1.0 # 패치 게이트 온도
   inner_pruning_weight: 0.0 # 내부 연결 L1 정규화 가중치
   inner_temperature: 0.8 # 내부 연결 온도
-  axon_strength_reg_weight: 0.0 # 축삭 연결 강도 정규화 가중치
+  axon_strength_reg_weight: 5.0 # 축삭 연결 강도 정규화 가중치
 
   spike_reg_weight: 50
   target_spike_rate: 0.05

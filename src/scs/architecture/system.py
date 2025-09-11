@@ -14,21 +14,22 @@ from .timing import TimingManager
 
 class AxonalConnections(nn.Module):
     """
-    패치 기반 축삭 연결 - 방식 D 적용 최종본
-    - 출력 = softmax(Transform/T) * (Transform_Strength + Gate)
-    - 초기화를 통해 초기 입출력 힘(strength)을 보존
-    - 'normal' 또는 'gaussian' 초기화 방식 선택 가능
+    패치 기반 축삭 연결 - 최종 설계 (Patch-wise Affine Transformation)
+    - 출력 = Transform * Gain(Gate) + Bias
+    - 'normal' 또는 'gaussian' (평균 0) 초기화 지원
+    - 학습을 통해 Bias에서 Gain으로 역할이 전환되도록 유도
     """
     def __init__(
         self,
         connections: List[Dict[str, Any]],
         node_grid_sizes: Dict[str, tuple] = None,
-        axon_temperature: float = 0.2,
-        gate_init_mean: float = 0.6,
+        gate_init_mean: float = 1.0,      # 초기 Gain
         gate_init_std: float = 0.01,
-        transform_init_mode: str = 'gaussian', # 'normal' 또는 'gaussian' 선택
-        transform_init_mean: float = 0.1,
-        transform_init_std: float = 0.02,
+        bias_init_mean: float = 1.0,      # 초기 Bias
+        bias_init_std: float = 0.01,
+        transform_init_mode: str = 'gaussian',
+        transform_init_mean: float = 1.0, # 평균 1
+        transform_init_std: float = 0.1,
         device: str = "cuda"
     ):
         super().__init__()
@@ -37,12 +38,11 @@ class AxonalConnections(nn.Module):
         self.node_grid_sizes = node_grid_sizes or {}
         self.device = device
 
-        # 방식 D를 위한 하이퍼파라미터
-        self.axon_temperature = axon_temperature
-        
         # 초기화를 위한 파라미터
         self.gate_init_mean = gate_init_mean
         self.gate_init_std = gate_init_std
+        self.bias_init_mean = bias_init_mean
+        self.bias_init_std = bias_init_std
         self.transform_init_mode = transform_init_mode
         self.transform_init_mean = transform_init_mean
         self.transform_init_std = transform_init_std
@@ -50,8 +50,9 @@ class AxonalConnections(nn.Module):
         if self.transform_init_mode not in ['normal', 'gaussian']:
             raise ValueError(f"transform_init_mode must be 'normal' or 'gaussian', but got {self.transform_init_mode}")
         
-        # 학습 가능한 파라미터 (기존과 동일)
-        self.patch_gates = nn.ParameterDict()
+        # 학습 가능한 파라미터
+        self.patch_gates = nn.ParameterDict()  # Gain 역할
+        self.patch_biases = nn.ParameterDict() # Bias 역할
         self.patch_transforms = nn.ParameterDict()
         
         self._create_patch_connections()
@@ -61,10 +62,7 @@ class AxonalConnections(nn.Module):
         return self.node_grid_sizes.get(node_name, (64, 64))
     
     def _create_patch_connections(self):
-        """
-        요구사항에 맞춘 초기화가 적용된 패치 기반 연결 생성.
-        'normal' (가우시안 노이즈) 또는 'gaussian' (토폴로지 보존 커널) 모드를 지원.
-        """
+        """'Bias-to-Gate' 전환을 유도하는 초기화 적용"""
         for conn in self.connections:
             source = conn["source"]
             target = conn["target"]
@@ -84,49 +82,38 @@ class AxonalConnections(nn.Module):
 
             source_patch_size = patch_size * patch_size
             target_patch_size = target_patch_h * target_patch_w
-            
-            # Gate 파라미터 G의 초기값 설정
+
+            # Gate (Gain) 초기화: 작게 시작
             patch_gates = torch.randn(num_patches, device=self.device) * self.gate_init_std + self.gate_init_mean
             self.patch_gates[conn_key] = nn.Parameter(patch_gates)
+
+            # Bias 초기화: 크게 시작하여 "보조 바퀴" 역할
+            patch_biases = torch.randn(num_patches, device=self.device) * self.bias_init_std + self.bias_init_mean
+            self.patch_biases[conn_key] = nn.Parameter(patch_biases)
             
-            # --- Transform 초기화 방식 분기 ---
+            # --- Transform 초기화 방식 분기 (평균 0) ---
             if self.transform_init_mode == 'normal':
-                # 방식 1: 정규분포(가우시안 노이즈) 초기화
-                # 모든 연결이 구조 없이, 독립적인 랜덤 가중치를 가짐. 최고의 유연성.
                 inner_transforms = torch.randn(
                     num_patches, target_patch_size, source_patch_size, device=self.device
                 ) * self.transform_init_std + self.transform_init_mean
             
             elif self.transform_init_mode == 'gaussian':
-                # 방식 2: 토폴로지 보존 가우시안 커널 초기화
-                # "연결은 가까울수록 강하다"는 구조적 사전 지식을 주입하여 학습을 안정화.
-                
-                # 1. 소스와 타겟 뉴런의 패치 내 상대 좌표 생성
-                #    (소스와 타겟의 패치 크기가 같다고 가정)
                 coords = torch.stack(torch.meshgrid(
                     torch.arange(patch_size, device=self.device, dtype=torch.float32), 
                     torch.arange(patch_size, device=self.device, dtype=torch.float32), 
                     indexing='ij'
-                ), dim=-1).view(-1, 2) # [patch_size*patch_size, 2]
-
-                # 2. 모든 소스-타겟 쌍 사이의 거리의 제곱 계산 (Broadcasting 활용)
+                ), dim=-1).view(-1, 2)
                 dist_sq = ((coords.unsqueeze(1) - coords.unsqueeze(0))**2).sum(dim=-1)
-                # dist_sq shape: [target_patch_size, source_patch_size]
-
-                # 3. 논의를 통해 결정된, patch_size에 적응적인 표준편차 계산
                 std = patch_size / 3.0
-
-                # 4. 소스-타겟 거리에 기반한 가우시안 커널 계산
-                kernel = self.transform_init_mean * torch.exp(-dist_sq / (2 * std**2))
-                
-                # 5. 최종 가중치 생성: 모든 패치에 이 토폴로지 보존 커널을 동일하게 적용
-                #    (입력 스파이크의 비대칭성이 대칭성을 깨주므로 추가 노이즈는 불필요)
+                # 평균이 0인 '멕시칸 햇' 형태를 만들기 위해 진폭(std) 사용
+                kernel = self.transform_init_std * torch.exp(-dist_sq / (2 * std**2))
+                kernel = kernel - kernel.mean()
                 inner_transforms = kernel.unsqueeze(0).repeat(num_patches, 1, 1)
 
             self.patch_transforms[conn_key] = nn.Parameter(inner_transforms)
 
     def forward(self, node_spikes: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """방식 D 로직이 적용된 포워드 패스"""
+        """Patch-wise Affine Transformation 최종 로직"""
         axonal_inputs = {}
         
         for conn in self.connections:
@@ -155,39 +142,34 @@ class AxonalConnections(nn.Module):
                 source_spikes.unsqueeze(1),
                 kernel_size=patch_size,
                 stride=patch_size
-            ).transpose(1, 2) # Shape: [B, num_patches, source_patch_size]
+            ).transpose(1, 2)
             
-            # 2. Transform: patch_transforms와 행렬 곱셈
+            # --- 최종 설계 핵심 로직 시작 ---
+            
+            # 2. Transform: 패턴 추출
             X = torch.einsum('bps,pts->bpt', source_patches, self.patch_transforms[conn_key])
-            # X shape: [B, num_patches, target_patch_size]
 
-            # 3. Softmax (분포 계산)
-            softmax_dist = F.softmax(X / self.axon_temperature, dim=-1)
-
-            # 4. 스케일 텀 계산
-            X_strength = X.sum(dim=-1, keepdim=True)
-            G = self.patch_gates[conn_key].view(1, -1, 1) # [1, num_patches, 1]
-            final_scale = X_strength * G
-
-            # 5. 최종 출력 계산
-            scaled_patches = softmax_dist * final_scale
+            # 3. Affine 변환 (Gain * X + Bias)
+            G = self.patch_gates[conn_key].view(1, -1, 1)    # Gain
+            B = self.patch_biases[conn_key].view(1, -1, 1)   # Bias
+            final_patches = X * G + B
             
-            # 6. fold를 사용한 타겟 그리드 재구성
+            # 4. fold를 사용한 타겟 그리드 재구성
             target_output = F.fold(
-                scaled_patches.transpose(1, 2),
+                final_patches.transpose(1, 2),
                 output_size=(target_h, target_w),
                 kernel_size=(target_patch_h, target_patch_w),
                 stride=(target_patch_h, target_patch_w)
             ).squeeze(1)
             
-            # 7. 다중 소스 신호 누적
+            # 5. 다중 소스 신호 누적
             if target not in axonal_inputs:
                 axonal_inputs[target] = target_output
             else:
                 axonal_inputs[target] += target_output
         
         return axonal_inputs
-
+    
 class SCSSystem(nn.Module):
     """
     SCS 시스템: 전체 시퀀스 처리를 담당하는 완전한 시스템

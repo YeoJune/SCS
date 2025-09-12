@@ -118,7 +118,6 @@ learning:
   guide_sep_token_id: 32057
   guide_weight: 0.05
 
-  length_penalty_weight: 0.0
   orthogonal_reg_weight: 25.0
 
   target_max_stim_mean: 1.5

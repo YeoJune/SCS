@@ -16,8 +16,8 @@ import torch
 # 프로젝트 모듈 Import (리팩토링된 경로)
 try:
     from scs.config import load_and_validate_config, ModelBuilder, AppConfig, LearningConfig
-    from scs.training import SCSTrainer, MultiObjectiveLoss, TimingLoss, OptimizerFactory
-    from scs.evaluation import SCSVisualizer, analyze_io_pipeline
+    from scs.training import SCSTrainer, SCSLoss
+    from scs.evaluation import SCSVisualizer, analyze_io_pipeline, OptimizerFactory
     from scs.data import create_dataloader, SCSTokenizer
     from scs.utils import (
         setup_logging, save_config, set_random_seed, get_device
@@ -206,12 +206,11 @@ def train_mode(args: argparse.Namespace):
         learning_config.pad_token_id = app_config.data_loading.tokenizer.pad_token_id
 
         # 손실 함수 생성
-        loss_fn = TimingLoss(
+        loss_fn = SCSLoss(
             pad_token_id=app_config.data_loading.tokenizer.pad_token_id,
             guide_sep_token_id=learning_config.guide_sep_token_id,
             max_clk=learning_config.max_clk_training,
             guide_weight=learning_config.guide_weight,
-            length_penalty_weight=learning_config.length_penalty_weight,
             orthogonal_reg_weight=learning_config.orthogonal_reg_weight,
             spike_reg_weight=learning_config.spike_reg_weight,
             target_spike_rate=learning_config.target_spike_rate,
@@ -221,11 +220,8 @@ def train_mode(args: argparse.Namespace):
             timing_weight=learning_config.timing_weight,
             sync_target_start=learning_config.sync_target_start,
             sync_target_end=learning_config.sync_target_end,
-            gate_pruning_weight=learning_config.gate_pruning_weight,
-            gate_temperature=learning_config.gate_temperature,
-            inner_pruning_weight=learning_config.inner_pruning_weight,
-            inner_temperature=learning_config.inner_temperature,
-            axon_strength_reg_weight=learning_config.axon_strength_reg_weight
+            target_max_stim_mean=learning_config.target_max_stim_mean,
+            structural_reg_weight=learning_config.structural_reg_weight,
         )
         
         # 옵티마이저 생성

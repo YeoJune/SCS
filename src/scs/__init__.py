@@ -14,8 +14,7 @@ from .architecture import (
 
 # Training 모듈
 from .training import (
-    SCSTrainer, GradualUnfreezingScheduler,
-    SpikingLoss, NeuromodulationLoss, MultiObjectiveLoss, TimingLoss
+    SCSTrainer, GradualUnfreezingScheduler, SCSLoss
 )
 
 # Evaluation 모듈 (메트릭 및 최적화)
@@ -61,8 +60,7 @@ __all__ = [
     "transplant_t5_encoder_weights", "transplant_t5_decoder_weights",
 
     # 학습 시스템
-    "SCSTrainer", "GradualUnfreezingScheduler",
-    "SpikingLoss", "NeuromodulationLoss", "MultiObjectiveLoss", "TimingLoss",
+    "SCSTrainer", "GradualUnfreezingScheduler", "SCSLoss",
     
     # 평가 및 메트릭 시스템
     "SCSMetrics", "SCSOptimizer", "KHopBackpropagation", 

@@ -146,19 +146,15 @@ class LearningConfig(BaseModel):
     ss_decay_epochs: int = Field(default=10)
     eta_min: float = Field(default=0.0)
 
-    gate_pruning_weight: float = Field(default=0.0)
-    gate_temperature: float = Field(default=0.1)
-    inner_pruning_weight: float = Field(default=0.0)
-    inner_temperature: float = Field(default=0.1)
-    axon_strength_reg_weight: float = Field(default=0.0)
-
     # 커리큘럼 학습
     use_curriculum_learning: bool = Field(default=False)
     curriculum_schedule: Optional[Dict[int, int]] = Field(default=None)
     
     # 손실 관련
-    length_penalty_weight: float = Field(default=0.0)
     orthogonal_reg_weight: float = Field(default=0.0)
+
+    target_max_stim_mean: float = Field(default=1.5)
+    structural_reg_weight: float = Field(default=0.0)
 
     spike_reg_weight: float = Field(default=0.0)
     target_spike_rate: float = Field(default=0.0)

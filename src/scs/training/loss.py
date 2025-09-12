@@ -17,37 +17,33 @@ class SCSLoss(nn.Module):
         guide_sep_token_id: int,
         max_clk: int = 512,
         guide_weight: float = 0.3,
-        gate_pruning_weight: float = 0.0,
-        gate_temperature: float = 0.1,
-        inner_pruning_weight: float = 0.0,
-        inner_temperature: float = 0.1,
-        axon_strength_reg_weight: float = 0.0,
-        length_penalty_weight: float = 0.0,
+        target_max_stim_mean: float = 1.5,
+        structural_reg_weight: float = 0.0,
         orthogonal_reg_weight: float = 0.0,
         spike_reg_weight: float = 0.0,
         target_spike_rate: float = 0.0,
         use_temporal_weighting: bool = False,
         initial_temporal_weight: float = 2.0,
-        final_temporal_weight: float = 1.0
+        final_temporal_weight: float = 1.0,
+        timing_weight: float = 0.0,
+        sync_target_start: float = 1.0,
+        sync_target_end: float = 0.0,
     ):
         super().__init__()
         self.max_clk = max_clk
         self.guide_sep_token_id = guide_sep_token_id
         self.guide_weight = guide_weight
-        
-        # 모든 정규화 가중치를 Loss에서 관리 (표준적 접근법)
-        self.gate_pruning_weight = gate_pruning_weight
-        self.inner_pruning_weight = inner_pruning_weight
-        self.gate_temperature = gate_temperature
-        self.inner_temperature = inner_temperature
-        self.axon_strength_reg_weight = axon_strength_reg_weight
-        self.length_penalty_weight = length_penalty_weight
+        self.target_max_stim_mean = target_max_stim_mean
+        self.structural_reg_weight = structural_reg_weight
         self.orthogonal_reg_weight = orthogonal_reg_weight  
         self.use_temporal_weighting = use_temporal_weighting
         self.spike_reg_weight = spike_reg_weight
         self.target_spike_rate = target_spike_rate
         self.initial_temporal_weight = initial_temporal_weight
         self.final_temporal_weight = final_temporal_weight
+        self.timing_weight = timing_weight
+        self.sync_target_start = sync_target_start
+        self.sync_target_end = sync_target_end
         
         self.base_loss = nn.CrossEntropyLoss(ignore_index=pad_token_id, reduction='none')
         
@@ -56,6 +52,65 @@ class SCSLoss(nn.Module):
             self.temporal_weights = self._precompute_temporal_weights(
                 initial_temporal_weight, final_temporal_weight
             )
+
+    def forward(
+        self, 
+        outputs: torch.Tensor, 
+        targets: torch.Tensor, 
+        processing_info: Dict[str, Any]
+    ) -> torch.Tensor:
+        batch_size, output_seq_len, vocab_size = outputs.shape
+        batch_size_t, target_seq_len = targets.shape
+        
+        assert batch_size == batch_size_t, f"Batch size mismatch: {batch_size} vs {batch_size_t}"
+        
+        # 길이 불일치 처리
+        outputs, targets = self._handle_length_mismatch(outputs, targets, vocab_size)
+
+        total_loss = torch.tensor(0.0, device=outputs.device)
+        
+        # 기본 분류 손실 계산 (guide weight 포함)
+        base_loss = self._compute_base_loss(outputs, targets, processing_info, vocab_size)
+        total_loss += base_loss
+        
+        # Axon Pruning 손실 - Loss에서 직접 계산 (표준적 접근법)
+        axon_loss = torch.tensor(0.0, device=outputs.device)
+        if self.structural_reg_weight > 0.0:
+            axon_loss = self.structural_reg_weight * self._compute_axon_regularization_loss(processing_info, outputs.device)
+            total_loss += axon_loss
+        
+        # 직교 정규화 손실 추가 (pruning_loss 계산 후에)
+        orthogonal_loss = torch.tensor(0.0, device=outputs.device)
+        if self.orthogonal_reg_weight > 0.0 and 'orthogonal_reg_loss' in processing_info:
+            orthogonal_loss = self.orthogonal_reg_weight * processing_info['orthogonal_reg_loss']
+            total_loss += orthogonal_loss
+            
+        spike_loss = torch.tensor(0.0, device=outputs.device)
+        if self.spike_reg_weight > 0.0:
+            spike_loss = self.spike_reg_weight * self._compute_spike_regularization_loss(processing_info, outputs.device)
+            total_loss += spike_loss
+
+        timing_loss = torch.tensor(0.0, device=outputs.device)
+        if self.timing_weight != 0.0 and 'timing_info' in processing_info:
+            timing_loss = self.timing_weight * self._calculate_timing_loss(processing_info, outputs.device)
+            total_loss += timing_loss
+        
+        # TensorBoard 로깅 업데이트
+        if hasattr(self, '_tb_logger') and self._tb_logger:
+            try:
+                loss_components = {
+                    'base_loss': base_loss.item() if hasattr(base_loss, 'item') else float(base_loss),
+                    'axon_reg_loss': axon_loss.item() if hasattr(axon_loss, 'item') else float(axon_loss),
+                    'orthogonal_reg_loss': orthogonal_loss.item() if hasattr(orthogonal_loss, 'item') else float(orthogonal_loss),
+                    'spike_reg_loss': spike_loss.item() if hasattr(spike_loss, 'item') else float(spike_loss),
+                    'total_loss': total_loss.item() if hasattr(total_loss, 'item') else float(total_loss),
+                    'timing_loss': timing_loss.item() if hasattr(timing_loss, 'item') else float(timing_loss),
+                }
+                self._tb_logger.log_loss_components(loss_components)
+            except Exception as e:
+                pass
+        
+        return total_loss
     
     def update_max_clk(self, new_max_clk: int):
         """커리큘럼 학습 중 max_clk 변경 시 호출"""
@@ -107,73 +162,6 @@ class SCSLoss(nn.Module):
             return guide_mask
         else:
             return guide_mask / current_mean
-    
-    def forward(
-        self, 
-        outputs: torch.Tensor, 
-        targets: torch.Tensor, 
-        processing_info: Dict[str, Any]
-    ) -> torch.Tensor:
-        batch_size, output_seq_len, vocab_size = outputs.shape
-        batch_size_t, target_seq_len = targets.shape
-        
-        assert batch_size == batch_size_t, f"Batch size mismatch: {batch_size} vs {batch_size_t}"
-        
-        # 길이 정보 저장 (패널티 계산용)
-        original_output_len = output_seq_len
-        original_target_len = target_seq_len
-        
-        # 길이 불일치 처리
-        outputs, targets = self._handle_length_mismatch(outputs, targets, vocab_size)
-
-        total_loss = torch.tensor(0.0, device=outputs.device)
-        
-        # 기본 분류 손실 계산 (guide weight 포함)
-        base_loss = self._compute_base_loss(outputs, targets, processing_info, vocab_size)
-        total_loss += base_loss
-        
-        # Axon Pruning 손실 - Loss에서 직접 계산 (표준적 접근법)
-        pruning_loss = torch.tensor(0.0, device=outputs.device)
-        strength_loss = torch.tensor(0.0, device=outputs.device)
-        if self.gate_pruning_weight > 0.0 or self.inner_pruning_weight > 0.0 or self.axon_strength_reg_weight > 0.0:
-            pruning_loss, strength_loss = self._compute_axon_pruning_loss(processing_info, outputs.device)
-            total_loss += pruning_loss
-            total_loss += strength_loss
-        
-        # 직교 정규화 손실 추가 (pruning_loss 계산 후에)
-        orthogonal_loss = torch.tensor(0.0, device=outputs.device)
-        if self.orthogonal_reg_weight > 0.0 and 'orthogonal_reg_loss' in processing_info:
-            orthogonal_loss = self.orthogonal_reg_weight * processing_info['orthogonal_reg_loss']
-            total_loss += orthogonal_loss
-            
-        spike_loss = torch.tensor(0.0, device=outputs.device)
-        if self.spike_reg_weight > 0.0:
-            spike_loss = self.spike_reg_weight * self._compute_spike_regularization_loss(processing_info, outputs.device)
-            total_loss += spike_loss
-        
-        # 길이 패널티 (기존 코드 유지)
-        length_penalty = torch.tensor(0.0, device=outputs.device)
-        if self.length_penalty_weight > 0.0:
-            length_penalty = self.length_penalty_weight * self._length_penalty(original_output_len, original_target_len, outputs.device)
-            total_loss += length_penalty
-        
-        # TensorBoard 로깅 업데이트
-        if hasattr(self, '_tb_logger') and self._tb_logger:
-            try:
-                loss_components = {
-                    'base_loss': base_loss.item() if hasattr(base_loss, 'item') else float(base_loss),
-                    'axon_pruning_loss': pruning_loss.item() if hasattr(pruning_loss, 'item') else float(pruning_loss),
-                    'axon_strength_loss': strength_loss.item() if hasattr(strength_loss, 'item') else float(strength_loss),
-                    'orthogonal_reg_loss': orthogonal_loss.item() if hasattr(orthogonal_loss, 'item') else float(orthogonal_loss),
-                    'spike_reg_loss': spike_loss.item() if hasattr(spike_loss, 'item') else float(spike_loss),
-                    'length_penalty': length_penalty.item() if hasattr(length_penalty, 'item') else float(length_penalty),
-                    'total_loss': total_loss.item() if hasattr(total_loss, 'item') else float(total_loss)
-                }
-                self._tb_logger.log_loss_components(loss_components)
-            except Exception as e:
-                pass
-        
-        return total_loss
     
     def _handle_length_mismatch(self, outputs: torch.Tensor, targets: torch.Tensor, vocab_size: int):
         """길이 불일치 처리"""
@@ -262,108 +250,47 @@ class SCSLoss(nn.Module):
             
             return (guide_weighted_loss * valid_mask).sum() / valid_mask.sum().clamp(min=1.0)
     
-    def _length_penalty(self, output_len: int, target_len: int, device: torch.device) -> torch.Tensor:
-        """길이 패널티 계산"""
-        if target_len == 0:
-            return torch.tensor(0.0, device=device)
-        
-        length_ratio = output_len / target_len
-        
-        if length_ratio < 0.3:
-            penalty = (0.3 - length_ratio) * 3.0
-        elif length_ratio < 0.7:
-            penalty = (0.7 - length_ratio) * 1.0
-        elif length_ratio > 1.5:
-            penalty = (length_ratio - 1.5) * 0.5
-        else:
-            penalty = 0.0
-        
-        return torch.tensor(penalty, dtype=torch.float32, device=device)
-    
-    def _compute_axon_pruning_loss(self, processing_info: Dict[str, Any], device: torch.device) -> torch.Tensor:
+    def _compute_axon_regularization_loss(self, processing_info: Dict[str, Any], device: torch.device) -> torch.Tensor:
         """
-        양방향 경쟁적 Axon Pruning 손실 계산 (단일 가중치 버전)
-        - 패치 간 경쟁 + 패치 내 양방향(source/target) 경쟁 구현
-        - inner_pruning_weight를 두 방향에 0.5씩 분배하여 적용
+        "최대 자극" 시나리오를 가정하여 Axon 파라미터를 정규화합니다. (Global 방식)
         """
         if 'axonal_parameters' not in processing_info:
             return torch.tensor(0.0, device=device)
         
         axonal_params = processing_info['axonal_parameters']
-        gate_loss = torch.tensor(0.0, device=device)
-        inner_loss = torch.tensor(0.0, device=device)
-        strength_loss = torch.tensor(0.0, device=device)
-        
+        all_predicted_means = []
+
         for conn_data in axonal_params:
-            gates = conn_data['gates']
-            transforms = conn_data['transforms']
-            gate_scale = conn_data['gate_scale']
-            inner_scale = conn_data['inner_scale']
+            # AxonalConnections는 이제 gate, bias, transform을 모두 전달해야 함
+            W = conn_data.get('transforms')
+            G = conn_data.get('gates')
+            B = conn_data.get('biases') # Bias도 전달받아야 함
+
+            if W is None or G is None or B is None:
+                continue
+
+            num_patches, target_size, source_size = W.shape
             
-            # --- 1. 패치 간 경쟁 손실 (Inter-Patch) ---
-            if self.gate_pruning_weight > 0.0 and gates.numel() > 1:
-                gate_probs = F.softmax(gates / self.gate_temperature, dim=0)
-                entropy_gates = -torch.sum(gate_probs * torch.log(gate_probs.clamp(min=1e-9)))
-                
-                # 0~1 사이로 정규화
-                normalized_entropy_gates = entropy_gates / np.log(gates.numel())
-                gate_loss += normalized_entropy_gates * gate_scale
-
-            # --- 2. 패치 내 양방향 경쟁 손실 (Intra-Patch Bidirectional) ---
-            if self.inner_pruning_weight > 0.0 and transforms.numel() > 0:
-                num_patches, target_size, source_size = transforms.shape
-
-                # -- 2a. Source 간의 경쟁 (각 Target이 최고의 Source를 선택) --
-                if source_size > 1:
-                    probs_src = F.softmax(transforms / self.inner_temperature, dim=-1)
-                    entropy_src = -torch.sum(probs_src * torch.log(probs_src.clamp(min=1e-9)), dim=-1)
-                    normalized_entropy_src = entropy_src.mean() / np.log(source_size)
-                    inner_loss += normalized_entropy_src
-                
-                # -- 2b. Target 간의 경쟁 (각 Source가 최고의 Target에 연결) --
-                if target_size > 1:
-                    probs_tgt = F.softmax(transforms / self.inner_temperature, dim=-2)
-                    entropy_tgt = -torch.sum(probs_tgt * torch.log(probs_tgt.clamp(min=1e-9)), dim=-2)
-                    normalized_entropy_tgt = entropy_tgt.mean() / np.log(target_size)
-                    inner_loss += normalized_entropy_tgt
+            # 1. 최대 자극 시의 "평균" 출력 예측
+            #    (W의 평균 * 소스 뉴런 수) * G + B
+            mu_W_per_patch = W.mean(dim=[-2, -1]) # 각 패치의 평균 가중치 [num_patches]
             
-            # --- 3. 강도 정규화 손실 (Scale로 제어) ---
-            if self.axon_strength_reg_weight > 0.0:
-                num_patches, target_size, source_size = transforms.shape
-                
-                # --- 3a. Gate 강도 정규화 ---
-                # 목표: Gate의 평균값이 gate_scale이 되도록.
-                if gates.numel() > 0:
-                    current_gate_mean = gates.mean()
-                    target_gate_mean = torch.tensor(gate_scale, device=device)
-                    strength_loss += F.mse_loss(current_gate_mean, target_gate_mean)
+            # predicted_output_mean shape: [num_patches]
+            predicted_output_mean = G * (source_size * mu_W_per_patch) + B
+            
+            all_predicted_means.append(predicted_output_mean)
 
-                # --- 3b. Inner Transform 강도 정규화 (패치별로 계산하도록 수정) ---
-                if target_size > 0:
-                    # 목표: 각 패치별 가중치 평균이 (inner_scale / target_size)가 되도록.
-                    target_mean_val = inner_scale / target_size
-                    target_mean_tensor = torch.tensor(target_mean_val, device=device)
-                    transform_loss = torch.tensor(0.0, device=device)
+        if not all_predicted_means:
+            return torch.tensor(0.0, device=device)
 
-                    # 각 패치(patch)에 대해 손실을 계산하고 합산합니다.
-                    # 'p'는 0부터 num_patches-1 까지의 인덱스.
-                    for p in range(num_patches):
-                        # p번째 패치의 transform 행렬을 가져옵니다.
-                        patch_transform = transforms[p, :, :]
-                        
-                        # 해당 패치의 평균값만 계산합니다.
-                        current_patch_mean = patch_transform.mean()
-                        
-                        # 이 패치에 대한 MSE 손실을 누적합니다.
-                        transform_loss += F.mse_loss(current_patch_mean, target_mean_tensor)
-                    
-                    # 이렇게 하면 손실 스케일이 패치 수에 따라 변하지 않습니다.
-                    strength_loss += transform_loss / num_patches
-
-        pruning_loss = self.gate_pruning_weight * gate_loss + 0.5 * self.inner_pruning_weight * inner_loss
-        strength_loss = self.axon_strength_reg_weight * strength_loss
-
-        return pruning_loss, strength_loss
+        # 2. Global 정규화: 모든 패치의 예측 평균들을 모아 전체 평균을 계산
+        global_predicted_mean = torch.cat(all_predicted_means).mean()
+        target_mean = torch.tensor(self.target_max_stim_mean, device=device)
+        
+        # 3. 목표값과 비교하여 MSE Loss 계산
+        loss = F.mse_loss(global_predicted_mean, target_mean)
+        
+        return loss
 
     def _compute_spike_regularization_loss(self, processing_info: Dict[str, Any], device: torch.device) -> torch.Tensor:
         """
@@ -404,50 +331,6 @@ class SCSLoss(nn.Module):
             total_loss = total_loss / len(node_spike_counts)
 
         return total_loss
-
-
-class TimingLoss(SCSLoss):
-    """TimingManager의 동기화 지표를 직접 학습하는 손실 함수"""
-    def __init__(
-        self, 
-        pad_token_id: int, 
-        guide_sep_token_id: int,
-        timing_weight: float = 1.0,
-        sync_target_start: float = 1.0,
-        sync_target_end: float = 0.0,
-        **kwargs
-    ):
-        super().__init__(pad_token_id, guide_sep_token_id, **kwargs)
-        self.timing_weight = timing_weight
-        self.sync_target_start = sync_target_start
-        self.sync_target_end = sync_target_end
-        self.mse_loss = nn.MSELoss()
-
-    def forward(self, outputs: torch.Tensor, targets: torch.Tensor, processing_info: Dict[str, Any]) -> torch.Tensor:
-        """타이밍 손실 계산 - TensorBoard 로깅 포함"""
-        
-        # 기본 손실 계산 (부모 클래스 호출)
-        total_loss = super().forward(outputs, targets, processing_info)
-        
-        # 타이밍 손실 계산
-        timing_loss_value = torch.tensor(0.0, device=outputs.device)
-        if self.timing_weight != 0.0:
-            timing_loss_value = self._calculate_timing_loss(processing_info, outputs.device)
-            total_loss += self.timing_weight * timing_loss_value
-        
-        # TensorBoard 타이밍 손실 로깅 (새로 추가)
-        if hasattr(self, '_tb_logger') and self._tb_logger:
-            try:
-                timing_components = {
-                    'timing_loss': timing_loss_value.item() if hasattr(timing_loss_value, 'item') else float(timing_loss_value),
-                    'timing_weight': self.timing_weight
-                }
-                self._tb_logger.log_loss_components(timing_components)
-            except Exception as e:
-                # 로깅 실패는 무시
-                pass
-                
-        return total_loss
     
     def _calculate_timing_loss(self, processing_info: Dict[str, Any], device: torch.device) -> torch.Tensor:
         if 'timing_info' not in processing_info:
@@ -471,46 +354,4 @@ class TimingLoss(SCSLoss):
             total_loss += self.mse_loss(sync_at_end, target)
             
         return total_loss
-
-
-class SpikingLoss(SCSLoss):
-    """스파이킹 뉴럴 네트워크 특화 손실 - Axon Pruning 중심"""
-    def __init__(self, pad_token_id: int, guide_sep_token_id: int, **kwargs):
-        super().__init__(
-            pad_token_id, 
-            guide_sep_token_id,
-            gate_pruning_weight=kwargs.pop('gate_pruning_weight', 1e-4),
-            inner_pruning_weight=kwargs.pop('inner_pruning_weight', 1e-5),
-            gate_temperature=kwargs.pop('gate_temperature', 0.1),
-            inner_temperature=kwargs.pop('inner_temperature', 0.1),
-            **kwargs
-        )
-
-
-class NeuromodulationLoss(SCSLoss):
-    """신경 조절 메커니즘 손실"""
-    def __init__(self, pad_token_id: int, guide_sep_token_id: int, **kwargs):
-        super().__init__(
-            pad_token_id, 
-            guide_sep_token_id,
-            use_temporal_weighting=True,
-            gate_temperature=kwargs.pop('gate_temperature', 0.1),
-            inner_temperature=kwargs.pop('inner_temperature', 0.1),
-            **kwargs
-        )
-
-
-class MultiObjectiveLoss(SCSLoss):
-    """다목적 최적화 손실 - Axon Pruning 포함"""
-    def __init__(self, pad_token_id: int, guide_sep_token_id: int, **kwargs):
-        super().__init__(
-            pad_token_id, 
-            guide_sep_token_id,
-            gate_pruning_weight=kwargs.pop('gate_pruning_weight', 1e-4),
-            inner_pruning_weight=kwargs.pop('inner_pruning_weight', 1e-5),
-            gate_temperature=kwargs.pop('gate_temperature', 0.1),
-            inner_temperature=kwargs.pop('inner_temperature', 0.1),
-            use_temporal_weighting=True,
-            length_penalty_weight=kwargs.pop('length_penalty_weight', 0.02),
-            **kwargs
-        )
+    

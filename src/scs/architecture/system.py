@@ -564,19 +564,20 @@ class SCSSystem(nn.Module):
         axonal_params = []
         
         # AxonalConnections의 원본 설정(connections)을 참조
-        for conn_key, conn_config in zip(self.axonal_connections.patch_gates.keys(), self.axonal_connections.connections):
+        for conn_key in self.axonal_connections.patch_gates.keys():
             gates = self.axonal_connections.patch_gates[conn_key]
             transforms = self.axonal_connections.patch_transforms[conn_key]
+            bias = self.axonal_connections.patch_biases[conn_key]
             
             axonal_params.append({
                 'connection_name': conn_key,
                 'gates': gates,
                 'transforms': transforms,
-                'gate_scale': conn_config.get("patch_weight_scale", 1.0),
-                'inner_scale': conn_config.get("inner_weight_scale", 1.0)
+                'bias': bias
             })
         
         return axonal_params
+    
     def _get_orthogonal_regularization(self) -> torch.Tensor:
         """
         output_mapper와 input_mapper의 직교 정규화 손실 계산 (MSE 기반 수정)

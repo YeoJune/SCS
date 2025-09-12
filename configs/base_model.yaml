@@ -124,7 +124,7 @@ learning:
   target_max_stim_mean: 1.5
   structural_reg_weight: 1.0
 
-  spike_reg_weight: 500
+  spike_reg_weight: 50
   target_spike_rate: 0.05
 
   # 점진적 커리큘럼 학습

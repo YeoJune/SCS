@@ -104,8 +104,7 @@ class AxonalConnections(nn.Module):
                     indexing='ij'
                 ), dim=-1).view(-1, 2)
                 dist_sq = ((coords.unsqueeze(1) - coords.unsqueeze(0))**2).sum(dim=-1)
-                std = patch_size / 3.0
-                # 평균이 0인 '멕시칸 햇' 형태를 만들기 위해 진폭(std) 사용
+                std = patch_size * self.transform_init_std
                 kernel = torch.exp(-dist_sq / (2 * std**2))
                 kernel = kernel - kernel.mean() + self.transform_init_mean
                 inner_transforms = kernel.unsqueeze(0).repeat(num_patches, 1, 1)

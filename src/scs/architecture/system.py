@@ -25,7 +25,7 @@ class AxonalConnections(nn.Module):
         node_grid_sizes: Dict[str, tuple] = None,
         gate_init_mean: float = 1.0,      # 초기 Gain
         gate_init_std: float = 0.01,
-        bias_init_mean: float = 0.6,      # 초기 Bias
+        bias_init_mean: float = 0.0,      # 초기 Bias
         bias_init_std: float = 0.0,
         transform_init_mode: str = 'gaussian',
         transform_init_mean: float = 1.0, # 평균 1

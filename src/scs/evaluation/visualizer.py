@@ -1,8 +1,8 @@
 # src/scs/evaluation/visualizer.py
 """
-SCS 모델 시각화 시스템 (v4.0)
+SCS 모델 시각화 시스템 (v5.0)
 
-단일 클래스 기반 설계로 모든 시각화 기능 통합
+Gate + Bias 통합 계산을 반영한 Axonal 시각화
 """
 
 import torch
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class SCSVisualizer:
-    """SCS 모델 전용 시각화 클래스"""
+    """SCS 모델 전용 시각화 클래스 - Gate & Bias 통합 지원"""
     
     def __init__(self, save_dpi: int = 100, figsize_scale: float = 1.0):
         """
@@ -32,21 +32,24 @@ class SCSVisualizer:
         self, 
         gates: torch.Tensor, 
         transforms: torch.Tensor, 
+        biases: torch.Tensor,  # 새로 추가
         conn_name: str
-    ) -> Tuple[plt.Figure, plt.Figure, plt.Figure]:
-        """Axonal 프루닝 3뷰 시각화 생성"""
+    ) -> Tuple[plt.Figure, plt.Figure, plt.Figure, plt.Figure]:
+        """Axonal 프루닝 4뷰 시각화 생성 (Gate, Bias, Source-fixed, Target-fixed)"""
         gates_np = gates.detach().cpu().numpy()
         transforms_np = transforms.detach().cpu().numpy()
+        biases_np = biases.detach().cpu().numpy()  # 새로 추가
         num_patches = len(gates_np)
         
         patches_per_row = int(np.sqrt(num_patches))
         patches_per_col = patches_per_row
         
         gate_fig = self._create_gate_view(gates_np, patches_per_row, patches_per_col, conn_name)
-        source_fig = self._create_source_fixed_view(gates_np, transforms_np, patches_per_row, patches_per_col, conn_name)
-        target_fig = self._create_target_fixed_view(gates_np, transforms_np, patches_per_row, patches_per_col, conn_name)
+        bias_fig = self._create_bias_view(biases_np, patches_per_row, patches_per_col, conn_name)  # 새로 추가
+        source_fig = self._create_source_fixed_view(gates_np, transforms_np, biases_np, patches_per_row, patches_per_col, conn_name)
+        target_fig = self._create_target_fixed_view(gates_np, transforms_np, biases_np, patches_per_row, patches_per_col, conn_name)
         
-        return gate_fig, source_fig, target_fig
+        return gate_fig, bias_fig, source_fig, target_fig
     
     def create_weight_heatmaps_figure(self, model) -> plt.Figure:
         """노드별 influence 가중치 히트맵 생성"""
@@ -253,19 +256,52 @@ class SCSVisualizer:
         plt.tight_layout()
         return fig
     
+    def _create_bias_view(
+        self, 
+        biases: np.ndarray, 
+        patches_per_row: int, 
+        patches_per_col: int, 
+        conn_name: str
+    ) -> plt.Figure:
+        """Bias 뷰 생성 (새로 추가)"""
+        bias_grid = biases.reshape(patches_per_row, patches_per_col)
+        
+        figsize = (8 * self.figsize_scale, 8 * self.figsize_scale)
+        fig, ax = plt.subplots(figsize=figsize)
+        
+        # Bias는 음수/양수 모두 가능하므로 diverging colormap 사용
+        vmax = max(abs(biases.min()), abs(biases.max()), 0.1)  # 최소 범위 보장
+        im = ax.imshow(bias_grid, cmap='RdBu_r', aspect='equal', vmin=-vmax, vmax=vmax)
+        
+        ax.set_title(f'{conn_name} - Bias Values\n({len(biases)} patches)')
+        ax.set_xlabel('Patch Column')
+        ax.set_ylabel('Patch Row')
+        
+        plt.colorbar(im, ax=ax, label='Bias Value')
+        
+        # 격자 표시
+        for i in range(patches_per_row + 1):
+            ax.axhline(i - 0.5, color='black', linewidth=0.5, alpha=0.7)
+        for j in range(patches_per_col + 1):
+            ax.axvline(j - 0.5, color='black', linewidth=0.5, alpha=0.7)
+        
+        plt.tight_layout()
+        return fig
+    
     def _create_source_fixed_view(
         self,
         gates: np.ndarray,
         transforms: np.ndarray,
+        biases: np.ndarray,  # 새로 추가
         patches_per_row: int,
         patches_per_col: int,
         conn_name: str
     ) -> plt.Figure:
-        """Source(0,0) 고정 뷰 생성"""
+        """Source(0,0) 고정 뷰 생성 - Gate & Bias 통합 계산"""
 
         # Transform 차원 확인
         num_patches, target_size, source_size = transforms.shape
-        target_grid_size = int(np.sqrt(target_size))  # 예: 16 -> 4, 4 -> 2
+        target_grid_size = int(np.sqrt(target_size))
         
         full_view = np.zeros((patches_per_row * target_grid_size, patches_per_col * target_grid_size))
         
@@ -275,10 +311,12 @@ class SCSVisualizer:
             
             # source(0,0)에서 target들로의 연결
             source_00_connections = transforms[patch_idx][:, 0]  # [target_size]
-            weighted_connections = source_00_connections * gates[patch_idx]
+            
+            # 실제 AxonalConnections 공식 적용: Transform * Gate + Bias
+            final_connections = source_00_connections * gates[patch_idx] + biases[patch_idx]
             
             # 동적 크기로 reshape
-            connection_pattern = weighted_connections.reshape(target_grid_size, target_grid_size)
+            connection_pattern = final_connections.reshape(target_grid_size, target_grid_size)
             
             # 전체 뷰에 배치
             start_row = patch_row * target_grid_size
@@ -288,21 +326,24 @@ class SCSVisualizer:
             
             full_view[start_row:end_row, start_col:end_col] = connection_pattern
         
-        # 동적 figure 크기 계산 (데이터 크기에 비례)
+        # 동적 figure 크기 계산
         aspect_ratio = full_view.shape[1] / full_view.shape[0]
-        base_size = 8  # 기본 크기
+        base_size = 8
         figsize = (base_size * aspect_ratio * self.figsize_scale, base_size * self.figsize_scale)
         
         fig, ax = plt.subplots(figsize=figsize)
-        im = ax.imshow(full_view, cmap='viridis', aspect='equal', vmin=0, vmax=1.5)
         
-        ax.set_title(f'{conn_name} - Source(0,0) Fixed View\nConnections from each patch source(0,0) to targets')
+        # Bias 때문에 음수값도 가능하므로 적절한 colormap과 범위 설정
+        vmax = max(abs(full_view.min()), abs(full_view.max()), 0.1)
+        im = ax.imshow(full_view, cmap='RdBu_r', aspect='equal', vmin=-vmax, vmax=vmax)
+        
+        ax.set_title(f'{conn_name} - Source(0,0) Fixed View (Gate*Transform + Bias)\nFinal connections from each patch source(0,0) to targets')
         ax.set_xlabel('Target Position (Global)')
         ax.set_ylabel('Target Position (Global)')
         
-        plt.colorbar(im, ax=ax, label='Connection Strength')
+        plt.colorbar(im, ax=ax, label='Final Connection Strength')
         
-        # 동적 패치 경계선 (target_grid_size 기반)
+        # 동적 패치 경계선
         for i in range(1, patches_per_row):
             ax.axhline(i * target_grid_size - 0.5, color='black', linewidth=1, alpha=0.8)
         for j in range(1, patches_per_col):
@@ -315,14 +356,15 @@ class SCSVisualizer:
         self,
         gates: np.ndarray,
         transforms: np.ndarray,
+        biases: np.ndarray,  # 새로 추가
         patches_per_row: int,
         patches_per_col: int,
         conn_name: str
     ) -> plt.Figure:
-        """Target(0,0) 고정 뷰 생성"""
+        """Target(0,0) 고정 뷰 생성 - Gate & Bias 통합 계산"""
         # Transform 차원 확인
         num_patches, target_size, source_size = transforms.shape
-        source_grid_size = int(np.sqrt(source_size))  # 예: 16 -> 4, 4 -> 2
+        source_grid_size = int(np.sqrt(source_size))
 
         full_view = np.zeros((patches_per_row * source_grid_size, patches_per_col * source_grid_size))
 
@@ -332,10 +374,12 @@ class SCSVisualizer:
             
             # target(0,0)이 source들로부터 받는 연결
             target_00_connections = transforms[patch_idx][0, :]  # [source_size]
-            weighted_connections = target_00_connections * gates[patch_idx]
+            
+            # 실제 AxonalConnections 공식 적용: Transform * Gate + Bias
+            final_connections = target_00_connections * gates[patch_idx] + biases[patch_idx]
             
             # 동적 크기로 reshape
-            connection_pattern = weighted_connections.reshape(source_grid_size, source_grid_size)
+            connection_pattern = final_connections.reshape(source_grid_size, source_grid_size)
             
             # 전체 뷰에 배치
             start_row = patch_row * source_grid_size
@@ -345,20 +389,24 @@ class SCSVisualizer:
             
             full_view[start_row:end_row, start_col:end_col] = connection_pattern
         
-        # 동적 figure 크기 계산 (데이터 크기에 비례)
+        # 동적 figure 크기 계산
         aspect_ratio = full_view.shape[1] / full_view.shape[0]
-        base_size = 8  # 기본 크기
+        base_size = 8
         figsize = (base_size * aspect_ratio * self.figsize_scale, base_size * self.figsize_scale)
         
         fig, ax = plt.subplots(figsize=figsize)
-        im = ax.imshow(full_view, cmap='viridis', aspect='equal', vmin=0, vmax=1.5)
-        ax.set_title(f'{conn_name} - Target(0,0) Fixed View\nConnections to each patch target(0,0) from sources')
+        
+        # Bias 때문에 음수값도 가능하므로 적절한 colormap과 범위 설정
+        vmax = max(abs(full_view.min()), abs(full_view.max()), 0.1)
+        im = ax.imshow(full_view, cmap='RdBu_r', aspect='equal', vmin=-vmax, vmax=vmax)
+        
+        ax.set_title(f'{conn_name} - Target(0,0) Fixed View (Gate*Transform + Bias)\nFinal connections to each patch target(0,0) from sources')
         ax.set_xlabel('Source Position (Global)')
         ax.set_ylabel('Source Position (Global)')
         
-        plt.colorbar(im, ax=ax, label='Connection Strength')
+        plt.colorbar(im, ax=ax, label='Final Connection Strength')
         
-        # 동적 패치 경계선 (source_grid_size 기반)
+        # 동적 패치 경계선
         for i in range(1, patches_per_row):
             ax.axhline(i * source_grid_size - 0.5, color='black', linewidth=1, alpha=0.8)
         for j in range(1, patches_per_col):
@@ -366,7 +414,6 @@ class SCSVisualizer:
         
         plt.tight_layout()
         return fig
-
 
     def collect_spike_patterns(
         self,
@@ -417,9 +464,8 @@ class SCSVisualizer:
         logger.info(f"총 {len(all_spike_patterns)}개 CLK 패턴 수집 완료")
         return all_spike_patterns
 
-
     def generate_all_visualizations(self, model, test_loader, output_dir: Path):
-        """모든 시각화 생성 및 저장"""
+        """모든 시각화 생성 및 저장 - Bias 지원 업데이트"""
         try:
             vis_dir = output_dir / "visualizations"
             
@@ -464,7 +510,7 @@ class SCSVisualizer:
                 self.save_figure(activity_fig, info_dir / "node_activity_timeline.png")
                 self.save_figure(spike_count_fig, info_dir / "total_spikes_timeline.png")
                 
-                # 6. Axonal 프루닝 시각화 저장
+                # 6. Axonal 프루닝 시각화 저장 (Bias 지원 업데이트)
                 if hasattr(model, '_get_axonal_parameters'):
                     axonal_data = model._get_axonal_parameters()
                     axonal_dir = vis_dir / "axonal_heatmaps"
@@ -472,13 +518,21 @@ class SCSVisualizer:
                     for conn_data in axonal_data:
                         gates = conn_data['gates']
                         transforms = conn_data['transforms']
+                        biases = conn_data.get('biases') or conn_data.get('bias')  # 키 이름 유연하게 처리
                         conn_name = conn_data['connection_name']
 
-                        gate_fig, source_fig, target_fig = self.create_axonal_figures(gates, transforms, conn_name)
+                        if biases is not None:
+                            # 4뷰 시각화 (Gate, Bias, Source-fixed, Target-fixed)
+                            gate_fig, bias_fig, source_fig, target_fig = self.create_axonal_figures(
+                                gates, transforms, biases, conn_name
+                            )
 
-                        self.save_figure(gate_fig, axonal_dir / f"{conn_name}_gates.png")
-                        self.save_figure(source_fig, axonal_dir / f"{conn_name}_source_fixed.png")
-                        self.save_figure(target_fig, axonal_dir / f"{conn_name}_target_fixed.png")
+                            self.save_figure(gate_fig, axonal_dir / f"{conn_name}_gates.png")
+                            self.save_figure(bias_fig, axonal_dir / f"{conn_name}_biases.png")  # 새로 추가
+                            self.save_figure(source_fig, axonal_dir / f"{conn_name}_source_fixed.png")
+                            self.save_figure(target_fig, axonal_dir / f"{conn_name}_target_fixed.png")
+                        else:
+                            logger.warning(f"Bias 데이터가 없습니다: {conn_name}")
 
             logger.info(f"모든 시각화 저장 완료: {vis_dir}")
             

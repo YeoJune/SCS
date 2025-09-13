@@ -60,7 +60,7 @@ task:
 
 # === 학습 설정 오버라이드 ===
 learning:
-  epochs: 1
+  epochs: 11
   learning_rate: 5e-4
   eta_min: 1e-5
   max_clk_training: 138
@@ -95,9 +95,9 @@ data_loading:
     max_length: 128
 
 data:
-  train_samples: 1
-  val_samples: 1
-  test_samples: 1
+  train_samples: -1
+  val_samples: -1
+  test_samples: -1
 
 # === 평가 설정 ===
 evaluation:

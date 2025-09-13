@@ -41,12 +41,12 @@ connectivity:
 
 # === 축삭 연결 (IN→OUT 단일 연결) ===
 axonal_connections:
-  gate_init_mean: 1.0
+  gate_init_mean: 0.8
   gate_init_std: 0.01
   bias_init_mean: 0.0
   bias_init_std: 0.0
   transform_init_mode: "gaussian"
-  transform_init_mean: 1.0
+  transform_init_mean: 0.8
   transform_init_std: 0.1
   connections:
     - source: "IN"
@@ -122,8 +122,8 @@ learning:
 
   orthogonal_reg_weight: 25.0
 
-  axon_reg_target: 1.5
-  axon_reg_weight: 5.0
+  axon_reg_target: 1.2
+  axon_reg_weight: 1.0
 
   spike_reg_weight: 50
   target_spike_rate: 0.05

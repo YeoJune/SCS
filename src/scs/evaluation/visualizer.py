@@ -269,7 +269,7 @@ class SCSVisualizer:
         figsize = (8 * self.figsize_scale, 8 * self.figsize_scale)
         fig, ax = plt.subplots(figsize=figsize)
         
-        im = ax.imshow(bias_grid, cmap='RdBu_r', aspect='equal', vmin=0.0, vmax=1.5)
+        im = ax.imshow(bias_grid, cmap='viridis', aspect='equal', vmin=0.0, vmax=1.5)
         
         ax.set_title(f'{conn_name} - Bias Values\n({len(biases)} patches)')
         ax.set_xlabel('Patch Column')
@@ -331,7 +331,7 @@ class SCSVisualizer:
         
         fig, ax = plt.subplots(figsize=figsize)
         
-        im = ax.imshow(full_view, cmap='RdBu_r', aspect='equal', vmin=0.0, vmax=1.5)
+        im = ax.imshow(full_view, cmap='viridis', aspect='equal', vmin=0.0, vmax=1.5)
 
         ax.set_title(f'{conn_name} - Source(0,0) Fixed View (Gate*Transform + Bias)\nFinal connections from each patch source(0,0) to targets')
         ax.set_xlabel('Target Position (Global)')
@@ -392,7 +392,7 @@ class SCSVisualizer:
         
         fig, ax = plt.subplots(figsize=figsize)
         
-        im = ax.imshow(full_view, cmap='RdBu_r', aspect='equal', vmin=0.0, vmax=1.5)
+        im = ax.imshow(full_view, cmap='viridis', aspect='equal', vmin=0.0, vmax=1.5)
         
         ax.set_title(f'{conn_name} - Target(0,0) Fixed View (Gate*Transform + Bias)\nFinal connections to each patch target(0,0) from sources')
         ax.set_xlabel('Source Position (Global)')

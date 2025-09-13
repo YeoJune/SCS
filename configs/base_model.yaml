@@ -121,7 +121,7 @@ learning:
   orthogonal_reg_weight: 25.0
 
   axon_reg_target: 1.5
-  axon_reg_weight: 1.0
+  axon_reg_weight: 5.0
 
   spike_reg_weight: 50
   target_spike_rate: 0.05

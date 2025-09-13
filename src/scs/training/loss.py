@@ -270,10 +270,12 @@ class SCSLoss(nn.Module):
                 continue
 
             num_patches, target_size, source_size = W.shape
+
+            MEAN = 0.05
             
             # 1. 최대 자극 시의 "평균" 출력 예측
             #    (W의 평균 * 소스 뉴런 수) * G + B
-            mu_W_per_patch = W.mean(dim=[-2, -1]) # 각 패치의 평균 가중치 [num_patches]
+            mu_W_per_patch = W.mean(dim=[-2, -1]) * MEAN # 각 패치의 평균 가중치 [num_patches]
             
             # predicted_output_mean shape: [num_patches]
             predicted_output_mean = G * (source_size * mu_W_per_patch) + B

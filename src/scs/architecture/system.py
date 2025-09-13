@@ -573,7 +573,7 @@ class SCSSystem(nn.Module):
                 'connection_name': conn_key,
                 'gates': gates,
                 'transforms': transforms,
-                'bias': bias
+                'biases': biases
             })
         
         return axonal_params

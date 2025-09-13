@@ -567,7 +567,7 @@ class SCSSystem(nn.Module):
         for conn_key in self.axonal_connections.patch_gates.keys():
             gates = self.axonal_connections.patch_gates[conn_key]
             transforms = self.axonal_connections.patch_transforms[conn_key]
-            bias = self.axonal_connections.patch_biases[conn_key]
+            biases = self.axonal_connections.patch_biases[conn_key]
             
             axonal_params.append({
                 'connection_name': conn_key,

@@ -120,8 +120,8 @@ learning:
 
   orthogonal_reg_weight: 25.0
 
-  target_max_stim_mean: 1.5
-  structural_reg_weight: 1.0
+  axon_reg_target: 1.5
+  axon_reg_weight: 1.0
 
   spike_reg_weight: 50
   target_spike_rate: 0.05

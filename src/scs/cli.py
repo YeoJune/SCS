@@ -220,8 +220,8 @@ def train_mode(args: argparse.Namespace):
             timing_weight=learning_config.timing_weight,
             sync_target_start=learning_config.sync_target_start,
             sync_target_end=learning_config.sync_target_end,
-            target_max_stim_mean=learning_config.target_max_stim_mean,
-            structural_reg_weight=learning_config.structural_reg_weight,
+            axon_reg_target=learning_config.axon_reg_target,
+            axon_reg_weight=learning_config.axon_reg_weight,
         )
         
         # 옵티마이저 생성

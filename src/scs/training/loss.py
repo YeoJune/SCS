@@ -17,8 +17,8 @@ class SCSLoss(nn.Module):
         guide_sep_token_id: int,
         max_clk: int = 512,
         guide_weight: float = 0.3,
-        target_max_stim_mean: float = 1.5,
-        structural_reg_weight: float = 0.0,
+        axon_reg_target: float = 1.5,
+        axon_reg_weight: float = 0.0,
         orthogonal_reg_weight: float = 0.0,
         spike_reg_weight: float = 0.0,
         target_spike_rate: float = 0.0,
@@ -33,8 +33,8 @@ class SCSLoss(nn.Module):
         self.max_clk = max_clk
         self.guide_sep_token_id = guide_sep_token_id
         self.guide_weight = guide_weight
-        self.target_max_stim_mean = target_max_stim_mean
-        self.structural_reg_weight = structural_reg_weight
+        self.axon_reg_target = axon_reg_target
+        self.axon_reg_weight = axon_reg_weight
         self.orthogonal_reg_weight = orthogonal_reg_weight  
         self.use_temporal_weighting = use_temporal_weighting
         self.spike_reg_weight = spike_reg_weight
@@ -75,8 +75,8 @@ class SCSLoss(nn.Module):
         
         # Axon Pruning 손실 - Loss에서 직접 계산 (표준적 접근법)
         axon_loss = torch.tensor(0.0, device=outputs.device)
-        if self.structural_reg_weight > 0.0:
-            axon_loss = self.structural_reg_weight * self._compute_axon_regularization_loss(processing_info, outputs.device)
+        if self.axon_reg_weight > 0.0:
+            axon_loss = self.axon_reg_weight * self._compute_axon_regularization_loss(processing_info, outputs.device)
             total_loss += axon_loss
         
         # 직교 정규화 손실 추가 (pruning_loss 계산 후에)
@@ -285,7 +285,7 @@ class SCSLoss(nn.Module):
 
         # 2. Global 정규화: 모든 패치의 예측 평균들을 모아 전체 평균을 계산
         global_predicted_mean = torch.cat(all_predicted_means).mean()
-        target_mean = torch.tensor(self.target_max_stim_mean, device=device)
+        target_mean = torch.tensor(self.axon_reg_target, device=device)
         
         # 3. 목표값과 비교하여 MSE Loss 계산
         loss = F.mse_loss(global_predicted_mean, target_mean)

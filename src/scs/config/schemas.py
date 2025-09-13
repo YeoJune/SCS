@@ -153,8 +153,8 @@ class LearningConfig(BaseModel):
     # 손실 관련
     orthogonal_reg_weight: float = Field(default=0.0)
 
-    target_max_stim_mean: float = Field(default=1.5)
-    structural_reg_weight: float = Field(default=0.0)
+    axon_reg_target: float = Field(default=1.5)
+    axon_reg_weight: float = Field(default=0.0)
 
     spike_reg_weight: float = Field(default=0.0)
     target_spike_rate: float = Field(default=0.0)

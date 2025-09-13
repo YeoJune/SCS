@@ -45,7 +45,7 @@ class SCSVisualizer:
         patches_per_col = patches_per_row
         
         gate_fig = self._create_gate_view(gates_np, patches_per_row, patches_per_col, conn_name)
-        bias_fig = self._create_bias_view(biases_np, patches_per_row, patches_per_col, conn_name)  # 새로 추가
+        bias_fig = self._create_bias_view(biases_np, patches_per_row, patches_per_col, conn_name)
         source_fig = self._create_source_fixed_view(gates_np, transforms_np, biases_np, patches_per_row, patches_per_col, conn_name)
         target_fig = self._create_target_fixed_view(gates_np, transforms_np, biases_np, patches_per_row, patches_per_col, conn_name)
         
@@ -239,7 +239,7 @@ class SCSVisualizer:
         
         figsize = (8 * self.figsize_scale, 8 * self.figsize_scale)
         fig, ax = plt.subplots(figsize=figsize)
-        im = ax.imshow(gate_grid, cmap='viridis', aspect='equal', vmin=0.5, vmax=1.5)
+        im = ax.imshow(gate_grid, cmap='viridis', aspect='equal', vmin=0.0, vmax=1.5)
         
         ax.set_title(f'{conn_name} - Gate Strengths\n({len(gates)} patches)')
         ax.set_xlabel('Patch Column')
@@ -269,9 +269,7 @@ class SCSVisualizer:
         figsize = (8 * self.figsize_scale, 8 * self.figsize_scale)
         fig, ax = plt.subplots(figsize=figsize)
         
-        # Bias는 음수/양수 모두 가능하므로 diverging colormap 사용
-        vmax = max(abs(biases.min()), abs(biases.max()), 0.1)  # 최소 범위 보장
-        im = ax.imshow(bias_grid, cmap='RdBu_r', aspect='equal', vmin=-vmax, vmax=vmax)
+        im = ax.imshow(bias_grid, cmap='RdBu_r', aspect='equal', vmin=0.0, vmax=1.5)
         
         ax.set_title(f'{conn_name} - Bias Values\n({len(biases)} patches)')
         ax.set_xlabel('Patch Column')
@@ -333,10 +331,8 @@ class SCSVisualizer:
         
         fig, ax = plt.subplots(figsize=figsize)
         
-        # Bias 때문에 음수값도 가능하므로 적절한 colormap과 범위 설정
-        vmax = max(abs(full_view.min()), abs(full_view.max()), 0.1)
-        im = ax.imshow(full_view, cmap='RdBu_r', aspect='equal', vmin=-vmax, vmax=vmax)
-        
+        im = ax.imshow(full_view, cmap='RdBu_r', aspect='equal', vmin=0.0, vmax=1.5)
+
         ax.set_title(f'{conn_name} - Source(0,0) Fixed View (Gate*Transform + Bias)\nFinal connections from each patch source(0,0) to targets')
         ax.set_xlabel('Target Position (Global)')
         ax.set_ylabel('Target Position (Global)')
@@ -396,9 +392,7 @@ class SCSVisualizer:
         
         fig, ax = plt.subplots(figsize=figsize)
         
-        # Bias 때문에 음수값도 가능하므로 적절한 colormap과 범위 설정
-        vmax = max(abs(full_view.min()), abs(full_view.max()), 0.1)
-        im = ax.imshow(full_view, cmap='RdBu_r', aspect='equal', vmin=-vmax, vmax=vmax)
+        im = ax.imshow(full_view, cmap='RdBu_r', aspect='equal', vmin=0.0, vmax=1.5)
         
         ax.set_title(f'{conn_name} - Target(0,0) Fixed View (Gate*Transform + Bias)\nFinal connections to each patch target(0,0) from sources')
         ax.set_xlabel('Source Position (Global)')
@@ -518,7 +512,7 @@ class SCSVisualizer:
                     for conn_data in axonal_data:
                         gates = conn_data['gates']
                         transforms = conn_data['transforms']
-                        biases = conn_data.get('biases') or conn_data.get('bias')  # 키 이름 유연하게 처리
+                        biases = conn_data['biases']
                         conn_name = conn_data['connection_name']
 
                         if biases is not None:

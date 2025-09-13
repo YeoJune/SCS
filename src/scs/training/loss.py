@@ -259,8 +259,6 @@ class SCSLoss(nn.Module):
         
         axonal_params = processing_info['axonal_parameters']
         all_predicted_means = []
-        
-        MEAN = 0.05
 
         for conn_data in axonal_params:
             # AxonalConnections는 이제 gate, bias, transform을 모두 전달해야 함
@@ -275,7 +273,7 @@ class SCSLoss(nn.Module):
             
             # 1. 최대 자극 시의 "평균" 출력 예측
             #    (W의 평균 * 소스 뉴런 수) * G + B
-            mu_W_per_patch = W.mean(dim=[-2, -1]) * MEAN # 각 패치의 평균 가중치 [num_patches]
+            mu_W_per_patch = W.mean(dim=[-2, -1]) # 각 패치의 평균 가중치 [num_patches]
             
             # predicted_output_mean shape: [num_patches]
             predicted_output_mean = G * (source_size * mu_W_per_patch) + B
@@ -287,7 +285,7 @@ class SCSLoss(nn.Module):
 
         # 2. Global 정규화: 모든 패치의 예측 평균들을 모아 전체 평균을 계산
         global_predicted_mean = torch.cat(all_predicted_means).mean()
-        target_mean = torch.tensor(self.axon_reg_target * MEAN, device=device)
+        target_mean = torch.tensor(self.axon_reg_target, device=device)
         
         # 3. 목표값과 비교하여 MSE Loss 계산
         loss = F.mse_loss(global_predicted_mean, target_mean)

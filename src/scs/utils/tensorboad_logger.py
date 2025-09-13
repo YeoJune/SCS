@@ -209,17 +209,19 @@ class SCSTensorBoardLogger:
                 biases = conn_data['biases']
                 
                 # 3뷰 시각화 생성
-                gate_fig, source_fig, target_fig = self.visualizer.create_axonal_figures(
+                gate_fig, bias_fig, source_fig, target_fig = self.visualizer.create_axonal_figures(
                     gates, transforms, biases, conn_name
                 )
                 
                 # TensorBoard에 로깅
                 self.writer.add_figure(f'Axonal_Heatmaps/Gates/{conn_name}', gate_fig, step)
+                self.writer.add_figure(f'Axonal_Heatmaps/Biases/{conn_name}', bias_fig, step)
                 self.writer.add_figure(f'Axonal_Heatmaps/Source_Fixed/{conn_name}', source_fig, step)
                 self.writer.add_figure(f'Axonal_Heatmaps/Target_Fixed/{conn_name}', target_fig, step)
                 
                 # Figure 메모리 해제
                 plt.close(gate_fig)
+                plt.close(bias_fig)
                 plt.close(source_fig)
                 plt.close(target_fig)
                 

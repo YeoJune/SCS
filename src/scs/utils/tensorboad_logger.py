@@ -293,7 +293,7 @@ class SCSTensorBoardLogger:
         try:
             cmd = [
                 "tensorboard", 
-                "--logdir", str(self.log_dir),
+                "--logdir", str(self.config.get('log_dir', self.log_dir)),
                 "--port", str(port), 
                 "--host", "0.0.0.0",
                 "--reload_interval", "30"

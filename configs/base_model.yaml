@@ -184,7 +184,7 @@ logging:
   tensorboard:
     enabled: true
     log_dir: "tensorboard_logs"
-    auto_launch: false
+    auto_launch: true
     port: 6006
     max_images_per_batch: 10
     histogram_freq: 100

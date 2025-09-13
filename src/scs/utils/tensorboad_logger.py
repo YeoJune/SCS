@@ -206,10 +206,11 @@ class SCSTensorBoardLogger:
                 gates = conn_data['gates']
                 transforms = conn_data['transforms']
                 conn_name = conn_data['connection_name']
+                biases = conn_data['biases']
                 
                 # 3뷰 시각화 생성
                 gate_fig, source_fig, target_fig = self.visualizer.create_axonal_figures(
-                    gates, transforms, conn_name
+                    gates, transforms, biases, conn_name
                 )
                 
                 # TensorBoard에 로깅

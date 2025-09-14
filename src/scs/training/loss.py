@@ -73,12 +73,6 @@ class SCSLoss(nn.Module):
         base_loss = self._compute_base_loss(outputs, targets, processing_info, vocab_size)
         total_loss += base_loss
         
-        # Axon Pruning 손실 - Loss에서 직접 계산 (표준적 접근법)
-        axon_loss = torch.tensor(0.0, device=outputs.device)
-        if self.axon_reg_weight > 0.0:
-            axon_loss = self.axon_reg_weight * self._compute_axon_regularization_loss(processing_info, outputs.device)
-            total_loss += axon_loss
-        
         # 직교 정규화 손실 추가 (pruning_loss 계산 후에)
         orthogonal_loss = torch.tensor(0.0, device=outputs.device)
         if self.orthogonal_reg_weight > 0.0 and 'orthogonal_reg_loss' in processing_info:
@@ -100,7 +94,6 @@ class SCSLoss(nn.Module):
             try:
                 loss_components = {
                     'base_loss': base_loss.item() if hasattr(base_loss, 'item') else float(base_loss),
-                    'axon_reg_loss': axon_loss.item() if hasattr(axon_loss, 'item') else float(axon_loss),
                     'orthogonal_reg_loss': orthogonal_loss.item() if hasattr(orthogonal_loss, 'item') else float(orthogonal_loss),
                     'spike_reg_loss': spike_loss.item() if hasattr(spike_loss, 'item') else float(spike_loss),
                     'total_loss': total_loss.item() if hasattr(total_loss, 'item') else float(total_loss),
@@ -249,55 +242,6 @@ class SCSLoss(nn.Module):
             guide_weighted_loss = base_loss_unweighted * guide_mask
             
             return (guide_weighted_loss * valid_mask).sum() / valid_mask.sum().clamp(min=1.0)
-    def _compute_axon_regularization_loss(self, processing_info: Dict[str, Any], device: torch.device) -> torch.Tensor:
-        """
-        (노드 크기 불일치 해결 버전)
-        각 연결별로 통계량을 계산한 후, 그 결과들을 평균냅니다.
-        """
-        if 'axonal_parameters' not in processing_info:
-            return torch.tensor(0.0, device=device)
-        
-        axonal_params = processing_info['axonal_parameters']
-        
-        # --- 각 연결별 에너지 비율을 저장할 리스트 ---
-        all_energy_ratios = []
-
-        for conn_data in axonal_params:
-            W = conn_data.get('transforms')
-            G = conn_data.get('gates')
-            B = conn_data.get('biases')
-
-            if W is None or G is None or B is None:
-                continue
-
-            num_patches, target_size, source_size = W.shape
-            
-            # --- 1. "연결 단위"의 전역 평균 계산 ---
-            # 이 연결에 속한 모든 패치의 파라미터 평균을 냄
-            conn_W_mean = W.mean()
-            conn_G_mean = G.mean()
-            conn_B_mean = B.mean()
-
-            # --- 2. 이 연결에 대한 에너지 변환 비율 계산 ---
-            # "소스 뉴런 1개가 발화했을 때의 예측 출력 총합"
-            predicted_output_sum_per_input_spike = (conn_G_mean * (conn_W_mean * target_size) + 
-                                                    conn_B_mean * target_size)
-            
-            all_energy_ratios.append(predicted_output_sum_per_input_spike)
-
-        if not all_energy_ratios:
-            return torch.tensor(0.0, device=device)
-
-        # --- 3. 전역(Global) 정규화: 모든 "연결"의 에너지 비율을 동등하게 평균 ---
-        # all_energy_ratios는 각 연결의 스칼라 값들을 담은 리스트
-        global_energy_ratio = torch.stack(all_energy_ratios).mean()
-        
-        target_ratio = torch.tensor(self.axon_reg_target, device=device)
-
-        # 4. 목표값과 비교하여 MSE Loss 계산
-        loss = F.mse_loss(global_energy_ratio, target_ratio)
-        
-        return loss
 
     def _compute_spike_regularization_loss(self, processing_info: Dict[str, Any], device: torch.device) -> torch.Tensor:
         """

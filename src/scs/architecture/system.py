@@ -11,25 +11,22 @@ from typing import Dict, List, Optional, Tuple, Any
 from .node import SpikeNode, LocalConnectivity
 from .io import InputInterface, OutputInterface
 from .timing import TimingManager
-
 class AxonalConnections(nn.Module):
     """
-    패치 기반 축삭 연결 - 최종 설계 (Patch-wise Affine Transformation)
-    - 출력 = Transform * Gain(Gate) + Bias
-    - 'normal' 또는 'gaussian' (평균 0) 초기화 지원
-    - 학습을 통해 Bias에서 Gain으로 역할이 전환되도록 유도
+    패치 기반 축삭 연결 - 새로운 설계
+    - MLP 기반 가중치 계산: 소스패치 → d차원 → 타겟패치크기 → softmax
+    - 패치별 Affine 변환: gate * source_sum + bias (스칼라)
+    - 최종 출력: softmax_weights * affine_scalar
     """
     def __init__(
         self,
         connections: List[Dict[str, Any]],
         node_grid_sizes: Dict[str, tuple] = None,
-        gate_init_mean: float = 1.0,      # 초기 Gain
+        gate_init_mean: float = 2.0,
         gate_init_std: float = 0.01,
-        bias_init_mean: float = 0.0,      # 초기 Bias
+        bias_init_mean: float = 0.0,
         bias_init_std: float = 0.0,
-        transform_init_mode: str = 'gaussian',
-        transform_init_mean: float = 1.0, # 평균 1
-        transform_init_std: float = 0.1,
+        axon_temperature: float = 0.1,
         device: str = "cuda"
     ):
         super().__init__()
@@ -38,22 +35,18 @@ class AxonalConnections(nn.Module):
         self.node_grid_sizes = node_grid_sizes or {}
         self.device = device
 
-        # 초기화를 위한 파라미터
+        # 초기화 파라미터
         self.gate_init_mean = gate_init_mean
         self.gate_init_std = gate_init_std
         self.bias_init_mean = bias_init_mean
         self.bias_init_std = bias_init_std
-        self.transform_init_mode = transform_init_mode
-        self.transform_init_mean = transform_init_mean
-        self.transform_init_std = transform_init_std
-        
-        if self.transform_init_mode not in ['normal', 'gaussian']:
-            raise ValueError(f"transform_init_mode must be 'normal' or 'gaussian', but got {self.transform_init_mode}")
+        self.axon_temperature = axon_temperature
         
         # 학습 가능한 파라미터
-        self.patch_gates = nn.ParameterDict()  # Gain 역할
-        self.patch_biases = nn.ParameterDict() # Bias 역할
-        self.patch_transforms = nn.ParameterDict()
+        self.patch_gates = nn.ParameterDict()    # [num_patches] - 패치별 게이트
+        self.patch_biases = nn.ParameterDict()   # [num_patches] - 패치별 바이어스
+        self.patch_mlp1 = nn.ParameterDict()     # [num_patches, d, patch_size²] - MLP1 가중치
+        self.patch_mlp2 = nn.ParameterDict()     # [num_patches, target_patch_size, d] - MLP2 가중치
         
         self._create_patch_connections()
 
@@ -62,7 +55,7 @@ class AxonalConnections(nn.Module):
         return self.node_grid_sizes.get(node_name, (64, 64))
     
     def _create_patch_connections(self):
-        """'Bias-to-Gate' 전환을 유도하는 초기화 적용"""
+        """패치 연결 및 MLP 파라미터 초기화"""
         for conn in self.connections:
             source = conn["source"]
             target = conn["target"]
@@ -73,47 +66,46 @@ class AxonalConnections(nn.Module):
             source_h, source_w = self._get_grid_size(source)
             target_h, target_w = self._get_grid_size(target)
             
+            # 패치 개수 계산 (입력과 출력 동일)
             source_patches_h = source_h // patch_size
             source_patches_w = source_w // patch_size
             num_patches = source_patches_h * source_patches_w
             
+            # 출력 패치 크기 계산
             target_patch_h = target_h // source_patches_h
             target_patch_w = target_w // source_patches_w
+            
+            source_patch_size = patch_size * patch_size  # 입력 패치 크기
+            target_patch_size = target_patch_h * target_patch_w  # 출력 패치 크기
+            d = patch_size  # 중간 차원 (제곱근 압축)
 
-            source_patch_size = patch_size * patch_size
-            target_patch_size = target_patch_h * target_patch_w
-
-            # Gate (Gain) 초기화: 작게 시작
+            # 1. 패치별 Gate/Bias 초기화
             patch_gates = torch.randn(num_patches, device=self.device) * self.gate_init_std + self.gate_init_mean
             self.patch_gates[conn_key] = nn.Parameter(patch_gates)
 
-            # Bias 초기화: 크게 시작하여 "보조 바퀴" 역할
             patch_biases = torch.randn(num_patches, device=self.device) * self.bias_init_std + self.bias_init_mean
             self.patch_biases[conn_key] = nn.Parameter(patch_biases)
             
-            # --- Transform 초기화 방식 분기 (평균 0) ---
-            if self.transform_init_mode == 'normal':
-                inner_transforms = torch.randn(
-                    num_patches, target_patch_size, source_patch_size, device=self.device
-                ) * self.transform_init_std + self.transform_init_mean
+            # 2. MLP1 가중치 직교 초기화 [num_patches, d, source_patch_size]
+            mlp1_weights = torch.zeros(num_patches, d, source_patch_size, device=self.device)
+            for patch_idx in range(num_patches):
+                # 각 패치별로 직교 초기화
+                weight_matrix = torch.empty(d, source_patch_size)
+                nn.init.orthogonal_(weight_matrix)
+                mlp1_weights[patch_idx] = weight_matrix
+            self.patch_mlp1[conn_key] = nn.Parameter(mlp1_weights)
             
-            elif self.transform_init_mode == 'gaussian':
-                coords = torch.stack(torch.meshgrid(
-                    torch.arange(patch_size, device=self.device, dtype=torch.float32), 
-                    torch.arange(patch_size, device=self.device, dtype=torch.float32), 
-                    indexing='ij'
-                ), dim=-1).view(-1, 2)
-                dist_sq = ((coords.unsqueeze(1) - coords.unsqueeze(0))**2).sum(dim=-1)
-                std = patch_size * 0.5
-                V = 1.0
-                kernel = V * torch.exp(-dist_sq / (2 * std**2))
-                kernel = kernel - kernel.mean() + self.transform_init_mean
-                inner_transforms = kernel.unsqueeze(0).repeat(num_patches, 1, 1)
-
-            self.patch_transforms[conn_key] = nn.Parameter(inner_transforms)
+            # 3. MLP2 가중치 직교 초기화 [num_patches, target_patch_size, d]
+            mlp2_weights = torch.zeros(num_patches, target_patch_size, d, device=self.device)
+            for patch_idx in range(num_patches):
+                # 각 패치별로 직교 초기화
+                weight_matrix = torch.empty(target_patch_size, d)
+                nn.init.orthogonal_(weight_matrix)
+                mlp2_weights[patch_idx] = weight_matrix
+            self.patch_mlp2[conn_key] = nn.Parameter(mlp2_weights)
 
     def forward(self, node_spikes: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """Patch-wise Affine Transformation 최종 로직"""
+        """새로운 패치 기반 연결 처리"""
         axonal_inputs = {}
         
         for conn in self.connections:
@@ -134,39 +126,58 @@ class AxonalConnections(nn.Module):
             source_h, source_w = self._get_grid_size(source)
             target_h, target_w = self._get_grid_size(target)
             
-            target_patch_h = target_h // (source_h // patch_size)
-            target_patch_w = target_w // (source_w // patch_size)
+            # 패치 정보 계산
+            source_patches_h = source_h // patch_size
+            source_patches_w = source_w // patch_size
+            num_patches = source_patches_h * source_patches_w
+            target_patch_h = target_h // source_patches_h
+            target_patch_w = target_w // source_patches_w
             
-            # 1. unfold를 사용한 패치 추출
+            # 1. 소스 패치 추출 [B, num_patches, patch_size²]
             source_patches = F.unfold(
                 source_spikes.unsqueeze(1),
                 kernel_size=patch_size,
                 stride=patch_size
             ).transpose(1, 2)
             
-            # --- 최종 설계 핵심 로직 시작 ---
+            # 2. MLP1: patch_size² → d
+            # source_patches: [B, num_patches, patch_size²]
+            # mlp1_weights: [num_patches, d, patch_size²]
+            # → hidden: [B, num_patches, d]
+            hidden = torch.einsum('bps,pds->bpd', source_patches, self.patch_mlp1[conn_key])
             
-            # 2. Transform: 패턴 추출
-            X = torch.einsum('bps,pts->bpt', source_patches, self.patch_transforms[conn_key])
-
-            # 3. Affine 변환 (Gain * X + Bias)
-            G = self.patch_gates[conn_key].view(1, -1, 1)    # Gain
-            B = self.patch_biases[conn_key].view(1, -1, 1)   # Bias
-
-            input_strength = source_patches.sum(dim=-1, keepdim=True)
-            mask = (input_strength > 0).float()
+            # 3. MLP2: d → target_patch_size
+            # hidden: [B, num_patches, d]
+            # mlp2_weights: [num_patches, target_patch_size, d]
+            # → mlp_out: [B, num_patches, target_patch_size]
+            mlp_out = torch.einsum('bpd,ptd->bpt', hidden, self.patch_mlp2[conn_key])
             
-            final_patches = (X * G + B) * mask
+            # 4. Softmax로 가중치 계산
+            weights = F.softmax(mlp_out / self.axon_temperature, dim=-1)  # [B, num_patches, target_patch_size]
             
-            # 4. fold를 사용한 타겟 그리드 재구성
+            # 5. 패치별 Affine 변환 (스칼라)
+            # 각 패치의 소스 스파이크 합계 [B, num_patches]
+            patch_sums = source_patches.sum(dim=-1)  # [B, num_patches]
+            
+            # 패치별 affine 변환: gate * sum + bias
+            gates = self.patch_gates[conn_key].view(1, -1)  # [1, num_patches]
+            biases = self.patch_biases[conn_key].view(1, -1)  # [1, num_patches]
+            affine_scalars = gates * patch_sums + biases  # [B, num_patches]
+            
+            # 6. 최종 출력: weights * affine_scalars
+            # weights: [B, num_patches, target_patch_size]
+            # affine_scalars: [B, num_patches] → [B, num_patches, 1]
+            final_patches = weights * affine_scalars.unsqueeze(-1)  # [B, num_patches, target_patch_size]
+            
+            # 7. fold를 사용한 타겟 그리드 재구성
             target_output = F.fold(
-                final_patches.transpose(1, 2),
+                final_patches.transpose(1, 2),  # [B, target_patch_size, num_patches]
                 output_size=(target_h, target_w),
                 kernel_size=(target_patch_h, target_patch_w),
                 stride=(target_patch_h, target_patch_w)
-            ).squeeze(1)
+            ).squeeze(1)  # [B, target_h, target_w]
             
-            # 5. 다중 소스 신호 누적
+            # 8. 다중 소스 신호 누적
             if target not in axonal_inputs:
                 axonal_inputs[target] = target_output
             else:
@@ -314,7 +325,6 @@ class SCSSystem(nn.Module):
             "convergence_achieved": final_clk < self.max_clk - 1,
             "final_acc_activity": final_acc_spikes.mean().item() if final_acc_spikes is not None else 0.0,
             "generation_clks": torch.arange(max_generated, device=self.device),
-            "axonal_parameters": self._get_axonal_parameters(),
             "orthogonal_reg_loss": self._get_orthogonal_regularization(),
             "all_spikes": all_spikes_for_reg
         }
@@ -559,24 +569,6 @@ class SCSSystem(nn.Module):
             dtype=torch.long, 
             device=self.device
         )
-        
-    def _get_axonal_parameters(self) -> List[Dict[str, Any]]:
-        axonal_params = []
-        
-        # AxonalConnections의 원본 설정(connections)을 참조
-        for conn_key in self.axonal_connections.patch_gates.keys():
-            gates = self.axonal_connections.patch_gates[conn_key]
-            transforms = self.axonal_connections.patch_transforms[conn_key]
-            biases = self.axonal_connections.patch_biases[conn_key]
-            
-            axonal_params.append({
-                'connection_name': conn_key,
-                'gates': gates,
-                'transforms': transforms,
-                'biases': biases
-            })
-        
-        return axonal_params
     
     def _get_orthogonal_regularization(self) -> torch.Tensor:
         """

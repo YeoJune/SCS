@@ -85,9 +85,7 @@ class ModelBuilder:
                 gate_init_std=config.axonal_connections.gate_init_std,
                 bias_init_mean=config.axonal_connections.bias_init_mean,
                 bias_init_std=config.axonal_connections.bias_init_std,
-                transform_init_mode=config.axonal_connections.transform_init_mode,
-                transform_init_mean=config.axonal_connections.transform_init_mean,
-                transform_init_std=config.axonal_connections.transform_init_std,
+                axon_temperature=config.axonal_connections.axon_temperature,
                 device=device
             )
             

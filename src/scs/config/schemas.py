@@ -62,13 +62,11 @@ class AxonalConnectionConfig(BaseModel):
 
 class AxonalConnectionsConfig(BaseModel):
     """축삭 연결들 설정"""
-    gate_init_mean: float = Field(default=1.0)
-    gate_init_std: float = Field(default=0.03)
+    gate_init_mean: float = Field(default=2.0)
+    gate_init_std: float = Field(default=0.01)
     bias_init_mean: float = Field(default=0.0)
     bias_init_std: float = Field(default=0.01)
-    transform_init_mode: str = Field(default='gaussian')  # 'normal' 또는 'gaussian' 선택
-    transform_init_mean: float = Field(default=1.0)
-    transform_init_std: float = Field(default=0.03)
+    axon_temperature: float = Field(default=0.1)
     connections: List[AxonalConnectionConfig]
 
 

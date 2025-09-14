@@ -11,10 +11,11 @@ from typing import Dict, List, Optional, Tuple, Any
 from .node import SpikeNode, LocalConnectivity
 from .io import InputInterface, OutputInterface
 from .timing import TimingManager
+
 class AxonalConnections(nn.Module):
     """
-    패치 기반 축삭 연결 - 새로운 설계
-    - MLP 기반 가중치 계산: 소스패치 → d차원 → 타겟패치크기 → softmax
+    패치 기반 축삭 연결 - 최종 완성본
+    - MLP 기반 가중치 계산: 소스패치 → d차원 → 타겟패치크기 → LayerNorm → Softmax
     - 패치별 Affine 변환: gate * source_sum + bias (스칼라)
     - 최종 출력: softmax_weights * affine_scalar
     """
@@ -47,6 +48,7 @@ class AxonalConnections(nn.Module):
         self.patch_biases = nn.ParameterDict()   # [num_patches] - 패치별 바이어스
         self.patch_mlp1 = nn.ParameterDict()     # [num_patches, d, patch_size²] - MLP1 가중치
         self.patch_mlp2 = nn.ParameterDict()     # [num_patches, target_patch_size, d] - MLP2 가중치
+        self.patch_layernorms = nn.ModuleDict()  # LayerNorm 모듈들
         
         self._create_patch_connections()
 
@@ -104,6 +106,10 @@ class AxonalConnections(nn.Module):
                 mlp2_weights[patch_idx] = weight_matrix
             self.patch_mlp2[conn_key] = nn.Parameter(mlp2_weights)
 
+            # 4. LayerNorm 초기화
+            layernorm = nn.LayerNorm(target_patch_size, device=self.device)
+            self.patch_layernorms[conn_key] = layernorm
+
     def forward(self, node_spikes: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """새로운 패치 기반 연결 처리"""
         axonal_inputs = {}
@@ -152,10 +158,13 @@ class AxonalConnections(nn.Module):
             # → mlp_out: [B, num_patches, target_patch_size]
             mlp_out = torch.einsum('bpd,ptd->bpt', hidden, self.patch_mlp2[conn_key])
             
-            # 4. Softmax로 가중치 계산
-            weights = F.softmax(mlp_out / self.axon_temperature, dim=-1)  # [B, num_patches, target_patch_size]
+            # 4. LayerNorm 적용
+            mlp_out_normalized = self.patch_layernorms[conn_key](mlp_out)
             
-            # 5. 패치별 Affine 변환 (스칼라)
+            # 5. Softmax로 가중치 계산
+            weights = F.softmax(mlp_out_normalized / self.axon_temperature, dim=-1)  # [B, num_patches, target_patch_size]
+            
+            # 6. 패치별 Affine 변환 (스칼라)
             # 각 패치의 소스 스파이크 합계 [B, num_patches]
             patch_sums = source_patches.sum(dim=-1)  # [B, num_patches]
             
@@ -164,12 +173,12 @@ class AxonalConnections(nn.Module):
             biases = self.patch_biases[conn_key].view(1, -1)  # [1, num_patches]
             affine_scalars = gates * patch_sums + biases  # [B, num_patches]
             
-            # 6. 최종 출력: weights * affine_scalars
+            # 7. 최종 출력: weights * affine_scalars
             # weights: [B, num_patches, target_patch_size]
             # affine_scalars: [B, num_patches] → [B, num_patches, 1]
             final_patches = weights * affine_scalars.unsqueeze(-1)  # [B, num_patches, target_patch_size]
             
-            # 7. fold를 사용한 타겟 그리드 재구성
+            # 8. fold를 사용한 타겟 그리드 재구성
             target_output = F.fold(
                 final_patches.transpose(1, 2),  # [B, target_patch_size, num_patches]
                 output_size=(target_h, target_w),
@@ -177,7 +186,7 @@ class AxonalConnections(nn.Module):
                 stride=(target_patch_h, target_patch_w)
             ).squeeze(1)  # [B, target_h, target_w]
             
-            # 8. 다중 소스 신호 누적
+            # 9. 다중 소스 신호 누적
             if target not in axonal_inputs:
                 axonal_inputs[target] = target_output
             else:

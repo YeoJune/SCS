@@ -249,46 +249,53 @@ class SCSLoss(nn.Module):
             guide_weighted_loss = base_loss_unweighted * guide_mask
             
             return (guide_weighted_loss * valid_mask).sum() / valid_mask.sum().clamp(min=1.0)
-    
     def _compute_axon_regularization_loss(self, processing_info: Dict[str, Any], device: torch.device) -> torch.Tensor:
         """
-        "최대 자극" 시나리오를 가정하여 Axon 파라미터를 정규화합니다. (Global 방식)
+        (노드 크기 불일치 해결 버전)
+        각 연결별로 통계량을 계산한 후, 그 결과들을 평균냅니다.
         """
         if 'axonal_parameters' not in processing_info:
             return torch.tensor(0.0, device=device)
         
         axonal_params = processing_info['axonal_parameters']
-        all_predicted_means = []
+        
+        # --- 각 연결별 에너지 비율을 저장할 리스트 ---
+        all_energy_ratios = []
 
         for conn_data in axonal_params:
-            # AxonalConnections는 이제 gate, bias, transform을 모두 전달해야 함
             W = conn_data.get('transforms')
             G = conn_data.get('gates')
-            B = conn_data.get('biases') # Bias도 전달받아야 함
+            B = conn_data.get('biases')
 
             if W is None or G is None or B is None:
                 continue
 
             num_patches, target_size, source_size = W.shape
             
-            # 1. 최대 자극 시의 "평균" 출력 예측
-            #    (W의 평균 * 소스 뉴런 수) * G + B
-            mu_W_per_patch = W.mean(dim=[-2, -1]) # 각 패치의 평균 가중치 [num_patches]
-            
-            # predicted_output_mean shape: [num_patches]
-            predicted_output_mean = G * (source_size * mu_W_per_patch) + B
-            
-            all_predicted_means.append(predicted_output_mean)
+            # --- 1. "연결 단위"의 전역 평균 계산 ---
+            # 이 연결에 속한 모든 패치의 파라미터 평균을 냄
+            conn_W_mean = W.mean()
+            conn_G_mean = G.mean()
+            conn_B_mean = B.mean()
 
-        if not all_predicted_means:
+            # --- 2. 이 연결에 대한 에너지 변환 비율 계산 ---
+            # "소스 뉴런 1개가 발화했을 때의 예측 출력 총합"
+            predicted_output_sum_per_input_spike = (conn_G_mean * (conn_W_mean * target_size) + 
+                                                    conn_B_mean * target_size)
+            
+            all_energy_ratios.append(predicted_output_sum_per_input_spike)
+
+        if not all_energy_ratios:
             return torch.tensor(0.0, device=device)
 
-        # 2. Global 정규화: 모든 패치의 예측 평균들을 모아 전체 평균을 계산
-        global_predicted_mean = torch.cat(all_predicted_means).mean()
-        target_mean = torch.tensor(self.axon_reg_target, device=device)
+        # --- 3. 전역(Global) 정규화: 모든 "연결"의 에너지 비율을 동등하게 평균 ---
+        # all_energy_ratios는 각 연결의 스칼라 값들을 담은 리스트
+        global_energy_ratio = torch.stack(all_energy_ratios).mean()
         
-        # 3. 목표값과 비교하여 MSE Loss 계산
-        loss = F.mse_loss(global_predicted_mean, target_mean)
+        target_ratio = torch.tensor(self.axon_reg_target, device=device)
+
+        # 4. 목표값과 비교하여 MSE Loss 계산
+        loss = F.mse_loss(global_energy_ratio, target_ratio)
         
         return loss
 

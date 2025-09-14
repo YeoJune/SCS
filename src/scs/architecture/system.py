@@ -104,8 +104,9 @@ class AxonalConnections(nn.Module):
                     indexing='ij'
                 ), dim=-1).view(-1, 2)
                 dist_sq = ((coords.unsqueeze(1) - coords.unsqueeze(0))**2).sum(dim=-1)
-                std = patch_size * 1.0
-                kernel = torch.exp(-dist_sq / (2 * std**2))
+                std = patch_size * 0.5
+                V = 1.0
+                kernel = V * torch.exp(-dist_sq / (2 * std**2))
                 kernel = kernel - kernel.mean() + self.transform_init_mean
                 inner_transforms = kernel.unsqueeze(0).repeat(num_patches, 1, 1)
 

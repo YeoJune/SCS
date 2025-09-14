@@ -46,7 +46,7 @@ axonal_connections:
   bias_init_mean: 0.0
   bias_init_std: 0.0
   transform_init_mode: "gaussian"
-  transform_init_mean: 0.8
+  transform_init_mean: 0.4
   transform_init_std: 0.1
   connections:
     - source: "IN"
@@ -123,9 +123,9 @@ learning:
   orthogonal_reg_weight: 25.0
 
   axon_reg_target: 2.0
-  axon_reg_weight: 1e-3
+  axon_reg_weight: 2e-4
 
-  spike_reg_weight: 50
+  spike_reg_weight: 10
   target_spike_rate: 0.05
 
   # 점진적 커리큘럼 학습

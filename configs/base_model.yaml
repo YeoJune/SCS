@@ -41,11 +41,11 @@ connectivity:
 
 # === 축삭 연결 (IN→OUT 단일 연결) ===
 axonal_connections:
-  gate_init_mean: 4.0
+  gate_init_mean: 1.0
   gate_init_std: 0.0
-  bias_init_mean: 0.0
+  bias_init_mean: 4.0
   bias_init_std: 0.0
-  axon_temperature: 0.5
+  axon_temperature: 1.0
   connections:
     - source: "IN"
       target: "OUT"

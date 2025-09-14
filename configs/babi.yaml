@@ -16,15 +16,11 @@ experiment:
 system_roles:
   input_node: "IN"
   output_node: "OUT"
-  acc_node: "ACC"
+  acc_node: "OUT"
 
 # === 뇌 영역 구성 (완전 오버라이드) ===
 brain_regions:
   IN:
-    grid_size: [64, 64]
-    decay_rate: 0.85
-    distance_tau: 1.0
-  ACC:
     grid_size: [64, 64]
     decay_rate: 0.85
     distance_tau: 1.0

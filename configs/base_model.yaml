@@ -5,7 +5,7 @@
 system_roles:
   input_node: "IN"
   output_node: "OUT"
-  acc_node: "ACC"
+  acc_node: "OUT"
 
 # === 뇌 영역 구성 (단순한 IN→OUT 구조) ===
 brain_regions:
@@ -14,10 +14,6 @@ brain_regions:
     decay_rate: 0.9
     distance_tau: 1.0
   OUT:
-    grid_size: [32, 32]
-    decay_rate: 0.9
-    distance_tau: 1.0
-  ACC:
     grid_size: [32, 32]
     decay_rate: 0.9
     distance_tau: 1.0
@@ -123,7 +119,7 @@ learning:
   axon_reg_target: 2.0
   axon_reg_weight: 2e-4
 
-  spike_reg_weight: 500
+  spike_reg_weight: 50
   target_spike_rate: 0.05
 
   # 점진적 커리큘럼 학습

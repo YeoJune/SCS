@@ -16,7 +16,7 @@ experiment:
 system_roles:
   input_node: "IN"
   output_node: "OUT"
-  acc_node: "ACC"
+  acc_node: "OUT"
 
 # === 뇌 영역 구성 (완전 오버라이드) ===
 brain_regions:
@@ -29,10 +29,6 @@ brain_regions:
     decay_rate: 0.85
     distance_tau: 1.0
   PASS:
-    grid_size: [64, 64]
-    decay_rate: 0.85
-    distance_tau: 1.0
-  OUT:
     grid_size: [64, 64]
     decay_rate: 0.85
     distance_tau: 1.0
@@ -59,7 +55,7 @@ task:
 
 # === 학습 설정 오버라이드 ===
 learning:
-  epochs: 21
+  epochs: 31
   learning_rate: 5e-4
   eta_min: 1e-4
   max_clk_training: 138

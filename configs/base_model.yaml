@@ -119,7 +119,7 @@ learning:
   axon_reg_target: 2.0
   axon_reg_weight: 2e-4
 
-  spike_reg_weight: 500
+  spike_reg_weight: 50
   target_spike_rate: 0.05
 
   # 점진적 커리큘럼 학습

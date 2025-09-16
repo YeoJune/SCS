@@ -190,3 +190,13 @@ logging:
       images: 50 # N 배치마다 이미지 로깅
       axonal_heatmaps: 50 # N 배치마다 축삭 연결 히트맵 로깅
       weight_heatmaps: 50 # N 배치마다 가중치 히트맵 로깅
+
+checkpoint:
+  save_dir: "./checkpoints"
+  save_best_only: false
+  save_last: true
+  monitor: "val_loss"
+  mode: "min"
+  compress: false
+  max_checkpoints: 10
+  pretrained_path: null # 사전 학습된 체크포인트 경로

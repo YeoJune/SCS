@@ -206,6 +206,7 @@ class CheckpointConfig(BaseModel):
     mode: str = Field(default="min")
     compress: bool = Field(default=False)
     max_checkpoints: Optional[int] = Field(default=5)
+    pretrained_path: Optional[str] = Field(default=None, description="사전 학습된 체크포인트 경로") 
 
 class TensorBoardConfig(BaseModel):
     """TensorBoard 설정"""

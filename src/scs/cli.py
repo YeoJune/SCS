@@ -227,9 +227,15 @@ def train_mode(args: argparse.Namespace):
         logger.info("🧠 SCS 모델 생성 중...")
         app_config.io_system.input_interface.vocab_size = tokenizer.vocab_size
         app_config.io_system.output_interface.vocab_size = tokenizer.vocab_size
-
-        model = ModelBuilder.build_model(app_config, device=device)
         
+        model = ModelBuilder.build_model(app_config, device=device)
+
+        # 이 4줄 추가
+        if app_config.checkpoint.pretrained_path:
+            checkpoint = torch.load(app_config.checkpoint.pretrained_path, map_location=device, weights_only=False)
+            model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+            logger.info(f"Pretrained weights loaded from {app_config.checkpoint.pretrained_path}")
+
         total_params = sum(p.numel() for p in model.parameters())
         logger.info(f"✅ 모델 생성 완료")
         logger.info(f"   - 총 매개변수: {total_params:,}")

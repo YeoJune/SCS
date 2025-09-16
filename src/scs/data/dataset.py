@@ -777,10 +777,9 @@ def create_dataset(
     
     # Pre-training 데이터셋들
     if dataset_name.startswith("wikitext"):
-        version = dataset_name.replace("wikitext-", "")
         base_dataset = WikiTextDataset(
             tokenizer=tokenizer,
-            version=version,
+            version=dataset_name,
             split=split,
             max_length=max_length,
             num_samples=num_samples,

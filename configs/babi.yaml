@@ -85,7 +85,7 @@ timing_manager:
 
 # === 데이터 로딩 오버라이드 ===
 data_loading:
-  batch_size: 32
+  batch_size: 16
   tokenizer:
     name: "t5-small"
     max_length: 128

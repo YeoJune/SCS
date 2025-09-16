@@ -50,7 +50,7 @@ axonal_connections:
 # === 작업 설정 오버라이드 ===
 task:
   name: "wikitext_mlm_pretraining"
-  dataset_name: "wikitext-2-v1" # Pre-training 데이터셋
+  dataset_name: "wikitext-2-raw-v1" # Pre-training 데이터셋
   task_type: "pretraining"
   task_id: 1
   learning_style: "mlm" # MLM 학습 스타일
@@ -69,14 +69,14 @@ task:
 
 # === 학습 설정 오버라이드 ===
 learning:
-  epochs: 7
+  epochs: 5
   learning_rate: 1e-3
   eta_min: 5e-4
   max_clk_training: 138
   optimizer: "adamw"
   weight_decay: 1e-4
-  eval_every: 3
-  save_every: 3
+  eval_every: 1
+  save_every: 1
   early_stopping_patience: 100
 
   # 점진적 커리큘럼 학습

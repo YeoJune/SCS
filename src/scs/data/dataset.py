@@ -227,15 +227,51 @@ class WikiTextDataset(PretrainingDataset):
         num_samples: int = -1,
         stride: int = 256
     ):
-        dataset_name = f"wikitext-{version}"
+        self.version = version
         super().__init__(
-            dataset_name=dataset_name,
+            dataset_name="Salesforce/wikitext",
             tokenizer=tokenizer,
             split=split,
             max_length=max_length,
             num_samples=num_samples,
             stride=stride
         )
+    
+    def _load_and_process_data(self) -> List[Dict[str, Any]]:
+        """Pre-training 데이터 로딩 및 청킹"""
+        try:
+            raw_dataset = load_dataset(self.dataset_name, self.version, split=self.split)
+            
+            if self.num_samples > 0 and len(raw_dataset) > self.num_samples:
+                raw_dataset = raw_dataset.select(range(self.num_samples))
+                logger.info(f"Dataset truncated to {self.num_samples} samples")
+            
+            processed_data = []
+            total_chunks = 0
+            
+            for idx, item in enumerate(raw_dataset):
+                try:
+                    text = self._extract_text(item)
+                    if not text or len(text.strip()) < 50:
+                        continue
+                    
+                    chunks = self._chunk_text(text, idx)
+                    processed_data.extend(chunks)
+                    total_chunks += len(chunks)
+                    
+                    if idx % 1000 == 0:
+                        logger.info(f"Processed {idx} documents, {total_chunks} chunks")
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to process item {idx}: {e}")
+                    continue
+            
+            logger.info(f"Total chunks created: {len(processed_data)}")
+            return processed_data
+            
+        except Exception as e:
+            logger.error(f"Failed to load pre-training dataset {self.dataset_name}: {e}")
+            return []
 
 
 class OpenWebTextDataset(PretrainingDataset):

@@ -24,19 +24,31 @@ from .evaluation import (
     SCSVisualizer, analyze_io_pipeline
 )
 
-# Data 모듈
+# Data 모듈 (업데이트된 구조)
 from .data import (
-    SCSTokenizer, BaseDataset, LogiQADataset, bAbIDataset, MultiDataset, 
-    create_dataset, DataProcessor, SCSDataLoader, create_dataloader
+    # 토크나이저
+    SCSTokenizer,
+    
+    # 데이터셋 클래스들
+    BaseDataset, PretrainingDataset, WikiTextDataset, OpenWebTextDataset,
+    LogiQADataset, bAbIDataset, SQuADDataset, GLUEDataset, MLMDataset,
+    create_dataset,
+    
+    # 프로세서
+    DataProcessor,
+    
+    # 데이터로더들
+    SCSDataLoader, create_dataloader,
+    create_pretraining_dataloader, create_mlm_dataloader, create_glue_dataloader
 )
 
-# Config 모듈
+# Config 모듈 (MLM 설정 추가)
 from .config import (
     AppConfig, IOSystemConfig, InputInterfaceConfig, OutputInterfaceConfig,
     BrainRegionConfig, SystemRolesConfig, TaskConfig, DataConfig, DataLoadingConfig,
     DataLoaderConfig, TokenizerConfig, TimingManagerConfig, LearningConfig, GradualUnfreezingConfig,
     SpikeDynamicsConfig, ConnectivityConfig, AxonalConnectionsConfig, EvaluationConfig,
-    CheckpointConfig, LoggingConfig,
+    CheckpointConfig, LoggingConfig, MLMConfig,  # MLMConfig 추가
     load_and_validate_config, ModelBuilder
 )
 
@@ -67,16 +79,20 @@ __all__ = [
     "AdaptiveLearningRateScheduler", "OptimizerFactory",
     "SCSVisualizer", "analyze_io_pipeline",
     
-    # 데이터 처리
-    "SCSTokenizer", "BaseDataset", "LogiQADataset", "bAbIDataset", "MultiDataset", 
-    "create_dataset", "DataProcessor", "SCSDataLoader", "create_dataloader",
+    # 데이터 처리 (업데이트됨)
+    "SCSTokenizer",
+    "BaseDataset", "PretrainingDataset", "WikiTextDataset", "OpenWebTextDataset",
+    "LogiQADataset", "bAbIDataset", "SQuADDataset", "GLUEDataset", "MLMDataset",
+    "create_dataset", "DataProcessor",
+    "SCSDataLoader", "create_dataloader",
+    "create_pretraining_dataloader", "create_mlm_dataloader", "create_glue_dataloader",
     
-    # 설정 관리
+    # 설정 관리 (MLM 설정 추가)
     "AppConfig", "IOSystemConfig", "InputInterfaceConfig", "OutputInterfaceConfig",
     "BrainRegionConfig", "SystemRolesConfig", "TaskConfig", "DataConfig", "DataLoadingConfig",
     "DataLoaderConfig", "TokenizerConfig", "TimingManagerConfig", "LearningConfig", "GradualUnfreezingConfig",
     "SpikeDynamicsConfig", "ConnectivityConfig", "AxonalConnectionsConfig", "EvaluationConfig",
-    "CheckpointConfig", "LoggingConfig",
+    "CheckpointConfig", "LoggingConfig", "MLMConfig",
     "load_and_validate_config", "ModelBuilder",
     
     # 유틸리티

@@ -1,0 +1,114 @@
+# configs/wikitext2.yaml
+# bAbI 추론 태스크 전용 설정
+
+# === 기본 설정 상속 ===
+defaults:
+  - base_model
+
+# === 실험 메타정보 ===
+experiment:
+  name: "wikitext2"
+  description: "WikiText-2 언어 모델링 태스크"
+  phase: 1
+  expected_runtime: "30-60분"
+
+# === 시스템 역할 (base와 동일하므로 생략 가능) ===
+system_roles:
+  input_node: "IN"
+  output_node: "OUT"
+  acc_node: "OUT"
+
+# === 뇌 영역 구성 (완전 오버라이드) ===
+brain_regions:
+  IN:
+    grid_size: [64, 64]
+    decay_rate: 0.85
+    distance_tau: 1.0
+  OUT:
+    grid_size: [64, 64]
+    decay_rate: 0.85
+    distance_tau: 1.0
+  PASS:
+    grid_size: [64, 64]
+    decay_rate: 0.85
+    distance_tau: 1.0
+
+# === 축삭 연결 (완전 오버라이드) ===
+axonal_connections:
+  connections:
+    - source: "IN"
+      target: "PASS"
+      patch_size: 8
+      patch_weight_scale: 1.0
+      inner_weight_scale: 1.2
+    - source: "PASS"
+      target: "OUT"
+      patch_size: 8
+      patch_weight_scale: 1.0
+      inner_weight_scale: 1.2
+
+# === 작업 설정 오버라이드 ===
+task:
+  name: "wikitext_mlm_pretraining"
+  dataset_name: "wikitext-2-v1" # Pre-training 데이터셋
+  task_type: "pretraining"
+  task_id: 1
+  learning_style: "mlm" # MLM 학습 스타일
+  max_length: 512 # Pre-training용 긴 컨텍스트
+  stride: 256 # 50% overlap sliding window
+
+  # MLM 설정
+  mlm_config:
+    mask_probability: 0.15 # 표준 BERT 마스킹 비율
+    mask_token_id: null # 자동 감지
+    random_token_prob: 0.1 # 10% 랜덤 토큰
+    unchanged_prob: 0.1 # 10% 원본 유지
+    min_masks: 2 # 최소 2개 토큰 마스킹
+    max_masks_ratio: 0.4 # 최대 40% 마스킹
+    special_tokens: null # 자동 설정
+
+# === 학습 설정 오버라이드 ===
+learning:
+  epochs: 7
+  learning_rate: 1e-3
+  eta_min: 5e-4
+  max_clk_training: 138
+  optimizer: "adamw"
+  weight_decay: 1e-4
+  eval_every: 3
+  save_every: 3
+  early_stopping_patience: 100
+
+  # 점진적 커리큘럼 학습
+  use_curriculum_learning: false
+  curriculum_schedule:
+    0: 50
+    50: 128
+
+timing_manager:
+  train_fixed_ref: "start"
+  train_fixed_offset: 7
+  evaluate_fixed_ref: "start"
+  evaluate_fixed_offset: 7
+  sync_ema_alpha: 0.1 # EMA 필터링 강도
+  sync_threshold_start: 0.3 # 시작 임계값
+  sync_threshold_end: 0.1 # 종료 임계값
+  min_processing_clk: 0 # 최소 처리 시간
+  max_processing_clk: 128 # 최대 처리 시간
+  min_output_length: 5 # 최소 출력 길이
+
+# === 데이터 로딩 오버라이드 ===
+data_loading:
+  batch_size: 8
+  tokenizer:
+    name: "t5-small"
+    max_length: 128
+
+data:
+  train_samples: 50000
+  val_samples: 5000
+  test_samples: 5000
+
+# === 평가 설정 ===
+evaluation:
+  save_examples: 20

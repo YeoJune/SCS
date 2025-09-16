@@ -1,6 +1,6 @@
-# src/scs/data/bert_dataset.py
+# src/scs/data/mlm_dataset.py
 """
-BERT 스타일 마스킹 데이터셋 - 표준 BERT 방식 구현
+MLM(Masked Language Modeling) 스타일 마스킹 데이터셋 - 표준 BERT 방식 구현
 """
 
 import torch
@@ -12,9 +12,9 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class BERTStyleDataset(Dataset):
+class MLMDataset(Dataset):
     """
-    표준 BERT 방식으로 토큰 레벨 마스킹을 수행하는 데이터셋
+    표준 BERT/MLM 방식으로 토큰 레벨 마스킹을 수행하는 데이터셋
     
     BERT 원본 논문 방식:
     1. 이미 토큰화된 시퀀스에서 15% 토큰 선택
@@ -73,7 +73,7 @@ class BERTStyleDataset(Dataset):
         # 랜덤 토큰 선택을 위한 안전한 범위
         self.safe_token_range = (100, min(self.vocab_size - 100, 31000))  # 특수 토큰 피하기
         
-        logger.info(f"BERTStyleDataset 초기화 완료")
+        logger.info(f"MLMDataset 초기화 완료")
         logger.info(f"  - 베이스 샘플 수: {len(self.base_dataset)}")
         logger.info(f"  - 어휘 크기: {self.vocab_size}")
         logger.info(f"  - [MASK] 토큰 ID: {self.mask_token_id}")
@@ -124,14 +124,14 @@ class BERTStyleDataset(Dataset):
     
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         """
-        표준 BERT 방식으로 토큰 마스킹 수행
+        표준 MLM 방식으로 토큰 마스킹 수행
         
         Returns:
             {
                 'input_tokens': List[int],     # 마스크된 입력 토큰
                 'target_tokens': List[int],    # 원본 입력 토큰 (복원 목표)
                 'input_text': str,             # 원본 입력 텍스트
-                'target_text': str,            # 원본 입력 텍스트 (BERT는 입력=타겟)
+                'target_text': str,            # 원본 입력 텍스트 (MLM은 입력=타겟)
                 'metadata': Dict
             }
         """
@@ -151,33 +151,33 @@ class BERTStyleDataset(Dataset):
             if not input_tokens or len(input_tokens) < 2:
                 return self._create_fallback_item(original_item, idx)
             
-            # BERT 스타일 마스킹 수행
-            masked_tokens, mask_info = self._apply_bert_masking(input_tokens)
+            # MLM 스타일 마스킹 수행
+            masked_tokens, mask_info = self._apply_mlm_masking(input_tokens)
             
             # 결과 아이템 생성
-            bert_item = {
+            mlm_item = {
                 'input_tokens': masked_tokens,                    # 마스크된 토큰
                 'target_tokens': input_tokens,                    # 원본 토큰 (복원 목표)
                 'input_text': original_item.get('input_text', ''),
-                'target_text': original_item.get('input_text', ''),  # BERT: 입력=타겟
+                'target_text': original_item.get('input_text', ''),  # MLM: 입력=타겟
                 'metadata': {
                     **original_item.get('metadata', {}),
-                    'bert_style': True,
+                    'mlm_style': True,
                     'mask_info': mask_info,
                     'original_target_text': original_item.get('target_text', ''),  # 원래 타겟 보존
                     'masking_applied': True
                 }
             }
             
-            return bert_item
+            return mlm_item
             
         except Exception as e:
-            logger.warning(f"BERT 마스킹 실패 (샘플 {idx}): {e}")
+            logger.warning(f"MLM 마스킹 실패 (샘플 {idx}): {e}")
             return self._create_fallback_item(original_item if 'original_item' in locals() else {}, idx)
     
-    def _apply_bert_masking(self, tokens: List[int]) -> Tuple[List[int], Dict[str, Any]]:
+    def _apply_mlm_masking(self, tokens: List[int]) -> Tuple[List[int], Dict[str, Any]]:
         """
-        표준 BERT 마스킹 알고리즘 구현
+        표준 MLM 마스킹 알고리즘 구현
         
         Args:
             tokens: 원본 토큰 ID 리스트
@@ -214,7 +214,7 @@ class BERTStyleDataset(Dataset):
         # 랜덤하게 마스킹 위치 선택
         mask_positions = random.sample(maskable_positions, num_to_mask)
         
-        # 3단계: 선택된 위치에 BERT 마스킹 규칙 적용
+        # 3단계: 선택된 위치에 MLM 마스킹 규칙 적용
         masked_tokens = tokens.copy()
         mask_details = []
         
@@ -263,7 +263,7 @@ class BERTStyleDataset(Dataset):
             'target_text': original_item.get('input_text', 'fallback'),
             'metadata': {
                 **original_item.get('metadata', {}),
-                'bert_style': True,
+                'mlm_style': True,
                 'is_fallback': True,
                 'fallback_reason': 'masking_error',
                 'original_index': idx

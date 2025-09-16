@@ -70,7 +70,8 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
 
 
 class SCSDataLoader:
-    """SCS용 배치 데이터 로더 (PyTorch DataLoader 래퍼) - BERT 스타일 및 GLUE 지원"""
+    """SCS용 배치 데이터 로더 (PyTorch DataLoader 래퍼) - MLM 및 Pre-training 지원"""
+    
     def __init__(
         self,
         dataset_name: str,
@@ -84,17 +85,40 @@ class SCSDataLoader:
         num_samples: int = -1,
         task_id: int = 1,
         learning_style: str = "generative",
-        bert_config: Optional[Dict[str, Any]] = None
+        mlm_config: Optional[Dict[str, Any]] = None,
+        stride: int = 64
     ):
+        """
+        Args:
+            dataset_name: 데이터셋 이름
+            split: 데이터 스플릿
+            batch_size: 배치 크기
+            shuffle: 셔플 여부
+            max_length: 최대 시퀀스 길이
+            num_workers: 워커 수
+            processor: 데이터 프로세서
+            tokenizer: 토크나이저
+            num_samples: 사용할 샘플 수
+            task_id: bAbI 태스크 ID
+            learning_style: 학습 스타일 ("generative" 또는 "mlm")
+            mlm_config: MLM 설정
+            stride: Pre-training용 sliding window stride
+        """
+        self.dataset_name = dataset_name
+        self.split = split
+        self.learning_style = learning_style
+        
         # 토크나이저 생성
         if tokenizer is None:
             tokenizer = SCSTokenizer()
+        self.tokenizer = tokenizer
         
         # 데이터 프로세서 생성
         if processor is None:
             processor = DataProcessor()
+        self.processor = processor
         
-        # 데이터셋 생성 (task_name 제거)
+        # 데이터셋 생성
         self.dataset = processor.create_dataset(
             dataset_name=dataset_name,
             split=split,
@@ -103,7 +127,8 @@ class SCSDataLoader:
             num_samples=num_samples,
             task_id=task_id,
             learning_style=learning_style,
-            bert_config=bert_config
+            mlm_config=mlm_config,
+            stride=stride
         )
         
         # PyTorch DataLoader 생성
@@ -126,6 +151,78 @@ class SCSDataLoader:
     @property
     def batch_size(self) -> int:
         return self.dataloader.batch_size
+    
+    def get_dataset_info(self) -> Dict[str, Any]:
+        """데이터셋 정보 반환"""
+        info = {
+            'dataset_name': self.dataset_name,
+            'split': self.split,
+            'learning_style': self.learning_style,
+            'num_samples': len(self.dataset),
+            'num_batches': len(self),
+            'batch_size': self.batch_size,
+            'vocab_size': getattr(self.tokenizer, 'vocab_size', 'unknown')
+        }
+        
+        # MLM 통계 추가
+        if self.learning_style == "mlm" and hasattr(self.dataset, 'get_masking_statistics'):
+            try:
+                mlm_stats = self.dataset.get_masking_statistics(num_samples=min(50, len(self.dataset)))
+                info['mlm_statistics'] = mlm_stats
+            except Exception as e:
+                info['mlm_statistics'] = f"Error: {e}"
+        
+        # Pre-training 데이터셋 정보 추가
+        if self.processor.is_pretraining_dataset(self.dataset_name):
+            info['dataset_type'] = 'pretraining'
+            info['is_chunked'] = True
+        elif self.processor.is_glue_task(self.dataset_name):
+            info['dataset_type'] = 'glue_task'
+        else:
+            info['dataset_type'] = 'task_specific'
+        
+        return info
+    
+    def preview_batch(self, num_samples: int = 3) -> Dict[str, Any]:
+        """배치 미리보기"""
+        try:
+            batch = next(iter(self))
+            
+            preview = {
+                'batch_shape': {
+                    'input_tokens': list(batch['input_tokens'].shape),
+                    'target_tokens': list(batch['target_tokens'].shape),
+                    'attention_mask': list(batch['attention_mask'].shape)
+                },
+                'samples': []
+            }
+            
+            num_samples = min(num_samples, len(batch['metadata']))
+            
+            for i in range(num_samples):
+                sample_preview = {
+                    'index': i,
+                    'input_tokens_length': int(batch['attention_mask'][i].sum()),
+                    'metadata': batch['metadata'][i]
+                }
+                
+                # 토큰을 텍스트로 디코딩 (처음 50개만)
+                input_tokens = batch['input_tokens'][i][:50].tolist()
+                target_tokens = batch['target_tokens'][i][:50].tolist()
+                
+                try:
+                    sample_preview['input_text_preview'] = self.tokenizer.decode(input_tokens)[:100] + "..."
+                    sample_preview['target_text_preview'] = self.tokenizer.decode(target_tokens)[:100] + "..."
+                except:
+                    sample_preview['input_text_preview'] = "decode_error"
+                    sample_preview['target_text_preview'] = "decode_error"
+                
+                preview['samples'].append(sample_preview)
+            
+            return preview
+            
+        except Exception as e:
+            return {'error': f"Preview failed: {e}"}
 
 
 def create_dataloader(
@@ -140,9 +237,10 @@ def create_dataloader(
     num_samples: int = -1,
     task_id: int = 1,
     learning_style: str = "generative",
-    bert_config: Optional[Dict[str, Any]] = None
+    mlm_config: Optional[Dict[str, Any]] = None,
+    stride: int = 64
 ) -> SCSDataLoader:
-    """SCS 배치 데이터 로더 생성 - BERT 스타일 및 GLUE 지원"""
+    """SCS 배치 데이터 로더 생성 - MLM 및 Pre-training 지원"""
     
     if shuffle is None:
         shuffle = (split == "train")
@@ -159,5 +257,85 @@ def create_dataloader(
         num_samples=num_samples,
         task_id=task_id,
         learning_style=learning_style,
-        bert_config=bert_config
+        mlm_config=mlm_config,
+        stride=stride
+    )
+
+
+# 편의 함수들
+def create_pretraining_dataloader(
+    dataset_name: str,
+    split: str = "train",
+    batch_size: int = 4,
+    max_length: int = 512,
+    stride: int = 256,
+    learning_style: str = "generative",
+    num_samples: int = -1,
+    mlm_config: Optional[Dict[str, Any]] = None
+) -> SCSDataLoader:
+    """Pre-training용 데이터로더 생성"""
+    
+    return create_dataloader(
+        dataset_name=dataset_name,
+        split=split,
+        batch_size=batch_size,
+        max_length=max_length,
+        stride=stride,
+        learning_style=learning_style,
+        num_samples=num_samples,
+        mlm_config=mlm_config,
+        shuffle=True,
+        num_workers=2
+    )
+
+
+def create_glue_dataloader(
+    task_name: str,
+    split: str = "train",
+    batch_size: int = 16,
+    max_length: int = 128,
+    num_samples: int = -1
+) -> SCSDataLoader:
+    """GLUE 태스크용 데이터로더 생성"""
+    
+    return create_dataloader(
+        dataset_name=task_name,
+        split=split,
+        batch_size=batch_size,
+        max_length=max_length,
+        num_samples=num_samples,
+        learning_style="generative",
+        shuffle=(split == "train")
+    )
+
+
+def create_mlm_dataloader(
+    dataset_name: str,
+    split: str = "train",
+    batch_size: int = 8,
+    max_length: int = 512,
+    mask_probability: float = 0.15,
+    num_samples: int = -1,
+    stride: int = 256
+) -> SCSDataLoader:
+    """MLM용 데이터로더 생성"""
+    
+    mlm_config = {
+        'mask_probability': mask_probability,
+        'random_token_prob': 0.1,
+        'unchanged_prob': 0.1,
+        'min_masks': 1,
+        'max_masks_ratio': 0.5
+    }
+    
+    return create_dataloader(
+        dataset_name=dataset_name,
+        split=split,
+        batch_size=batch_size,
+        max_length=max_length,
+        learning_style="mlm",
+        mlm_config=mlm_config,
+        num_samples=num_samples,
+        stride=stride,
+        shuffle=True
     )

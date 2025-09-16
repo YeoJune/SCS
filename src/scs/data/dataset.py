@@ -10,7 +10,7 @@ from datasets import load_dataset
 import logging
 
 from .tokenizer import SCSTokenizer
-from .bert_dataset import BERTStyleDataset
+from .mlm_dataset import MLMDataset
 
 logger = logging.getLogger(__name__)
 
@@ -23,34 +23,31 @@ class BaseDataset(Dataset):
         tokenizer: SCSTokenizer,
         split: str = "train",
         max_length: int = 256,
-        num_samples: int = -1,  # max_samples → num_samples로 변경, -1은 전체
+        num_samples: int = -1,
         guide_sep_token: str = "<extra_id_42>"
     ):
         self.dataset_name = dataset_name
         self.tokenizer = tokenizer
         self.split = split
         self.max_length = max_length
-        self.num_samples = num_samples  # 변경
+        self.num_samples = num_samples
         self.guide_sep_token = guide_sep_token
 
-        logger.info(f"📦 Loading {dataset_name} ({split})...")
+        logger.info(f"Loading {dataset_name} ({split})...")
         self.data = self._load_and_process_data()
-        logger.info(f"✅ Loaded {len(self.data)} examples")
+        logger.info(f"Loaded {len(self.data)} examples")
         
     def _load_and_process_data(self) -> List[Dict[str, Any]]:
         """데이터 로딩 및 전처리"""
         try:
-            # 데이터셋 로딩
             raw_dataset = load_dataset(self.dataset_name, split=self.split)
             
-            # 샘플 개수 제한 (표준적인 방식)
             if self.num_samples > 0 and len(raw_dataset) > self.num_samples:
                 raw_dataset = raw_dataset.select(range(self.num_samples))
                 logger.info(f"Dataset truncated to {self.num_samples} samples")
             else:
                 logger.info(f"Using full dataset: {len(raw_dataset)} samples")
             
-            # 데이터 처리
             processed_data = []
             for idx, item in enumerate(raw_dataset):
                 try:
@@ -96,14 +93,170 @@ class BaseDataset(Dataset):
             return self._tokenize_item(self.data[idx])
         except Exception as e:
             logger.warning(f"Error in __getitem__[{idx}]: {e}")
-            # 폴백 아이템 반환
             return {
-                'input_tokens': [0] * 10,  # 기본 토큰
+                'input_tokens': [0] * 10,
                 'target_tokens': [0] * 5,
                 'input_text': "error",
                 'target_text': "error",
                 'metadata': {'index': idx, 'error': True}
             }
+
+
+class PretrainingDataset(BaseDataset):
+    """Pre-training용 데이터셋 (wikitext-2, openwebtext 등)"""
+    
+    def __init__(
+        self, 
+        dataset_name: str,
+        tokenizer: SCSTokenizer, 
+        split: str = "train",
+        max_length: int = 512,
+        num_samples: int = -1,
+        stride: int = 256
+    ):
+        self.stride = stride
+        super().__init__(
+            dataset_name=dataset_name,
+            tokenizer=tokenizer,
+            split=split,
+            max_length=max_length,
+            num_samples=num_samples
+        )
+    
+    def _load_and_process_data(self) -> List[Dict[str, Any]]:
+        """Pre-training 데이터 로딩 및 청킹"""
+        try:
+            raw_dataset = load_dataset(self.dataset_name, split=self.split)
+            
+            if self.num_samples > 0 and len(raw_dataset) > self.num_samples:
+                raw_dataset = raw_dataset.select(range(self.num_samples))
+                logger.info(f"Dataset truncated to {self.num_samples} samples")
+            
+            processed_data = []
+            total_chunks = 0
+            
+            for idx, item in enumerate(raw_dataset):
+                try:
+                    text = self._extract_text(item)
+                    if not text or len(text.strip()) < 50:
+                        continue
+                    
+                    chunks = self._chunk_text(text, idx)
+                    processed_data.extend(chunks)
+                    total_chunks += len(chunks)
+                    
+                    if idx % 1000 == 0:
+                        logger.info(f"Processed {idx} documents, {total_chunks} chunks")
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to process item {idx}: {e}")
+                    continue
+            
+            logger.info(f"Total chunks created: {len(processed_data)}")
+            return processed_data
+            
+        except Exception as e:
+            logger.error(f"Failed to load pre-training dataset {self.dataset_name}: {e}")
+            return []
+    
+    def _extract_text(self, item: Dict[str, Any]) -> str:
+        """아이템에서 텍스트 추출"""
+        text_fields = ['text', 'content', 'article', 'document', 'passage']
+        
+        for field in text_fields:
+            if field in item and item[field]:
+                return str(item[field]).strip()
+        
+        return str(item).strip()
+    
+    def _chunk_text(self, text: str, doc_idx: int) -> List[Dict[str, Any]]:
+        """텍스트를 max_length 크기로 청킹 (sliding window)"""
+        chunks = []
+        
+        tokens = self.tokenizer.tokenize(text, max_length=None)
+        
+        if len(tokens) <= self.max_length:
+            chunks.append({
+                'input_text': text,
+                'target_text': text,
+                'metadata': {
+                    'doc_idx': doc_idx,
+                    'chunk_idx': 0,
+                    'is_complete': True,
+                    'original_length': len(tokens)
+                }
+            })
+        else:
+            chunk_idx = 0
+            start_pos = 0
+            
+            while start_pos < len(tokens):
+                end_pos = start_pos + self.max_length
+                chunk_tokens = tokens[start_pos:end_pos]
+                
+                chunk_text = self.tokenizer.decode(chunk_tokens)
+                
+                chunks.append({
+                    'input_text': chunk_text,
+                    'target_text': chunk_text,
+                    'metadata': {
+                        'doc_idx': doc_idx,
+                        'chunk_idx': chunk_idx,
+                        'is_complete': False,
+                        'start_token': start_pos,
+                        'end_token': end_pos,
+                        'original_length': len(chunk_tokens)
+                    }
+                })
+                
+                chunk_idx += 1
+                start_pos += self.stride
+        
+        return chunks
+
+
+class WikiTextDataset(PretrainingDataset):
+    """WikiText-2/103 전용 데이터셋"""
+    
+    def __init__(
+        self, 
+        tokenizer: SCSTokenizer, 
+        version: str = "wikitext-2-v1",
+        split: str = "train",
+        max_length: int = 512,
+        num_samples: int = -1,
+        stride: int = 256
+    ):
+        dataset_name = f"wikitext-{version}"
+        super().__init__(
+            dataset_name=dataset_name,
+            tokenizer=tokenizer,
+            split=split,
+            max_length=max_length,
+            num_samples=num_samples,
+            stride=stride
+        )
+
+
+class OpenWebTextDataset(PretrainingDataset):
+    """OpenWebText 전용 데이터셋"""
+    
+    def __init__(
+        self, 
+        tokenizer: SCSTokenizer, 
+        split: str = "train",
+        max_length: int = 512,
+        num_samples: int = -1,
+        stride: int = 256
+    ):
+        super().__init__(
+            dataset_name="openwebtext",
+            tokenizer=tokenizer,
+            split=split,
+            max_length=max_length,
+            num_samples=num_samples,
+            stride=stride
+        )
 
 
 class LogiQADataset(BaseDataset):
@@ -117,15 +270,12 @@ class LogiQADataset(BaseDataset):
         try:
             import json
             
-            # text 필드에서 JSON 파싱
             raw_text = item.get('text', '').strip()
             if not raw_text:
                 return None
             
-            # JSON 파싱
             data = json.loads(raw_text)
             
-            # 필수 필드 확인
             context = data.get('text', '').strip()
             question = data.get('question', '').strip()
             options = data.get('options', [])
@@ -134,13 +284,12 @@ class LogiQADataset(BaseDataset):
             if not question or not options or len(options) < 2:
                 return None
             
-            # 입력 텍스트 구성
             input_parts = []
             if context:
                 input_parts.append(f"Context: {context}")
             input_parts.append(f"Question: {question}")
             
-            target_text = options[answer].strip()  # 실제 답 텍스트
+            target_text = options[answer].strip()
             
             return {
                 'input_text': " ".join(input_parts),
@@ -161,9 +310,8 @@ class LogiQADataset(BaseDataset):
 
 
 class bAbIDataset(BaseDataset):
-    """
-    bAbI 전용 데이터셋 ('Muennighoff/babi' 버전 사용)
-    """
+    """bAbI 전용 데이터셋"""
+    
     def __init__(self, tokenizer: SCSTokenizer, task_id: int = 1, split: str = "train", num_samples: int = -1, guide_sep_token: str = "<extra_id_42>"):
         assert 1 <= task_id <= 20, "task_id는 1과 20 사이여야 합니다."
         self.task_id = task_id
@@ -180,14 +328,11 @@ class bAbIDataset(BaseDataset):
     def _load_and_process_data(self) -> List[Dict[str, Any]]:
         """데이터 로딩 및 전처리 - task_id로 필터링"""
         try:
-            # 1. 전체 데이터셋 로드
             raw_dataset = load_dataset(self.dataset_name, split=self.split)
             
-            # 2. 원하는 태스크 번호로 필터링
             filtered_dataset = raw_dataset.filter(lambda example: example['task'] == self.task_id)
             logger.info(f"Task {self.task_id} 필터링 완료: {len(filtered_dataset)}개 샘플")
             
-            # 3. 샘플 수 제한 (표준적인 방식)
             if self.num_samples > 0 and len(filtered_dataset) > self.num_samples:
                 final_dataset = filtered_dataset.select(range(self.num_samples))
                 logger.info(f"Dataset truncated to {self.num_samples} samples")
@@ -195,7 +340,6 @@ class bAbIDataset(BaseDataset):
                 final_dataset = filtered_dataset
                 logger.info(f"Using full filtered dataset: {len(final_dataset)} samples")
 
-            # 4. 각 아이템 처리
             processed_data = []
             for idx, item in enumerate(final_dataset):
                 try:
@@ -215,7 +359,6 @@ class bAbIDataset(BaseDataset):
     def _process_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
         """bAbI 아이템 처리"""
         try:
-            # 필드 이름: story -> passage로 변경됨
             passage_text = item.get('passage', '').strip().replace('\n', ' ')
             question_text = item.get('question', '').strip()
             answer_text = item.get('answer', '').strip()
@@ -223,7 +366,6 @@ class bAbIDataset(BaseDataset):
             if not passage_text or not question_text or not answer_text:
                 return None
             
-            # 입력 형식: "Context: [지문] Question: [질문]"
             input_text = f"Context: {passage_text} Question: {question_text}"
             
             return {
@@ -242,14 +384,14 @@ class bAbIDataset(BaseDataset):
 
 
 class SQuADDataset(BaseDataset):
-    """SQuAD (Stanford Question Answering Dataset) 전용 데이터셋"""
+    """SQuAD 전용 데이터셋"""
     
     def __init__(self, tokenizer: SCSTokenizer, split: str = "train", num_samples: int = -1):
         super().__init__(
             dataset_name="rajpurkar/squad",
             tokenizer=tokenizer, 
             split=split, 
-            max_length=512,  # SQuAD는 긴 컨텍스트가 있을 수 있음
+            max_length=512,
             num_samples=num_samples
         )
 
@@ -265,18 +407,14 @@ class SQuADDataset(BaseDataset):
             if not context or not question:
                 return None
             
-            # 답변 처리
             answer_texts = answers.get('text', [])
             answer_starts = answers.get('answer_start', [])
             
-            # 첫 번째 답변을 타겟으로 사용 (SQuAD는 여러 답변이 있을 수 있음)
             if answer_texts and len(answer_texts) > 0:
                 target_text = answer_texts[0].strip()
             else:
-                # 답변이 없는 경우 (SQuAD 2.0의 unanswerable questions)
                 target_text = "unanswerable"
             
-            # 입력 텍스트 구성
             input_parts = []
             
             if title:
@@ -297,7 +435,7 @@ class SQuADDataset(BaseDataset):
                     'title': title,
                     'context': context,
                     'question': question,
-                    'all_answers': answer_texts,  # 모든 답변 보존
+                    'all_answers': answer_texts,
                     'answer_starts': answer_starts,
                     'task_type': 'reading_comprehension',
                     'index': idx,
@@ -311,14 +449,9 @@ class SQuADDataset(BaseDataset):
 
 
 class GLUEDataset(BaseDataset):
-    """
-    GLUE (General Language Understanding Evaluation) 전용 데이터셋
-    9개 태스크 모두 지원: CoLA, SST-2, MRPC, STS-B, QQP, MNLI, QNLI, RTE, WNLI
-    """
+    """GLUE 전용 데이터셋"""
     
-    # 각 태스크별 라벨 매핑 정의
     LABEL_MAPPINGS = {
-        # 이진 분류 (Binary Classification) -> 단일 토큰 경향의 단어로 변경
         'cola': {0: 'incorrect', 1: 'correct'},
         'sst2': {0: 'bad', 1: 'great'},
         'mrpc': {0: 'No', 1: 'Yes'},
@@ -326,15 +459,10 @@ class GLUEDataset(BaseDataset):
         'rte':  {0: 'No', 1: 'Yes'},
         'wnli': {0: 'No', 1: 'Yes'},
         'qnli': {0: 'No', 1: 'Yes'},
-        
-        # 3지 선다 (Three-way Classification) -> 단일 토큰 경향의 단어로 변경
         'mnli': {0: 'Yes', 1: 'Maybe', 2: 'No'},
-        
-        # 회귀 (Regression) - 별도 처리
-        'stsb': {} 
+        'stsb': {}
     }
     
-    # 각 태스크별 프롬프트 템플릿
     TASK_PROMPTS = {
         'cola': "",
         'sst2': "",
@@ -355,29 +483,18 @@ class GLUEDataset(BaseDataset):
         num_samples: int = -1,
         guide_sep_token: str = "<extra_id_42>"
     ):
-        """
-        Args:
-            task_name: GLUE 태스크 이름 (cola, sst2, mrpc, qqp, stsb, mnli, qnli, rte, wnli)
-            tokenizer: SCS 토크나이저
-            split: 데이터 스플릿 (train/validation/test)
-            num_samples: 사용할 샘플 수 (-1이면 전체)
-            guide_sep_token: 가이드 분리 토큰
-        """
         self.task_name = task_name.lower()
         
-        # 유효한 태스크 체크
         valid_tasks = ['cola', 'sst2', 'mrpc', 'qqp', 'stsb', 'mnli', 'qnli', 'rte', 'wnli']
         if self.task_name not in valid_tasks:
             raise ValueError(f"Invalid task_name '{task_name}'. Must be one of {valid_tasks}")
         
-        # 테스트 셋은 정답 라벨 미공개이기 때문에 validation으로 변경
         if split == 'test':
             split = 'validation'
 
-        # MNLI의 경우 matched/mismatched 처리
         if self.task_name == 'mnli':
             if split == 'validation':
-                split = 'validation_matched'  # 기본적으로 matched 사용
+                split = 'validation_matched'
             elif split == 'test':
                 split = 'test_matched'
         
@@ -385,7 +502,7 @@ class GLUEDataset(BaseDataset):
             dataset_name="nyu-mll/glue",
             tokenizer=tokenizer,
             split=split,
-            max_length=512,  # GLUE는 긴 텍스트가 있을 수 있음
+            max_length=512,
             num_samples=num_samples,
             guide_sep_token=guide_sep_token
         )
@@ -393,17 +510,14 @@ class GLUEDataset(BaseDataset):
     def _load_and_process_data(self) -> List[Dict[str, Any]]:
         """GLUE 데이터 로딩 및 전처리"""
         try:
-            # HuggingFace에서 특정 태스크 로딩
             raw_dataset = load_dataset("nyu-mll/glue", self.task_name, split=self.split)
             
-            # 샘플 수 제한
             if self.num_samples > 0 and len(raw_dataset) > self.num_samples:
                 raw_dataset = raw_dataset.select(range(self.num_samples))
                 logger.info(f"GLUE {self.task_name} dataset truncated to {self.num_samples} samples")
             else:
                 logger.info(f"Using full GLUE {self.task_name} dataset: {len(raw_dataset)} samples")
             
-            # 각 아이템 처리
             processed_data = []
             for idx, item in enumerate(raw_dataset):
                 try:
@@ -423,7 +537,6 @@ class GLUEDataset(BaseDataset):
     def _process_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
         """태스크별 아이템 처리"""
         try:
-            # 태스크별 처리 함수 호출
             if self.task_name == 'cola':
                 return self._process_cola_item(item, idx)
             elif self.task_name == 'sst2':
@@ -445,7 +558,7 @@ class GLUEDataset(BaseDataset):
             return None
     
     def _process_cola_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
-        """CoLA (Corpus of Linguistic Acceptability) 처리"""
+        """CoLA 처리"""
         sentence = item.get('sentence', '').strip()
         label = item.get('label', -1)
         
@@ -455,7 +568,6 @@ class GLUEDataset(BaseDataset):
         prompt = self.TASK_PROMPTS['cola']
         input_text = f"{prompt} {sentence}"
         
-        # 라벨을 텍스트로 변환
         label_text = self.LABEL_MAPPINGS['cola'].get(label, 'unknown')
         target_text = f"{input_text} {self.guide_sep_token} {label_text}"
         
@@ -472,7 +584,7 @@ class GLUEDataset(BaseDataset):
         }
     
     def _process_sst2_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
-        """SST-2 (Stanford Sentiment Treebank) 처리"""
+        """SST-2 처리"""
         sentence = item.get('sentence', '').strip()
         label = item.get('label', -1)
         
@@ -482,7 +594,6 @@ class GLUEDataset(BaseDataset):
         prompt = self.TASK_PROMPTS['sst2']
         input_text = f"{prompt} {sentence}"
         
-        # 라벨을 텍스트로 변환
         label_text = self.LABEL_MAPPINGS['sst2'].get(label, 'unknown')
         target_text = f"{input_text} {self.guide_sep_token} {label_text}"
         
@@ -499,7 +610,7 @@ class GLUEDataset(BaseDataset):
         }
     
     def _process_sentence_pair_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
-        """문장 쌍 태스크 처리 (MRPC, QQP, RTE, WNLI)"""
+        """문장 쌍 태스크 처리"""
         sentence1 = item.get('sentence1', '').strip()
         sentence2 = item.get('sentence2', '').strip()
         label = item.get('label', -1)
@@ -510,7 +621,6 @@ class GLUEDataset(BaseDataset):
         prompt = self.TASK_PROMPTS[self.task_name]
         input_text = f"{prompt} Sentence 1: {sentence1} Sentence 2: {sentence2}"
         
-        # 라벨을 텍스트로 변환
         label_text = self.LABEL_MAPPINGS[self.task_name].get(label, 'unknown')
         target_text = f"{input_text} {self.guide_sep_token} {label_text}"
         
@@ -529,7 +639,7 @@ class GLUEDataset(BaseDataset):
         }
     
     def _process_stsb_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
-        """STS-B (Semantic Textual Similarity Benchmark) 처리"""
+        """STS-B 처리"""
         sentence1 = item.get('sentence1', '').strip()
         sentence2 = item.get('sentence2', '').strip()
         label = item.get('label', -1.0)
@@ -540,7 +650,6 @@ class GLUEDataset(BaseDataset):
         prompt = self.TASK_PROMPTS['stsb']
         input_text = f"{prompt} Sentence 1: {sentence1} Sentence 2: {sentence2}"
         
-        # 회귀 값을 텍스트로 변환 (소수점 1자리까지)
         label_text = f"{label:.1f}"
         target_text = f"{input_text} {self.guide_sep_token} {label_text}"
         
@@ -559,7 +668,7 @@ class GLUEDataset(BaseDataset):
         }
     
     def _process_mnli_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
-        """MNLI (Multi-Genre Natural Language Inference) 처리"""
+        """MNLI 처리"""
         premise = item.get('premise', '').strip()
         hypothesis = item.get('hypothesis', '').strip()
         label = item.get('label', -1)
@@ -570,7 +679,6 @@ class GLUEDataset(BaseDataset):
         prompt = self.TASK_PROMPTS['mnli']
         input_text = f"{prompt} Premise: {premise} Hypothesis: {hypothesis}"
         
-        # 라벨을 텍스트로 변환
         label_text = self.LABEL_MAPPINGS['mnli'].get(label, 'unknown')
         target_text = f"{input_text} {self.guide_sep_token} {label_text}"
         
@@ -589,7 +697,7 @@ class GLUEDataset(BaseDataset):
         }
     
     def _process_qnli_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
-        """QNLI (Question Natural Language Inference) 처리"""
+        """QNLI 처리"""
         question = item.get('question', '').strip()
         sentence = item.get('sentence', '').strip()
         label = item.get('label', -1)
@@ -600,7 +708,6 @@ class GLUEDataset(BaseDataset):
         prompt = self.TASK_PROMPTS['qnli']
         input_text = f"{prompt} Question: {question} Sentence: {sentence}"
         
-        # 라벨을 텍스트로 변환
         label_text = self.LABEL_MAPPINGS['qnli'].get(label, 'unknown')
         target_text = f"{input_text} {self.guide_sep_token} {label_text}"
         
@@ -619,156 +726,6 @@ class GLUEDataset(BaseDataset):
         }
 
 
-class MultiDataset(BaseDataset):
-    """다중 태스크 지원 데이터셋"""
-    
-    def __init__(
-        self,
-        dataset_name: str, 
-        tokenizer: SCSTokenizer, 
-        split: str = "train",
-        task_type: str = "auto",
-        num_samples: int = -1
-    ):
-        self.task_type = task_type
-        super().__init__(dataset_name, tokenizer, split, num_samples=num_samples)
-    
-    def _process_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
-        """다중 태스크 아이템 처리"""
-        
-        # LogiQA 처리
-        if "logiqa" in self.dataset_name.lower():
-            return self._process_logiqa_item(item, idx)
-        
-        # NLI 처리
-        elif 'premise' in item and 'hypothesis' in item:
-            return self._process_nli_item(item, idx)
-        
-        # QA 처리
-        elif 'question' in item and 'answer' in item:
-            return self._process_qa_item(item, idx)
-        
-        # 기본 처리
-        else:
-            return self._process_generic_item(item, idx)
-    
-    def _process_logiqa_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
-        """LogiQA 아이템 처리"""
-        try:
-            import json
-            
-            # text 필드에서 JSON 파싱
-            raw_text = item.get('text', '').strip()
-            if not raw_text:
-                return None
-            
-            # JSON 파싱
-            data = json.loads(raw_text)
-            
-            # 필수 필드 확인
-            context = data.get('text', '').strip()
-            question = data.get('question', '').strip()
-            options = data.get('options', [])
-            answer = data.get('answer', 0)
-            
-            if not question:
-                return None
-            
-            input_parts = ["Answer the question:"]
-            if context:
-                input_parts.append(f"Context: {context}")
-            input_parts.append(f"Question: {question}")
-            
-            if options:
-                # 정답 처리
-                if isinstance(answer, int) and 0 <= answer < len(options):
-                    target_text = options[answer].strip()  # 실제 답 텍스트
-                else:
-                    target_text = "unknown"
-            else:
-                target_text = "unknown"
-            
-            return {
-                'input_text': " ".join(input_parts),
-                'target_text': target_text,
-                'metadata': {'task_type': 'reasoning', 'index': idx}
-            }
-        except Exception as e:
-            logger.warning(f"Failed to process LogiQA item {idx}: {e}")
-            return None
-    
-    def _process_nli_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
-        """NLI 아이템 처리"""
-        try:
-            premise = item.get('premise', '').strip()
-            hypothesis = item.get('hypothesis', '').strip()
-            label = item.get('label', 0)
-            
-            if not premise or not hypothesis:
-                return None
-            
-            input_text = f"Determine relationship: Premise: {premise} Hypothesis: {hypothesis}"
-            
-            # 라벨 매핑
-            label_map = {0: "entailment", 1: "neutral", 2: "contradiction"}
-            target_text = label_map.get(label, "neutral")
-            
-            return {
-                'input_text': input_text,
-                'target_text': target_text,
-                'metadata': {'task_type': 'nli', 'index': idx}
-            }
-        except:
-            return None
-    
-    def _process_qa_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
-        """QA 아이템 처리"""
-        try:
-            context = item.get('context', '').strip()
-            question = item.get('question', '').strip()
-            answer = item.get('answer', '').strip()
-            
-            if not question:
-                return None
-            
-            if context:
-                input_text = f"Answer based on context: Context: {context} Question: {question}"
-            else:
-                input_text = f"Answer the question: {question}"
-            
-            return {
-                'input_text': input_text,
-                'target_text': answer,
-                'metadata': {'task_type': 'qa', 'index': idx}
-            }
-        except:
-            return None
-    
-    def _process_generic_item(self, item: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
-        """일반 아이템 처리"""
-        try:
-            # 텍스트 필드 찾기
-            text_fields = ['text', 'sentence', 'input', 'content']
-            input_text = ""
-            
-            for field in text_fields:
-                if field in item:
-                    input_text = str(item[field])
-                    break
-            
-            if not input_text:
-                input_text = str(item)
-            
-            return {
-                'input_text': f"Process: {input_text}",
-                'target_text': "processed",
-                'metadata': {'task_type': 'generic', 'index': idx}
-            }
-        except:
-            return None
-
-
-# 편의 함수들
 def create_dataset(
     dataset_name: str,
     tokenizer: SCSTokenizer,
@@ -776,16 +733,42 @@ def create_dataset(
     num_samples: int = -1,
     task_id: int = 1,
     learning_style: str = "generative",
-    bert_config: Optional[Dict[str, Any]] = None
+    mlm_config: Optional[Dict[str, Any]] = None,
+    max_length: int = 512,
+    stride: int = 256
 ) -> BaseDataset:
-    """데이터셋 생성 팩토리 함수 - GLUE 지원 추가 (dataset_name 기반)"""
+    """데이터셋 생성 팩토리 함수"""
     
-    # GLUE 태스크 목록
-    glue_tasks = ['cola', 'sst2', 'mrpc', 'qqp', 'stsb', 'mnli', 'qnli', 'rte', 'wnli']
-    
-    # 1단계: 기존 방식으로 베이스 데이터셋 생성
-    if dataset_name in glue_tasks:
-        # GLUE 태스크는 dataset_name을 task_name으로 사용
+    # Pre-training 데이터셋들
+    if dataset_name.startswith("wikitext"):
+        version = dataset_name.replace("wikitext-", "")
+        base_dataset = WikiTextDataset(
+            tokenizer=tokenizer,
+            version=version,
+            split=split,
+            max_length=max_length,
+            num_samples=num_samples,
+            stride=stride
+        )
+    elif dataset_name == "openwebtext":
+        base_dataset = OpenWebTextDataset(
+            tokenizer=tokenizer,
+            split=split,
+            max_length=max_length,
+            num_samples=num_samples,
+            stride=stride
+        )
+    elif "c4" in dataset_name.lower():
+        base_dataset = PretrainingDataset(
+            dataset_name="c4",
+            tokenizer=tokenizer,
+            split=split,
+            max_length=max_length,
+            num_samples=num_samples,
+            stride=stride
+        )
+    # GLUE 태스크들
+    elif dataset_name in ['cola', 'sst2', 'mrpc', 'qqp', 'stsb', 'mnli', 'qnli', 'rte', 'wnli']:
         base_dataset = GLUEDataset(
             task_name=dataset_name,
             tokenizer=tokenizer,
@@ -799,32 +782,33 @@ def create_dataset(
     elif "squad" in dataset_name.lower():
         base_dataset = SQuADDataset(tokenizer, split, num_samples=num_samples)
     else:
-        base_dataset = MultiDataset(dataset_name, tokenizer, split, num_samples=num_samples)
+        # 기본 데이터셋 처리
+        base_dataset = BaseDataset(dataset_name, tokenizer, split, max_length, num_samples)
     
-    # 2단계: learning_style에 따라 BERT 스타일 변환 적용
-    if learning_style == "bert":
-        logger.info(f"Converting to BERT style dataset with learning_style='{learning_style}'")
+    # MLM 스타일 변환 적용
+    if learning_style == "mlm":
+        logger.info(f"Converting to MLM style dataset with learning_style='{learning_style}'")
         
-        # BERT 설정 기본값
-        default_bert_config = {
+        # MLM 설정 기본값
+        default_mlm_config = {
             'mask_probability': 0.15,
-            'mask_token_id': None,  # 자동 감지
+            'mask_token_id': None,
             'random_token_prob': 0.1,
             'unchanged_prob': 0.1,
             'min_masks': 1,
             'max_masks_ratio': 0.5,
-            'special_tokens': None  # 자동 설정
+            'special_tokens': None
         }
         
         # 사용자 설정 병합
-        if bert_config:
-            default_bert_config.update(bert_config)
+        if mlm_config:
+            default_mlm_config.update(mlm_config)
         
-        # BERTStyleDataset으로 래핑 (토크나이저 전달)
-        return BERTStyleDataset(
+        # MLMDataset으로 래핑
+        return MLMDataset(
             base_dataset=base_dataset,
-            tokenizer=tokenizer,  # 토크나이저 전달 (중요!)
-            **default_bert_config
+            tokenizer=tokenizer,
+            **default_mlm_config
         )
     
     else:

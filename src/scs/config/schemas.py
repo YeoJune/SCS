@@ -125,6 +125,18 @@ class GradualUnfreezingConfig(BaseModel):
     freeze_schedule: Dict[int, List[str]] = Field(default_factory=dict)
 
 
+# MLM 설정 추가
+class MLMConfig(BaseModel):
+    """MLM(Masked Language Modeling) 설정"""
+    mask_probability: float = Field(default=0.15, description="마스킹할 토큰 비율")
+    mask_token_id: Optional[int] = Field(default=None, description="[MASK] 토큰 ID (None이면 자동 감지)")
+    random_token_prob: float = Field(default=0.1, description="랜덤 토큰으로 교체할 비율")
+    unchanged_prob: float = Field(default=0.1, description="원본 유지할 비율")
+    min_masks: int = Field(default=1, description="최소 마스크 개수")
+    max_masks_ratio: float = Field(default=0.5, description="최대 마스크 비율")
+    special_tokens: Optional[List[int]] = Field(default=None, description="마스킹하지 않을 특수 토큰들")
+
+
 class LearningConfig(BaseModel):
     """학습 설정"""
     epochs: int = Field(default=15)
@@ -241,14 +253,27 @@ class DataLoadingConfig(BaseModel):
     tokenizer: TokenizerConfig = Field(default_factory=TokenizerConfig)
 
 
+# 업데이트된 TaskConfig
 class TaskConfig(BaseModel):
     """작업 설정"""
     name: Optional[str] = None
     dataset_name: str = Field(default="datatune/LogiQA2.0")
     task_type: str = Field(default="auto")
     task_id: int = Field(default=1)
-    learning_style: str = Field(default="generative")
-    bert_config: Optional[Dict[str, Any]] = None
+    learning_style: str = Field(default="generative", description="학습 스타일: 'generative' 또는 'mlm'")
+    mlm_config: Optional[MLMConfig] = Field(default=None, description="MLM 설정 (learning_style이 'mlm'일 때 사용)")
+    
+    # Pre-training 데이터셋용 설정
+    max_length: int = Field(default=512, description="최대 시퀀스 길이")
+    stride: int = Field(default=256, description="Pre-training용 sliding window stride")
+
+    @field_validator('learning_style')
+    @classmethod
+    def validate_learning_style(cls, v):
+        valid_styles = ['generative', 'mlm']
+        if v not in valid_styles:
+            raise ValueError(f"learning_style은 {valid_styles} 중 하나여야 합니다")
+        return v
 
 
 class DataConfig(BaseModel):
@@ -312,6 +337,14 @@ class AppConfig(BaseModel):
             self.task.dataset_name = self.dataset_name
         return self
     
+    @model_validator(mode='after') 
+    def validate_mlm_config(self):
+        """MLM 설정 검증"""
+        if self.task.learning_style == "mlm" and self.task.mlm_config is None:
+            # 기본 MLM 설정 적용
+            self.task.mlm_config = MLMConfig()
+        return self
+    
     def validate_node_references(self):
         """노드 참조 무결성 검사"""
         available_nodes = set(self.brain_regions.keys())
@@ -336,6 +369,35 @@ class AppConfig(BaseModel):
             raise ValueError("노드 참조 오류:\n" + "\n".join(f"  - {error}" for error in errors))
         
         return True
+    
+    def get_supported_datasets(self) -> List[str]:
+        """지원되는 데이터셋 목록"""
+        return [
+            # Task-specific datasets
+            "datatune/LogiQA2.0",
+            "Muennighoff/babi",
+            "rajpurkar/squad",
+            # GLUE 태스크들
+            "cola", "sst2", "mrpc", "qqp", "stsb", 
+            "mnli", "qnli", "rte", "wnli",
+            # Pre-training datasets
+            "wikitext-2-v1", "wikitext-103-v1",
+            "openwebtext", "c4"
+        ]
+    
+    def is_pretraining_dataset(self) -> bool:
+        """현재 설정이 pre-training 데이터셋인지 확인"""
+        dataset_name = self.task.dataset_name
+        return (
+            dataset_name.startswith("wikitext") or
+            dataset_name == "openwebtext" or
+            "c4" in dataset_name.lower()
+        )
+    
+    def is_glue_task(self) -> bool:
+        """현재 설정이 GLUE 태스크인지 확인"""
+        glue_tasks = ['cola', 'sst2', 'mrpc', 'qqp', 'stsb', 'mnli', 'qnli', 'rte', 'wnli']
+        return self.task.dataset_name in glue_tasks
     
     class Config:
         extra = "forbid"  # 정의되지 않은 필드 허용 안함

@@ -1,4 +1,3 @@
-# src/scs/cli.py
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
@@ -94,6 +93,33 @@ def validate_mode(args: argparse.Namespace):
         
         print("✅ 설정 파일 구조가 올바릅니다!")
         
+        # 데이터셋 지원 여부 확인
+        dataset_name = app_config.task.dataset_name
+        supported_datasets = app_config.get_supported_datasets()
+        
+        if dataset_name not in supported_datasets:
+            print(f"⚠️ 데이터셋 '{dataset_name}'는 공식적으로 지원되지 않을 수 있습니다.")
+            print(f"지원되는 데이터셋: {supported_datasets}")
+        else:
+            print(f"✅ 데이터셋 '{dataset_name}' 지원 확인")
+            
+        # 학습 스타일 및 MLM 설정 확인
+        learning_style = app_config.task.learning_style
+        if learning_style == "mlm":
+            print(f"📊 MLM 학습 스타일 감지")
+            if app_config.task.mlm_config:
+                mlm_config = app_config.task.mlm_config
+                print(f"   - 마스킹 확률: {mlm_config.mask_probability}")
+                print(f"   - 최소 마스크: {mlm_config.min_masks}")
+            else:
+                print("   - 기본 MLM 설정 사용")
+        
+        # Pre-training 데이터셋 확인
+        if app_config.is_pretraining_dataset():
+            print(f"🔄 Pre-training 데이터셋 감지")
+            print(f"   - 최대 길이: {app_config.task.max_length}")
+            print(f"   - Stride: {app_config.task.stride}")
+        
         # 간단한 모델 생성 테스트
         try:
             model = ModelBuilder.build_model(app_config, device="cpu")
@@ -147,7 +173,7 @@ def train_mode(args: argparse.Namespace):
         save_config(app_config.model_dump(), experiment_dir / "config.yaml")
         logger.info("✅ 설정 파일 로딩 및 검증 완료")
 
-        # 3. 데이터 로더 생성
+        # 3. 데이터 로더 생성 (업데이트된 파라미터)
         logger.info("📊 데이터 로더 생성 중...")
         tokenizer = SCSTokenizer(app_config.data_loading.tokenizer.name)
         
@@ -157,33 +183,45 @@ def train_mode(args: argparse.Namespace):
         
         dataset_name = app_config.task.dataset_name
         learning_style = app_config.task.learning_style
-        bert_config = app_config.task.bert_config
+        # bert_config를 mlm_config로 변경
+        mlm_config = app_config.task.mlm_config.model_dump() if app_config.task.mlm_config else None
         
+        # 데이터로더 생성 시 새로운 파라미터들 사용
         train_loader = create_dataloader(
             dataset_name=dataset_name, 
             split="train", 
             batch_size=app_config.data_loading.batch_size,
-            max_length=app_config.data_loading.tokenizer.max_length,
+            max_length=app_config.task.max_length,  # task에서 가져옴
             tokenizer=tokenizer,
             num_samples=app_config.data.train_samples,
             task_id=app_config.task.task_id,
             learning_style=learning_style,
-            bert_config=bert_config
+            mlm_config=mlm_config,  # bert_config → mlm_config
+            stride=app_config.task.stride  # 새로 추가
         )
 
         val_loader = create_dataloader(
             dataset_name=dataset_name, 
             split="validation", 
             batch_size=app_config.data_loading.batch_size,
-            max_length=app_config.data_loading.tokenizer.max_length,
+            max_length=app_config.task.max_length,  # task에서 가져옴
             tokenizer=tokenizer,
             num_samples=app_config.data.val_samples,
             task_id=app_config.task.task_id,
             learning_style=learning_style,
-            bert_config=bert_config
+            mlm_config=mlm_config,  # bert_config → mlm_config
+            stride=app_config.task.stride  # 새로 추가
         )
         
         logger.info(f"✅ 데이터 로더 생성 완료 (데이터셋: {dataset_name}, 스타일: {learning_style})")
+        
+        # MLM 학습인 경우 추가 정보 로깅
+        if learning_style == "mlm" and hasattr(train_loader.dataset, 'get_masking_statistics'):
+            try:
+                stats = train_loader.dataset.get_masking_statistics(num_samples=5)
+                logger.info(f"📊 MLM 마스킹 통계: {stats}")
+            except Exception as e:
+                logger.warning(f"MLM 통계 계산 실패: {e}")
 
         # 4. 모델 생성 (config 패키지 사용)
         logger.info("🧠 SCS 모델 생성 중...")
@@ -263,12 +301,13 @@ def train_mode(args: argparse.Namespace):
             dataset_name=dataset_name, 
             split="test", 
             batch_size=app_config.data_loading.batch_size,
-            max_length=app_config.data_loading.tokenizer.max_length,
+            max_length=app_config.task.max_length,  # task에서 가져옴
             tokenizer=tokenizer,
             num_samples=app_config.data.test_samples,
             task_id=app_config.task.task_id,
             learning_style=learning_style,
-            bert_config=bert_config
+            mlm_config=mlm_config,  # bert_config → mlm_config
+            stride=app_config.task.stride  # 새로 추가
         )
         
         test_results = trainer.evaluate(test_loader, save_examples=app_config.evaluation.save_examples)
@@ -340,21 +379,25 @@ def evaluate_mode(args: argparse.Namespace):
         
         logger.info(f"사용할 체크포인트: {best_model_path}")
 
-        # 4. 데이터 로더 생성
+        # 4. 데이터 로더 생성 (업데이트된 파라미터)
         tokenizer = SCSTokenizer(app_config.data_loading.tokenizer.name)
         app_config.io_system.input_interface.vocab_size = tokenizer.vocab_size
         app_config.io_system.output_interface.vocab_size = tokenizer.vocab_size
+        
+        # mlm_config 처리
+        mlm_config = app_config.task.mlm_config.model_dump() if app_config.task.mlm_config else None
         
         test_loader = create_dataloader(
             dataset_name=app_config.task.dataset_name,
             split="test",
             batch_size=app_config.data_loading.batch_size,
-            max_length=app_config.data_loading.tokenizer.max_length,
+            max_length=app_config.task.max_length,  # task에서 가져옴
             tokenizer=tokenizer,
             num_samples=app_config.data.test_samples,
             task_id=app_config.task.task_id,
             learning_style=app_config.task.learning_style,
-            bert_config=app_config.task.bert_config
+            mlm_config=mlm_config,  # bert_config → mlm_config
+            stride=app_config.task.stride  # 새로 추가
         )
 
         # 5. 모델 로드 (config 패키지 사용)

@@ -105,9 +105,9 @@ data_loading:
     max_length: 128
 
 data:
-  train_samples: 50000
-  val_samples: 5000
-  test_samples: 5000
+  train_samples: -1
+  val_samples: -1
+  test_samples: -1
 
 # === 평가 설정 ===
 evaluation:

@@ -21,15 +21,15 @@ system_roles:
 # === 뇌 영역 구성 (완전 오버라이드) ===
 brain_regions:
   IN:
-    grid_size: [32, 32]
+    grid_size: [64, 64]
     decay_rate: 0.85
     distance_tau: 1.0
   PASS:
-    grid_size: [32, 32]
+    grid_size: [64, 64]
     decay_rate: 0.85
     distance_tau: 1.0
   OUT:
-    grid_size: [32, 32]
+    grid_size: [64, 64]
     decay_rate: 0.85
     distance_tau: 1.0
 

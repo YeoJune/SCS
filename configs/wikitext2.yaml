@@ -22,15 +22,15 @@ system_roles:
 brain_regions:
   IN:
     grid_size: [64, 64]
-    decay_rate: 0.85
+    decay_rate: 0.8
     distance_tau: 1.0
   OUT:
     grid_size: [64, 64]
-    decay_rate: 0.85
+    decay_rate: 0.8
     distance_tau: 1.0
   PASS:
     grid_size: [64, 64]
-    decay_rate: 0.85
+    decay_rate: 0.8
     distance_tau: 1.0
 
 # === 축삭 연결 (완전 오버라이드) ===
@@ -38,12 +38,12 @@ axonal_connections:
   connections:
     - source: "IN"
       target: "PASS"
-      patch_size: 8
+      patch_size: 1
       patch_weight_scale: 1.0
       inner_weight_scale: 1.2
     - source: "PASS"
       target: "OUT"
-      patch_size: 8
+      patch_size: 1
       patch_weight_scale: 1.0
       inner_weight_scale: 1.2
 
@@ -87,9 +87,9 @@ learning:
 
 timing_manager:
   train_fixed_ref: "start"
-  train_fixed_offset: 7
+  train_fixed_offset: 3
   evaluate_fixed_ref: "start"
-  evaluate_fixed_offset: 7
+  evaluate_fixed_offset: 3
   sync_ema_alpha: 0.1 # EMA 필터링 강도
   sync_threshold_start: 0.3 # 시작 임계값
   sync_threshold_end: 0.1 # 종료 임계값
@@ -99,7 +99,7 @@ timing_manager:
 
 # === 데이터 로딩 오버라이드 ===
 data_loading:
-  batch_size: 8
+  batch_size: 16
   tokenizer:
     name: "t5-small"
     max_length: 128

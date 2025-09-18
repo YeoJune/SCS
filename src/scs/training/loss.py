@@ -143,7 +143,7 @@ class SCSLoss(nn.Module):
             sep_positions = (targets[batch_idx] == self.guide_sep_token_id).nonzero(as_tuple=False)
             
             if len(sep_positions) > 0:
-                first_sep_pos = sep_positions[0].item()
+                first_sep_pos = sep_positions[-1].item()
                 # guide_sep_token을 포함한 이전까지 guide_weight 적용
                 guide_mask[batch_idx, :first_sep_pos + 1] = self.guide_weight
         

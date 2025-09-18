@@ -78,8 +78,8 @@ class SCSMetrics:
             sep_positions = (targets[batch_idx] == guide_sep_token_id).nonzero(as_tuple=False)
             
             if len(sep_positions) > 0:
-                # 첫 번째 guide_sep_token 이후 부분만 True
-                first_sep_pos = sep_positions[0].item()
+                # 마지막 guide_sep_token 이후 부분만 True
+                first_sep_pos = sep_positions[-1].item()
                 answer_mask[batch_idx, first_sep_pos + 1:] = True
             else:
                 # guide_sep_token이 없으면 전체 시퀀스를 답변으로 간주
@@ -136,8 +136,8 @@ class SCSMetrics:
             sep_positions = (targets[batch_idx] == guide_sep_token_id).nonzero(as_tuple=False)
             
             if len(sep_positions) > 0:
-                # 첫 번째 guide_sep_token 이전 부분만 True
-                first_sep_pos = sep_positions[0].item()
+                # 마지막 guide_sep_token 이전 부분만 True
+                first_sep_pos = sep_positions[-1].item()
                 guide_mask[batch_idx, first_sep_pos:] = False
         
         return guide_mask

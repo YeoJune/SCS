@@ -70,26 +70,24 @@ class AxonalConnections(nn.Module):
             # 패치 개수 계산 (입력과 출력 동일)
             source_patches_h = source_h // patch_size
             source_patches_w = source_w // patch_size
-            num_patches = source_patches_h * source_patches_w
+            source_patch_size = source_patches_h * source_patches_w
             
             # 출력 패치 크기 계산
             target_patch_h = target_h // source_patches_h
             target_patch_w = target_w // source_patches_w
             
-            source_patch_size = patch_size * patch_size  # 입력 패치 크기
             target_patch_size = target_patch_h * target_patch_w  # 출력 패치 크기
-            d = patch_size  # 중간 차원 (제곱근 압축)
 
             # 1. 패치별 Gate/Bias 초기화
-            patch_gates = torch.randn(num_patches, device=self.device) * self.gate_init_std + self.gate_init_mean
+            patch_gates = torch.randn(source_patch_size, device=self.device) * self.gate_init_std + self.gate_init_mean
             self.patch_gates[conn_key] = nn.Parameter(patch_gates)
 
-            patch_biases = torch.randn(num_patches, device=self.device) * self.bias_init_std + self.bias_init_mean
+            patch_biases = torch.randn(source_patch_size, device=self.device) * self.bias_init_std + self.bias_init_mean
             self.patch_biases[conn_key] = nn.Parameter(patch_biases)
             
-            # 2. Linear 가중치 직교 초기화 [num_patches, target_patch_size, source_patch_size]
-            linear_weights = torch.zeros(num_patches, target_patch_size, source_patch_size, device=self.device)
-            for patch_idx in range(num_patches):
+            # 2. Linear 가중치 직교 초기화 [source_patch_size, target_patch_size, source_patch_size]
+            linear_weights = torch.zeros(source_patch_size, target_patch_size, source_patch_size, device=self.device)
+            for patch_idx in range(source_patch_size):
                 # 각 패치별로 직교 초기화
                 weight_matrix = torch.empty(target_patch_size, source_patch_size)
                 nn.init.orthogonal_(weight_matrix)
@@ -125,11 +123,11 @@ class AxonalConnections(nn.Module):
             # 패치 정보 계산
             source_patches_h = source_h // patch_size
             source_patches_w = source_w // patch_size
-            num_patches = source_patches_h * source_patches_w
+            source_patch_size = source_patches_h * source_patches_w
             target_patch_h = target_h // source_patches_h
             target_patch_w = target_w // source_patches_w
-            
-            # 1. 소스 패치 추출 [B, num_patches, patch_size²]
+
+            # 1. 소스 패치 추출 [B, source_patch_size, source_patch_size]
             source_patches = F.unfold(
                 source_spikes.unsqueeze(1),
                 kernel_size=patch_size,
@@ -137,8 +135,8 @@ class AxonalConnections(nn.Module):
             ).transpose(1, 2)
             
             # 2. Linear 변환 적용
-            # source_patches: [B, num_patches, patch_size²]
-            # patch_linear: [num_patches, target_patch_size, patch_size²]
+            # source_patches: [B, source_patch_size, source_patch_size]
+            # patch_linear: [source_patch_size, target_patch_size, source_patch_size]
             output = torch.einsum('bts,pts->bpt', source_patches, self.patch_linear[conn_key])
             
             # 3. LayerNorm 적용

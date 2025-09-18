@@ -15,7 +15,7 @@ from .timing import TimingManager
 class AxonalConnections(nn.Module):
     """
     패치 기반 축삭 연결 - 최종 완성본
-    - MLP 기반 가중치 계산: 소스패치 → d차원 → 타겟패치크기 → LayerNorm → Softmax
+    - MLP 기반 가중치 계산: 소스패치 → 타겟패치 → LayerNorm → Softmax
     - 패치별 Affine 변환: gate * source_sum + bias (스칼라)
     - 최종 출력: softmax_weights * affine_scalar
     """
@@ -139,7 +139,7 @@ class AxonalConnections(nn.Module):
             # 2. Linear 변환 적용
             # source_patches: [B, num_patches, patch_size²]
             # patch_linear: [num_patches, target_patch_size, patch_size²]
-            output = torch.einsum('bps,pds->bpd', source_patches, self.patch_linear[conn_key])
+            output = torch.einsum('bts,pts->bpt', source_patches, self.patch_linear[conn_key])
             
             # 3. LayerNorm 적용
             output_normalized = self.patch_layernorms[conn_key](output)

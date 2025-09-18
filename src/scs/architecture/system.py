@@ -120,7 +120,9 @@ class AxonalConnections(nn.Module):
             ).transpose(1, 2)
             
             # 2. Linear 변환 [B, num_patches, pixels_per_target_patch]
-            output = torch.einsum('bps,ptp->bpt', source_patches, self.patch_linear[conn_key])
+            # source_patches: [B, num_patches, pixels_per_source_patch]
+            # patch_linear: [num_patches, pixels_per_target_patch, pixels_per_source_patch]
+            output = torch.einsum('bns,nts->bnt', source_patches, self.patch_linear[conn_key])
             
             # 3. LayerNorm
             output_normalized = self.patch_layernorms[conn_key](output)

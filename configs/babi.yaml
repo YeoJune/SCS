@@ -73,9 +73,9 @@ learning:
 
 timing_manager:
   train_fixed_ref: "start"
-  train_fixed_offset: 7
+  train_fixed_offset: 3
   evaluate_fixed_ref: "start"
-  evaluate_fixed_offset: 7
+  evaluate_fixed_offset: 3
   sync_ema_alpha: 0.1 # EMA 필터링 강도
   sync_threshold_start: 0.3 # 시작 임계값
   sync_threshold_end: 0.1 # 종료 임계값

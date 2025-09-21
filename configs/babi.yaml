@@ -24,15 +24,7 @@ brain_regions:
     grid_size: [64, 64]
     decay_rate: 0.85
     distance_tau: 1.0
-  MEM1:
-    grid_size: [64, 64]
-    decay_rate: 0.85
-    distance_tau: 1.0
-  MEM2:
-    grid_size: [64, 64]
-    decay_rate: 0.85
-    distance_tau: 1.0
-  MEM3:
+  PASS:
     grid_size: [64, 64]
     decay_rate: 0.85
     distance_tau: 1.0
@@ -45,27 +37,22 @@ brain_regions:
 axonal_connections:
   connections:
     - source: "IN"
-      target: "MEM1"
+      target: "PASS"
       patch_size: 8
       patch_weight_scale: 1.0
       inner_weight_scale: 1.0
-    - source: "MEM1"
-      target: "MEM2"
-      patch_size: 8
-      patch_weight_scale: 1.0
-      inner_weight_scale: 1.0
-    - source: "MEM2"
-      target: "MEM3"
-      patch_size: 8
-      patch_weight_scale: 1.0
-      inner_weight_scale: 1.0
-    - source: "MEM3"
-      target: "MEM1"
-      patch_size: 8
-      patch_weight_scale: 1.0
-      inner_weight_scale: 1.0
-    - source: "MEM3"
+    - source: "PASS"
       target: "OUT"
+      patch_size: 8
+      patch_weight_scale: 1.0
+      inner_weight_scale: 1.0
+    - source: "OUT"
+      target: "PASS"
+      patch_size: 8
+      patch_weight_scale: 1.0
+      inner_weight_scale: 1.0
+    - source: "PASS"
+      target: "IN"
       patch_size: 8
       patch_weight_scale: 1.0
       inner_weight_scale: 1.0

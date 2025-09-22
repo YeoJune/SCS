@@ -58,7 +58,7 @@ learning:
   epochs: 11
   learning_rate: 5e-4
   eta_min: 2e-4
-  max_clk_training: 138
+  max_clk_training: 70
   optimizer: "adamw"
   weight_decay: 1e-4
   eval_every: 5
@@ -89,7 +89,7 @@ data_loading:
   batch_size: 32
   tokenizer:
     name: "t5-small"
-    max_length: 128
+    max_length: 64
 
 data:
   train_samples: -1

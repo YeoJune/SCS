@@ -14,7 +14,7 @@ from .timing import TimingManager
 
 class AxonalConnections(nn.Module):
     """
-    패치 기반 축삭 연결 - 차원 수정 완료본
+    Axonal connections with STDP-based fast weights integrated into forward pass
     """
     def __init__(
         self,
@@ -25,6 +25,11 @@ class AxonalConnections(nn.Module):
         bias_init_mean: float = 0.0,
         bias_init_std: float = 0.0,
         axon_temperature: float = 0.1,
+        # STDP parameters
+        tau_pre: float = 20.0,
+        tau_post: float = 20.0,
+        A_plus: float = 0.01,
+        A_minus: float = 0.012,
         device: str = "cuda"
     ):
         super().__init__()
@@ -38,18 +43,33 @@ class AxonalConnections(nn.Module):
         self.bias_init_std = bias_init_std
         self.axon_temperature = axon_temperature
         
-        # 학습 가능한 파라미터
+        # STDP parameters
+        self.tau_pre = tau_pre
+        self.tau_post = tau_post
+        self.A_plus = A_plus
+        self.A_minus = A_minus
+        
+        # Base weights (학습 가능한 파라미터 - backprop용)
         self.patch_gates = nn.ParameterDict()
         self.patch_biases = nn.ParameterDict()
-        self.patch_linear = nn.ParameterDict()
+        self.patch_linear_base = nn.ParameterDict()
         self.patch_layernorms = nn.ModuleDict()
         
+        # Dynamic weights (W_dyn - STDP로 동적 변화)
+        self.patch_linear_dyn = {}
+        
+        # STDP traces (eligibility traces)
+        self.pre_traces = {}
+        self.post_traces = {}
+        
         self._create_patch_connections()
+        # 초기화는 나중에 reset_state_batch에서 호출
 
     def _get_grid_size(self, node_name: str) -> tuple:
         return self.node_grid_sizes.get(node_name, (64, 64))
     
     def _create_patch_connections(self):
+        """기존 연결 구조 생성"""
         for conn in self.connections:
             source = conn["source"]
             target = conn["target"]
@@ -60,14 +80,13 @@ class AxonalConnections(nn.Module):
             source_h, source_w = self._get_grid_size(source)
             target_h, target_w = self._get_grid_size(target)
             
-            # 차원 정의 명확화
             num_patches = (source_h // patch_size) * (source_w // patch_size)
             pixels_per_source_patch = patch_size * patch_size
             target_patch_h = target_h // (source_h // patch_size)
             target_patch_w = target_w // (source_w // patch_size)
             pixels_per_target_patch = target_patch_h * target_patch_w
 
-            # Gate/Bias 초기화 [num_patches]
+            # Gate/Bias 초기화
             self.patch_gates[conn_key] = nn.Parameter(
                 torch.randn(num_patches, device=self.device) * self.gate_init_std + self.gate_init_mean
             )
@@ -75,18 +94,34 @@ class AxonalConnections(nn.Module):
                 torch.randn(num_patches, device=self.device) * self.bias_init_std + self.bias_init_mean
             )
             
-            # Linear 가중치 초기화 [num_patches, pixels_per_target_patch, pixels_per_source_patch]
+            # Base Linear weights 초기화
             linear_weights = torch.zeros(num_patches, pixels_per_target_patch, pixels_per_source_patch, device=self.device)
             for patch_idx in range(num_patches):
                 weight_matrix = torch.empty(pixels_per_target_patch, pixels_per_source_patch)
                 nn.init.orthogonal_(weight_matrix)
                 linear_weights[patch_idx] = weight_matrix
-            self.patch_linear[conn_key] = nn.Parameter(linear_weights)
+            self.patch_linear_base[conn_key] = nn.Parameter(linear_weights)
 
             # LayerNorm 초기화
             self.patch_layernorms[conn_key] = nn.LayerNorm(pixels_per_target_patch, device=self.device)
 
+    def _initialize_dynamic_weights(self, batch_size: int = 1):
+        """W_dyn을 W_base로 초기화 (배치 차원 포함)"""
+        for conn in self.connections:
+            conn_key = f"{conn['source']}_to_{conn['target']}"
+            # 배치 차원 추가: [B, num_patches, target_size, source_size]
+            base_weights = self.patch_linear_base[conn_key]  # [num_patches, target_size, source_size]
+            self.patch_linear_dyn[conn_key] = base_weights.unsqueeze(0).expand(batch_size, -1, -1, -1).clone()
+            
+            # STDP traces 초기화 (배치 차원 포함)
+            num_patches, target_size, source_size = base_weights.shape
+            self.pre_traces[conn_key] = torch.zeros(batch_size, num_patches, source_size, device=self.device)
+            self.post_traces[conn_key] = torch.zeros(batch_size, num_patches, target_size, device=self.device)
+
     def forward(self, node_spikes: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """
+        Phase 2: 현재 W_dyn으로 forward 계산
+        """
         axonal_inputs = {}
         
         for conn in self.connections:
@@ -106,28 +141,26 @@ class AxonalConnections(nn.Module):
             source_h, source_w = self._get_grid_size(source)
             target_h, target_w = self._get_grid_size(target)
             
-            # 차원 계산
             patches_h = source_h // patch_size
             patches_w = source_w // patch_size
             target_patch_h = target_h // patches_h
             target_patch_w = target_w // patches_w
 
-            # 1. 패치 추출 [B, num_patches, pixels_per_patch]
+            # 1. 패치 추출
             source_patches = F.unfold(
                 source_spikes.unsqueeze(1),
                 kernel_size=patch_size,
                 stride=patch_size
-            ).transpose(1, 2)
+            ).transpose(1, 2)  # [B, num_patches, pixels_per_source_patch]
             
-            # 2. Linear 변환 [B, num_patches, pixels_per_target_patch]
-            # source_patches: [B, num_patches, pixels_per_source_patch]
-            # patch_linear: [num_patches, pixels_per_target_patch, pixels_per_source_patch]
-            output = torch.einsum('bns,nts->bnt', source_patches, self.patch_linear[conn_key])
+            # 2. 현재 W_dyn으로 Linear 변환 (배치 차원 포함)
+            output = torch.einsum('bns,bnts->bnt', source_patches, self.patch_linear_dyn[conn_key])
+            # [B, num_patches, pixels_per_target_patch]
             
             # 3. LayerNorm
             output_normalized = self.patch_layernorms[conn_key](output)
             
-            # 4. Softmax 가중치 [B, num_patches, pixels_per_target_patch]
+            # 4. Softmax 가중치
             weights = F.softmax(output_normalized / self.axon_temperature, dim=-1)
 
             # 5. 패치별 Affine 변환
@@ -136,10 +169,10 @@ class AxonalConnections(nn.Module):
             biases = self.patch_biases[conn_key].view(1, -1)
             affine_scalars = gates * patch_sums + biases  # [B, num_patches]
             
-            # 6. 최종 출력 [B, num_patches, pixels_per_target_patch]
+            # 6. 최종 출력
             final_patches = weights * affine_scalars.unsqueeze(-1)
             
-            # 7. 타겟 그리드 재구성 [B, target_h, target_w]
+            # 7. 타겟 그리드 재구성
             target_output = F.fold(
                 final_patches.transpose(1, 2),
                 output_size=(target_h, target_w),
@@ -154,6 +187,115 @@ class AxonalConnections(nn.Module):
                 axonal_inputs[target] += target_output
         
         return axonal_inputs
+
+    def update_stdp_weights(self, node_spikes: Dict[str, torch.Tensor]):
+        """
+        Phase 3: 다음 CLK용 W_dyn 업데이트
+        """
+        for conn in self.connections:
+            source = conn["source"]
+            target = conn["target"]
+            
+            if source not in node_spikes or node_spikes[source] is None:
+                continue
+            
+            source_spikes = node_spikes[source]
+            conn_key = f"{source}_to_{target}"
+            patch_size = conn.get("patch_size", 4)
+            
+            if source_spikes.dim() == 2:
+                source_spikes = source_spikes.unsqueeze(0)
+
+            # Grid 크기 계산
+            source_h, source_w = self._get_grid_size(source)
+            target_h, target_w = self._get_grid_size(target)
+            
+            patches_h = source_h // patch_size
+            patches_w = source_w // patch_size
+            target_patch_h = target_h // patches_h
+            target_patch_w = target_w // patches_w
+
+            # 1. 패치 추출
+            source_patches = F.unfold(
+                source_spikes.unsqueeze(1),
+                kernel_size=patch_size,
+                stride=patch_size
+            ).transpose(1, 2)  # [B, num_patches, pixels_per_source_patch]
+            
+            # 2. 타겟 노드의 스파이크도 가져오기
+            if target not in node_spikes or node_spikes[target] is None:
+                continue
+            
+            target_spikes = node_spikes[target]
+            if target_spikes.dim() == 2:
+                target_spikes = target_spikes.unsqueeze(0)
+            
+            # 타겟 패치 추출 (target grid 크기 기준)
+            target_patches = F.unfold(
+                target_spikes.unsqueeze(1),
+                kernel_size=(target_patch_h, target_patch_w),
+                stride=(target_patch_h, target_patch_w)
+            ).transpose(1, 2)  # [B, num_patches, pixels_per_target_patch]
+            
+            # 3. W_fast 계산 (실제 스파이크 사용)
+            W_fast = self._compute_stdp_delta(conn_key, source_patches, target_patches)
+            
+            # 4. W_dyn 업데이트: W_dyn(t+1) = W_dyn(t) + W_fast(t)
+            self.patch_linear_dyn[conn_key] = self.patch_linear_dyn[conn_key] + W_fast
+            
+            # 5. Traces 업데이트 (다음 CLK용)
+            self._update_traces(conn_key, source_patches, target_patches)
+
+    def _compute_stdp_delta(self, conn_key: str, source_patches: torch.Tensor, output_patches: torch.Tensor) -> torch.Tensor:
+        """
+        STDP 가중치 변화 계산: eligibility trace 기반 (배치 차원 포함, 배치 독립성 보장)
+        """
+        # 각 배치 샘플별로 독립적으로 현재 활동도 사용 (배치 평균 없음)
+        pre_current = source_patches  # [B, num_patches, source_size]
+        post_current = output_patches  # [B, num_patches, target_size]
+        
+        # STDP 계산 (각 배치 샘플별로 독립적)
+        # LTP: post * pre_trace (pre before post)
+        ltp_delta = self.A_plus * torch.einsum('bnt,bns->bnts', post_current, self.pre_traces[conn_key])
+        
+        # LTD: post_trace * pre (post before pre)  
+        ltd_delta = self.A_minus * torch.einsum('bnt,bns->bnts', self.post_traces[conn_key], pre_current)
+        
+        stdp_delta = ltp_delta - ltd_delta
+        
+        # 가중치 변화량 제한 (안정성)
+        stdp_delta = torch.clamp(stdp_delta, -0.01, 0.01)
+        
+        return stdp_delta
+
+    def _update_traces(self, conn_key: str, source_patches: torch.Tensor, output_patches: torch.Tensor, dt: float = 1.0):
+        """
+        Eligibility traces 업데이트 (배치 차원 포함, 배치 독립성 보장)
+        """
+        # 각 배치 샘플별로 독립적으로 현재 활동도 사용 (배치 평균 없음)
+        pre_current = source_patches  # [B, num_patches, source_size]
+        post_current = output_patches  # [B, num_patches, target_size]
+        
+        # 지수 감쇠 업데이트
+        decay_pre = torch.exp(-dt / self.tau_pre)
+        decay_post = torch.exp(-dt / self.tau_post)
+        
+        # 배치 차원을 포함하여 traces 업데이트 (각 배치 샘플별로 독립적)
+        self.pre_traces[conn_key] = self.pre_traces[conn_key] * decay_pre + pre_current
+        self.post_traces[conn_key] = self.post_traces[conn_key] * decay_post + post_current
+
+    def reset_stdp_state(self, batch_size: int = 1):
+        """STDP 상태 리셋 (에피소드 시작 시, 배치 차원 포함)"""
+        for conn_key in self.pre_traces:
+            self.pre_traces[conn_key] = torch.zeros_like(self.pre_traces[conn_key])
+            self.post_traces[conn_key] = torch.zeros_like(self.post_traces[conn_key])
+            # W_dyn을 W_base로 리셋 (배치 차원 추가)
+            base_weights = self.patch_linear_base[conn_key]
+            self.patch_linear_dyn[conn_key] = base_weights.unsqueeze(0).expand(batch_size, -1, -1, -1).clone()
+    
+    def reset_state_batch(self, batch_size: int):
+        """배치 차원을 포함한 전체 상태 초기화"""
+        self._initialize_dynamic_weights(batch_size)
     
 class SCSSystem(nn.Module):
     """
@@ -200,7 +342,7 @@ class SCSSystem(nn.Module):
         target_tokens: Optional[torch.Tensor] = None,  # [B, target_seq_len]
         attention_mask: Optional[torch.Tensor] = None,  # [B, input_seq_len]
         training: bool = True,
-        scheduled_sampling_prob: float = 1.0,  # Teacher forcing 확률
+        scheduled_sampling_prob: float = 1.0,  # Teacher forcing 확률 
         max_output_length: Optional[int] = None,
         tensorboard_logger: Optional[Any] = None
     ) -> Dict[str, Any]:
@@ -236,16 +378,21 @@ class SCSSystem(nn.Module):
         for clk in range(self.max_clk):
             final_clk = clk
             
-            # Phase 1: 스파이크 계산 및 상태 업데이트 (수정됨)
+            # ====== PHASE 1: 스파이크 계산 ======
             pure_spikes, spikes_with_grad = self._compute_spikes()
             all_spikes_for_reg.append(spikes_with_grad)
+            
+            # ====== PHASE 2: 현재 W_dyn으로 상태 업데이트 ======
             external_input = self._get_external_input_at_clk(
                 input_tokens, clk, attention_mask
             )
             self._update_states(external_input, pure_spikes, spikes_with_grad)
-            final_acc_spikes = pure_spikes.get(self.acc_node) # 순전파 값이므로 pure_spikes 사용
+            final_acc_spikes = pure_spikes.get(self.acc_node)
             
-            # Phase 2: TimingManager 업데이트
+            # ====== PHASE 3: 다음 CLK용 W_dyn 업데이트 (STDP) ======
+            self._update_stdp_weights(spikes_with_grad)
+            
+            # ====== PHASE 4: TimingManager 업데이트 ======
             self.timing_manager.step(
                 current_clk=clk,
                 acc_node_spikes=final_acc_spikes,
@@ -254,7 +401,7 @@ class SCSSystem(nn.Module):
                 target_seq_len=target_seq_len
             )
             
-            # Phase 3: 출력 생성 및 저장
+            # ====== PHASE 5: 출력 생성 및 저장 ======
             active_mask = self.timing_manager.get_active_mask()
             if active_mask.any():
                 current_generated_length = self.timing_manager.generated_length
@@ -311,6 +458,15 @@ class SCSSystem(nn.Module):
             'processing_info': processing_info,
             'decoder_sequences': self.decoder_sequences
         }
+
+    def _update_stdp_weights(self, spikes_with_grad: Dict[str, torch.Tensor]):
+        """
+        Phase 3: 다음 CLK용 STDP 가중치 업데이트
+        """
+        self.axonal_connections.update_stdp_weights(spikes_with_grad)
+        
+        # Local connections도 STDP 적용하려면 여기서 추가
+        # self._update_local_stdp_weights(spikes_with_grad)
     
     def _update_outputs_and_decoder(
         self,
@@ -539,6 +695,9 @@ class SCSSystem(nn.Module):
             dtype=torch.long, 
             device=self.device
         )
+        
+        # STDP 상태 리셋 (배치 차원 포함)
+        self.axonal_connections.reset_state_batch(batch_size)
     
     def _get_orthogonal_regularization(self) -> torch.Tensor:
         """

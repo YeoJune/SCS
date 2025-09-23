@@ -263,11 +263,8 @@ class AxonalConnections(nn.Module):
         
         stdp_delta = ltp_delta - ltd_delta
         
-        # 가중치 변화량 제한 (안정성)
-        stdp_delta = torch.clamp(stdp_delta, -0.01, 0.01)
-        
         return stdp_delta
-        
+
     def _update_traces(self, conn_key: str, source_patches: torch.Tensor, target_patches: torch.Tensor, dt: float = 1.0):
         """
         Eligibility traces 업데이트 (배치 차원 포함, 배치 독립성 보장)

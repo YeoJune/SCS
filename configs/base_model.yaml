@@ -42,6 +42,10 @@ axonal_connections:
   bias_init_mean: 1.0
   bias_init_std: 0.0
   axon_temperature: 0.4
+  tau_pre: 20.0
+  tau_post: 20.0
+  A_plus: 0.01
+  A_minus: 0.012
   connections:
     - source: "IN"
       target: "OUT"

@@ -67,6 +67,10 @@ class AxonalConnectionsConfig(BaseModel):
     bias_init_mean: float = Field(default=0.0)
     bias_init_std: float = Field(default=0.01)
     axon_temperature: float = Field(default=0.1)
+    tau_pre: float = Field(default=20.0)
+    tau_post: float = Field(default=20.0)
+    A_plus: float = Field(default=0.01)
+    A_minus: float = Field(default=0.012)
     connections: List[AxonalConnectionConfig]
 
 

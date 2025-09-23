@@ -86,6 +86,10 @@ class ModelBuilder:
                 bias_init_mean=config.axonal_connections.bias_init_mean,
                 bias_init_std=config.axonal_connections.bias_init_std,
                 axon_temperature=config.axonal_connections.axon_temperature,
+                tau_pre=config.axonal_connections.tau_pre,
+                tau_post=config.axonal_connections.tau_post,
+                A_plus=config.axonal_connections.A_plus,
+                A_minus=config.axonal_connections.A_minus,
                 device=device
             )
             

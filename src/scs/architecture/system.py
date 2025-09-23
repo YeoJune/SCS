@@ -246,13 +246,13 @@ class AxonalConnections(nn.Module):
             # 5. Traces 업데이트 (다음 CLK용)
             self._update_traces(conn_key, source_patches, target_patches)
 
-    def _compute_stdp_delta(self, conn_key: str, source_patches: torch.Tensor, output_patches: torch.Tensor) -> torch.Tensor:
+    def _compute_stdp_delta(self, conn_key: str, source_patches: torch.Tensor, target_patches: torch.Tensor) -> torch.Tensor:
         """
         STDP 가중치 변화 계산: eligibility trace 기반 (배치 차원 포함, 배치 독립성 보장)
         """
         # 각 배치 샘플별로 독립적으로 현재 활동도 사용 (배치 평균 없음)
         pre_current = source_patches  # [B, num_patches, source_size]
-        post_current = output_patches  # [B, num_patches, target_size]
+        post_current = target_patches  # [B, num_patches, target_size]
         
         # STDP 계산 (각 배치 샘플별로 독립적)
         # LTP: post * pre_trace (pre before post)

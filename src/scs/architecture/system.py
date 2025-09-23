@@ -267,18 +267,18 @@ class AxonalConnections(nn.Module):
         stdp_delta = torch.clamp(stdp_delta, -0.01, 0.01)
         
         return stdp_delta
-
-    def _update_traces(self, conn_key: str, source_patches: torch.Tensor, output_patches: torch.Tensor, dt: float = 1.0):
+        
+    def _update_traces(self, conn_key: str, source_patches: torch.Tensor, target_patches: torch.Tensor, dt: float = 1.0):
         """
         Eligibility traces 업데이트 (배치 차원 포함, 배치 독립성 보장)
         """
-        # 각 배치 샘플별로 독립적으로 현재 활동도 사용 (배치 평균 없음)
+        # 현재 활동도 (배치별)
         pre_current = source_patches  # [B, num_patches, source_size]
-        post_current = output_patches  # [B, num_patches, target_size]
+        post_current = target_patches  # [B, num_patches, target_size]
         
-        # 지수 감쇠 업데이트
-        decay_pre = torch.exp(-dt / self.tau_pre)
-        decay_post = torch.exp(-dt / self.tau_post)
+        # 지수 감쇠 업데이트 - Tensor로 변환
+        decay_pre = torch.exp(torch.tensor(-dt / self.tau_pre, device=pre_current.device))
+        decay_post = torch.exp(torch.tensor(-dt / self.tau_post, device=post_current.device))
         
         # 배치 차원을 포함하여 traces 업데이트 (각 배치 샘플별로 독립적)
         self.pre_traces[conn_key] = self.pre_traces[conn_key] * decay_pre + pre_current

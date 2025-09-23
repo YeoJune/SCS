@@ -188,18 +188,18 @@ class AxonalConnections(nn.Module):
         
         return axonal_inputs
 
-    def update_stdp_weights(self, node_spikes: Dict[str, torch.Tensor]):
+    def update_stdp_weights(self, prev_spikes: Dict[str, torch.Tensor], current_spikes: Dict[str, torch.Tensor]):
         """
-        Phase 3: 다음 CLK용 W_dyn 업데이트
+        Phase 3: W_dyn 업데이트
         """
         for conn in self.connections:
             source = conn["source"]
             target = conn["target"]
-            
-            if source not in node_spikes or node_spikes[source] is None:
+
+            if source not in prev_spikes or prev_spikes[source] is None:
                 continue
             
-            source_spikes = node_spikes[source]
+            source_spikes = prev_spikes[source]
             conn_key = f"{source}_to_{target}"
             patch_size = conn.get("patch_size", 4)
             
@@ -223,10 +223,10 @@ class AxonalConnections(nn.Module):
             ).transpose(1, 2)  # [B, num_patches, pixels_per_source_patch]
             
             # 2. 타겟 노드의 스파이크도 가져오기
-            if target not in node_spikes or node_spikes[target] is None:
+            if target not in current_spikes or current_spikes[target] is None:
                 continue
-            
-            target_spikes = node_spikes[target]
+
+            target_spikes = current_spikes[target]
             if target_spikes.dim() == 2:
                 target_spikes = target_spikes.unsqueeze(0)
             
@@ -374,9 +374,14 @@ class SCSSystem(nn.Module):
         
         for clk in range(self.max_clk):
             final_clk = clk
+
             
             # ====== PHASE 1: 스파이크 계산 ======
             pure_spikes, spikes_with_grad = self._compute_spikes()
+            if all_spikes_for_reg:
+                prev_spikes = all_spikes_for_reg[-1]
+            else:
+                prev_spikes = None
             all_spikes_for_reg.append(spikes_with_grad)
             
             # ====== PHASE 2: 현재 W_dyn으로 상태 업데이트 ======
@@ -386,8 +391,9 @@ class SCSSystem(nn.Module):
             self._update_states(external_input, pure_spikes, spikes_with_grad)
             final_acc_spikes = pure_spikes.get(self.acc_node)
             
-            # ====== PHASE 3: 다음 CLK용 W_dyn 업데이트 (STDP) ======
-            self._update_stdp_weights(spikes_with_grad)
+            # ====== PHASE 3: W_dyn 업데이트 (STDP) ======
+            if prev_spikes is not None:
+                self._update_stdp_weights(prev_spikes, spikes_with_grad)
             
             # ====== PHASE 4: TimingManager 업데이트 ======
             self.timing_manager.step(
@@ -456,14 +462,14 @@ class SCSSystem(nn.Module):
             'decoder_sequences': self.decoder_sequences
         }
 
-    def _update_stdp_weights(self, spikes_with_grad: Dict[str, torch.Tensor]):
+    def _update_stdp_weights(self, prev_spikes: Dict[str, torch.Tensor], spikes_with_grad: Dict[str, torch.Tensor]):
         """
         Phase 3: 다음 CLK용 STDP 가중치 업데이트
         """
-        self.axonal_connections.update_stdp_weights(spikes_with_grad)
-        
+        self.axonal_connections.update_stdp_weights(prev_spikes, spikes_with_grad)
+
         # Local connections도 STDP 적용하려면 여기서 추가
-        # self._update_local_stdp_weights(spikes_with_grad)
+        # self._update_local_stdp_weights(prev_spikes, spikes_with_grad)
     
     def _update_outputs_and_decoder(
         self,

@@ -125,20 +125,6 @@ class SCSTensorBoardLogger:
                 if param.grad is not None:
                     self.writer.add_histogram(f"Gradients{suffix}/{name}", param.grad.detach().cpu(), self.epoch)
     
-    def log_weight_heatmaps(self, model, step: Optional[int] = None):
-        """노드 가중치 히트맵 로깅"""
-        if not self.should_log("weight_heatmaps"):
-            return
-        
-        step = step if step is not None else self.epoch
-        
-        try:
-            weight_fig = self.visualizer.create_weight_heatmaps_figure(model)
-            self.writer.add_figure('Weight_Heatmaps/Node_Influences', weight_fig, step)
-            plt.close(weight_fig)
-        except Exception as e:
-            warnings.warn(f"가중치 히트맵 로깅 중 오류: {e}")
-    
     def log_processing_info_figures(self, all_spike_patterns: List[Dict[str, np.ndarray]], step: Optional[int] = None):
         """처리 정보 시각화 로깅"""
         if not self.should_log("processing_info"):

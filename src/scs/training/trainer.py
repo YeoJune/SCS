@@ -334,24 +334,6 @@ class SCSTrainer:
         if self.tb_logger:
             self.tb_logger.log_training_step(batch_metrics, loss.item())
 
-            if (self.tb_logger.should_log("axonal_heatmaps")):
-                try:
-                    if 'axonal_parameters' in processing_info:
-                        self.tb_logger.log_axonal_heatmaps(
-                            processing_info['axonal_parameters'], 
-                            step=self.tb_logger.global_step
-                        )
-                except Exception as e:
-                    pass
-            if (self.tb_logger.should_log("weight_heatmaps")):
-                try:
-                    self.tb_logger.log_weight_heatmaps(
-                        self.model,
-                        step=self.tb_logger.global_step
-                    )
-                except Exception as e:
-                    pass
-
         return loss.item(), batch_metrics
 
     def _validate_epoch(self, val_loader: DataLoader) -> Dict[str, float]:

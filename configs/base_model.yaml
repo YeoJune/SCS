@@ -28,7 +28,7 @@ spike_dynamics:
   ema_alpha: 0.1
 
 # === 연결성 설정 ===
-connectivity:
+local_connectivity:
   local_distance: 5
   excitatory_ratio: 0.8
   g_inhibitory: 4.0

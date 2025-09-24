@@ -57,15 +57,14 @@ class TimingManager:
         # 학습용 타겟 타이밍 (스칼라)
         self.target_start_clk = None
         self.target_end_clk = None
-        
+
     def step(
         self,
         current_clk: int,
         acc_node_spikes: torch.Tensor,
         training: bool,
         input_seq_len: int,
-        target_seq_len: int,
-        tokens_generated_this_clk: int = 0  # 새 매개변수
+        target_seq_len: int
     ):
         """모든 상태 업데이트를 이 메서드에서 통합 처리"""
         self.current_clk = current_clk
@@ -90,10 +89,9 @@ class TimingManager:
         newly_ended = end_mask & ~self.output_ended
         self.output_ended = self.output_ended | newly_ended
         
-        # 4. 생성 길이 업데이트 (실제 토큰 생성 시에만)
-        if tokens_generated_this_clk > 0:
-            active_samples = self.output_started & ~self.output_ended
-            self.generated_length[active_samples] += tokens_generated_this_clk
+        # 4. 생성 길이 업데이트
+        is_generating = self.output_started & ~self.output_ended
+        self.generated_length = self.generated_length + is_generating.long()
         
         # 5. 학습용 타겟 타이밍 결정 (한 번만)
         if training and self.target_start_clk is None:

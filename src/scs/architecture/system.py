@@ -311,8 +311,6 @@ class SCSSystem(nn.Module):
         output_node: str = "PFC",
         acc_node: str = "ACC",
         max_clk: int = 500,
-        input_interval: int = 1,    # N CLK마다 입력 처리
-        output_interval: int = 1,   # N CLK마다 출력 업데이트
         eos_token_id: int = 1,
         device: str = "cuda"
     ):
@@ -323,8 +321,6 @@ class SCSSystem(nn.Module):
         self.output_node = output_node
         self.acc_node = acc_node
         self.max_clk = max_clk
-        self.input_interval = input_interval
-        self.output_interval = output_interval
         self.eos_token_id = eos_token_id
         
         self.nodes = nn.ModuleDict(nodes)
@@ -379,6 +375,7 @@ class SCSSystem(nn.Module):
         for clk in range(self.max_clk):
             final_clk = clk
 
+            
             # ====== PHASE 1: 스파이크 계산 ======
             pure_spikes, spikes_with_grad = self._compute_spikes()
             if all_spikes_for_reg:
@@ -398,33 +395,31 @@ class SCSSystem(nn.Module):
             if prev_spikes is not None:
                 self._update_stdp_weights(prev_spikes, spikes_with_grad)
             
-            # ====== PHASE 5: 출력 생성 및 저장 ======
-            tokens_generated = 0
-            active_mask = self.timing_manager.get_active_mask()
-
-            if active_mask.any() and (clk % self.output_interval == 0):
-                current_generated_length = self.timing_manager.generated_length
-                max_len_for_decoder = current_generated_length.max().item()
-                max_len_for_decoder = min(max_len_for_decoder, self.decoder_window_size)
-                decoder_batch = self.decoder_sequences[:, :max_len_for_decoder]
-                
-                logits = self._generate_logits(spikes_with_grad, decoder_batch, batch_size)
-                
-                self._update_outputs_and_decoder(
-                    logits, all_logits, self.decoder_sequences,
-                    target_tokens, training, scheduled_sampling_prob
-                )
-                tokens_generated = active_mask.sum().item()
-
             # ====== PHASE 4: TimingManager 업데이트 ======
             self.timing_manager.step(
                 current_clk=clk,
                 acc_node_spikes=final_acc_spikes,
                 training=training,
                 input_seq_len=input_seq_len,
-                target_seq_len=target_seq_len,
-                tokens_generated_this_clk=tokens_generated
+                target_seq_len=target_seq_len
             )
+            
+            # ====== PHASE 5: 출력 생성 및 저장 ======
+            active_mask = self.timing_manager.get_active_mask()
+            if active_mask.any():
+                current_generated_length = self.timing_manager.generated_length
+                max_len_for_decoder = current_generated_length.max().item()
+                
+                if max_len_for_decoder > 0:
+                    max_len_for_decoder = min(max_len_for_decoder, self.decoder_window_size)
+                    decoder_batch = self.decoder_sequences[:, :max_len_for_decoder]
+                    
+                    logits = self._generate_logits(spikes_with_grad, decoder_batch, batch_size)
+                    
+                    self._update_outputs_and_decoder(
+                        logits, all_logits, self.decoder_sequences,
+                        target_tokens, training, scheduled_sampling_prob
+                    )
             
             # 조기 종료 조건
             if self.timing_manager.all_ended:
@@ -583,20 +578,25 @@ class SCSSystem(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
     ) -> Optional[torch.Tensor]:
         """
-        v2.0: 윈도우 기반 입력 처리 (N CLK 간격 지원)
-        """
-        # N CLK마다만 입력 처리
-        if clk % self.input_interval != 0:
-            return None
+        v2.0: 윈도우 기반 입력 처리
         
+        Args:
+            input_schedule: [B, seq_len] 형태의 입력 시퀀스
+            clk: 현재 CLK
+            attention_mask: [B, seq_len] 형태의 어텐션 마스크 (선택적)
+            
+        Returns:
+            external_input: [B, H, W] 형태의 막전위 패턴 또는 None
+        """
         if input_schedule is None:
             return None
         
         batch_size, seq_len = input_schedule.shape
         window_size = self.input_interface.window_size
         
-        # 윈도우 추출 (기존 로직 동일)
+        # 윈도우 추출
         if clk < seq_len:
+            # 현재 CLK까지의 토큰들로 윈도우 구성
             start_idx = max(0, clk + 1 - window_size)
             end_idx = clk + 1
             
@@ -605,6 +605,7 @@ class SCSSystem(nn.Module):
             # 윈도우 크기에 맞춰 패딩 (필요한 경우)
             actual_len = current_window.shape[1]
             if actual_len < window_size:
+                # 앞쪽을 PAD 토큰(0)으로 패딩
                 pad_size = window_size - actual_len
                 padding = torch.full((batch_size, pad_size), self.pad_token_id, dtype=torch.long, device=current_window.device)
                 current_window = torch.cat([padding, current_window], dim=1)
@@ -616,8 +617,10 @@ class SCSSystem(nn.Module):
                     mask_pad = torch.zeros(batch_size, pad_size, dtype=torch.bool, device=window_mask.device)
                     window_mask = torch.cat([mask_pad, window_mask], dim=1)
                 
+                # 마스크가 False인 위치는 PAD 토큰으로 설정
                 current_window = current_window * window_mask.long()
             
+            # InputInterface v2.0 호출
             external_input = self.input_interface(current_window)
             return external_input
         
@@ -663,11 +666,13 @@ class SCSSystem(nn.Module):
 
     def _generate_logits(self, current_spikes: Dict[str, torch.Tensor], decoder_input_ids: torch.Tensor, batch_size: int) -> torch.Tensor:
         """출력 인터페이스를 통한 로짓 생성"""
+        # OutputInterface 윈도우 업데이트
         output_spikes = current_spikes[self.output_node]
         self.output_interface.update_hidden_window(output_spikes, batch_size)
         
+        # 로짓 생성
         all_output_logits = self.output_interface(decoder_input_ids)
-        return all_output_logits[:, -1, :]
+        return all_output_logits[:, -1, :]  # 마지막 위치의 로짓만 반환
         
     def reset_state(self, batch_size: int = 1):
         """전체 시스템 상태 초기화"""
@@ -678,6 +683,7 @@ class SCSSystem(nn.Module):
 
         self.output_interface.reset_state(batch_size)
 
+        # Local connections STSP 상태 리셋 추가
         for local_conn in self.local_connections.values():
             local_conn.reset_state(batch_size)
 
@@ -688,6 +694,7 @@ class SCSSystem(nn.Module):
             device=self.device
         )
         
+        # STDP 상태 리셋
         self.axonal_connections.reset_state_batch(batch_size)
     
     def _get_orthogonal_regularization(self) -> torch.Tensor:

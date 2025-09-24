@@ -53,8 +53,6 @@ class ModelBuilder:
                     refractory_adaptive_factor=config.spike_dynamics.refractory_adaptive_factor,
                     surrogate_beta=config.spike_dynamics.surrogate_beta,
                     ema_alpha=config.spike_dynamics.ema_alpha,
-                    influence_init_mean=config.spike_dynamics.influence_init_mean,
-                    influence_init_std=config.spike_dynamics.influence_init_std,
                     device=device
                 )
                 

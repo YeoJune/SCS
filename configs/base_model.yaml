@@ -26,9 +26,6 @@ spike_dynamics:
   refractory_adaptive_factor: 10.0
   surrogate_beta: 12.0
   ema_alpha: 0.1
-  influence_init_mean: 1.0
-  influence_init_std: 0.01
-  excitatory_ratio: 0.8
 
 # === 연결성 설정 ===
 connectivity:

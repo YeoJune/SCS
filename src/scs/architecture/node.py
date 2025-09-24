@@ -236,6 +236,7 @@ class LocalConnectivity(nn.Module):
         tau_F: int = 30,         # CLK 단위 (칼슘 감쇠 시간상수)
         U: float = 0.2,          # 기본 칼슘 수준
         excitatory_ratio: float = 0.8,
+        g_inhibitory: float = 4.0,
         connection_sigma: float = 1.5,
         weight_mean: float = 1.0,
         weight_std: float = 0.1,
@@ -252,13 +253,13 @@ class LocalConnectivity(nn.Module):
         self.device = device
         
         # 연결 구조 및 초기 가중치 생성
-        self._initialize_connections(excitatory_ratio, connection_sigma, weight_mean, weight_std)
+        self._initialize_connections(excitatory_ratio, g_inhibitory, connection_sigma, weight_mean, weight_std)
         
         # STSP 상태 (reset_state에서 초기화)
         self.u = None
         self.x = None
 
-    def _initialize_connections(self, excitatory_ratio, connection_sigma, weight_mean, weight_std):
+    def _initialize_connections(self, excitatory_ratio, g_inhibitory, connection_sigma, weight_mean, weight_std):
         """
         연결 구조 생성 및 가중치 초기화 - incoming 관점
         
@@ -301,7 +302,7 @@ class LocalConnectivity(nn.Module):
                         
                         # 해당 source가 억제성이면 음수
                         if not source_excitatory[si, sj]:
-                            weights[i, j, di, dj] = -torch.abs(weights[i, j, di, dj])
+                            weights[i, j, di, dj] *= -g_inhibitory
         
         # 연결 마스킹
         weights = weights * connection_mask

@@ -43,10 +43,11 @@ class SpikeDynamicsConfig(BaseModel):
     ema_alpha: float = Field(default=0.1)
 
 
-class ConnectivityConfig(BaseModel):
+class LocalConnectivityConfig(BaseModel):
     """연결성 설정"""
     local_distance: int = Field(default=7)
     excitatory_ratio: float = Field(default=1.0)
+    g_inhibitory: float = Field(default=4.0)
     tau_D: int = Field(default=5)
     tau_F: int = Field(default=30)
     U: float = Field(default=0.2)
@@ -312,7 +313,7 @@ class AppConfig(BaseModel):
     brain_regions: Dict[str, BrainRegionConfig]
     axonal_connections: AxonalConnectionsConfig
     spike_dynamics: SpikeDynamicsConfig
-    connectivity: ConnectivityConfig
+    local_connectivity: LocalConnectivityConfig
     io_system: IOSystemConfig
     
     # 타이밍 관련

@@ -252,13 +252,13 @@ class LocalConnectivity(nn.Module):
         self.device = device
         
         # 연결 구조 및 초기 가중치 생성
-        self._initialize_connections(excitatory_ratio, connection_sigma)
+        self._initialize_connections(excitatory_ratio, connection_sigma, weight_mean, weight_std)
         
         # STSP 상태 (reset_state에서 초기화)
         self.u = None
         self.x = None
 
-    def _initialize_connections(self, excitatory_ratio, connection_sigma):
+    def _initialize_connections(self, excitatory_ratio, connection_sigma, weight_mean, weight_std):
         """
         연결 구조 생성 및 가중치 초기화 - incoming 관점
         
@@ -285,7 +285,7 @@ class LocalConnectivity(nn.Module):
         
         # 가중치 초기화: [H, W, local_distance, local_distance]
         # weights[i,j,di,dj] = source(i+di-center, j+dj-center) → target(i,j) 가중치
-        weights = self.weight_mean + torch.randn(self.grid_height, self.grid_width, self.local_distance, self.local_distance) * self.weight_std
+        weights = weight_mean + torch.randn(self.grid_height, self.grid_width, self.local_distance, self.local_distance) * weight_std
         
         # Dale's Law 적용: 각 source의 모든 outgoing이 같은 부호
         for i in range(self.grid_height):

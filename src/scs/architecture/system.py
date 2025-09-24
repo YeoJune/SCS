@@ -399,8 +399,9 @@ class SCSSystem(nn.Module):
                 self._update_stdp_weights(prev_spikes, spikes_with_grad)
             
             # ====== PHASE 5: 출력 생성 및 저장 ======
-            tokens_generated = 0  # 이번 CLK에서 생성된 토큰 수
+            tokens_generated = 0
             active_mask = self.timing_manager.get_active_mask()
+
             if active_mask.any():
                 current_generated_length = self.timing_manager.generated_length
                 max_len_for_decoder = current_generated_length.max().item()
@@ -409,10 +410,10 @@ class SCSSystem(nn.Module):
                     max_len_for_decoder = min(max_len_for_decoder, self.decoder_window_size)
                     decoder_batch = self.decoder_sequences[:, :max_len_for_decoder]
                     
-                    logits = self._generate_logits(spikes_with_grad, decoder_batch, batch_size)
-                    
-                    # 토큰 생성 여부 확인
-                    if clk % self.output_interval == 0 or (clk - 1) % self.output_interval == 0:
+                    # output_interval마다만 로짓 생성 및 토큰 업데이트
+                    if clk % self.output_interval == 0:
+                        logits = self._generate_logits(spikes_with_grad, decoder_batch, batch_size)
+                        
                         self._update_outputs_and_decoder(
                             logits, all_logits, self.decoder_sequences,
                             target_tokens, training, scheduled_sampling_prob
@@ -665,19 +666,13 @@ class SCSSystem(nn.Module):
             node.post_spike_update(spikes)
 
     def _generate_logits(self, current_spikes: Dict[str, torch.Tensor], decoder_input_ids: torch.Tensor, batch_size: int) -> torch.Tensor:
-        """출력 인터페이스를 통한 로짓 생성 (N CLK 간격 지원)"""
+        """출력 인터페이스를 통한 로짓 생성 - 호출될 때마다 윈도우 업데이트"""
         
-        # output_interval마다만 윈도우 업데이트
-        if hasattr(self, 'output_clk_counter'):
-            self.output_clk_counter += 1
-        else:
-            self.output_clk_counter = 0
+        # 호출될 때마다 윈도우 업데이트 (호출 빈도가 이미 제어됨)
+        output_spikes = current_spikes[self.output_node]
+        self.output_interface.update_hidden_window(output_spikes, batch_size)
         
-        if self.output_clk_counter % self.output_interval == 0:
-            output_spikes = current_spikes[self.output_node]
-            self.output_interface.update_hidden_window(output_spikes, batch_size)
-        
-        # 로짓 생성은 매번 (마지막 업데이트된 윈도우 기준)
+        # 로짓 생성
         all_output_logits = self.output_interface(decoder_input_ids)
         return all_output_logits[:, -1, :]
         

@@ -47,7 +47,7 @@ from .config import (
     AppConfig, IOSystemConfig, InputInterfaceConfig, OutputInterfaceConfig,
     BrainRegionConfig, SystemRolesConfig, TaskConfig, DataConfig, DataLoadingConfig,
     DataLoaderConfig, TokenizerConfig, TimingManagerConfig, LearningConfig, GradualUnfreezingConfig,
-    SpikeDynamicsConfig, ConnectivityConfig, AxonalConnectionsConfig, EvaluationConfig,
+    SpikeDynamicsConfig, LocalConnectivityConfig, AxonalConnectionsConfig, EvaluationConfig,
     CheckpointConfig, LoggingConfig, MLMConfig,  # MLMConfig 추가
     load_and_validate_config, ModelBuilder
 )
@@ -91,7 +91,7 @@ __all__ = [
     "AppConfig", "IOSystemConfig", "InputInterfaceConfig", "OutputInterfaceConfig",
     "BrainRegionConfig", "SystemRolesConfig", "TaskConfig", "DataConfig", "DataLoadingConfig",
     "DataLoaderConfig", "TokenizerConfig", "TimingManagerConfig", "LearningConfig", "GradualUnfreezingConfig",
-    "SpikeDynamicsConfig", "ConnectivityConfig", "AxonalConnectionsConfig", "EvaluationConfig",
+    "SpikeDynamicsConfig", "LocalConnectivityConfig", "AxonalConnectionsConfig", "EvaluationConfig",
     "CheckpointConfig", "LoggingConfig", "MLMConfig",
     "load_and_validate_config", "ModelBuilder",
     

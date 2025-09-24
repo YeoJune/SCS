@@ -690,9 +690,6 @@ class SCSSystem(nn.Module):
             device=self.device
         )
         
-        # 출력 카운터 리셋
-        self.output_clk_counter = 0
-        
         self.axonal_connections.reset_state_batch(batch_size)
     
     def _get_orthogonal_regularization(self) -> torch.Tensor:

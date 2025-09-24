@@ -55,15 +55,20 @@ class ModelBuilder:
                     ema_alpha=config.spike_dynamics.ema_alpha,
                     influence_init_mean=config.spike_dynamics.influence_init_mean,
                     influence_init_std=config.spike_dynamics.influence_init_std,
-                    excitatory_ratio=config.spike_dynamics.excitatory_ratio,
                     device=device
                 )
                 
                 local_connections[region_name] = LocalConnectivity(
                     grid_height=grid_height,
                     grid_width=grid_width,
-                    distance_tau=region_config.distance_tau,
-                    max_distance=config.connectivity.local["max_distance"],
+                    local_distance=config.connectivity.local_distance,
+                    tau_D=config.connectivity.tau_D,
+                    tau_F=config.connectivity.tau_F,
+                    U=config.connectivity.U,
+                    excitatory_ratio=config.connectivity.excitatory_ratio,
+                    connection_sigma=config.connectivity.connection_sigma,
+                    weight_mean=config.connectivity.weight_mean,
+                    weight_std=config.connectivity.weight_std,
                     device=device
                 )
             

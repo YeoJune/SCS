@@ -463,13 +463,16 @@ class SCSSystem(nn.Module):
         }
 
     def _update_stdp_weights(self, prev_spikes: Dict[str, torch.Tensor], spikes_with_grad: Dict[str, torch.Tensor]):
-        """
-        Phase 3: 다음 CLK용 STDP 가중치 업데이트
-        """
-        self.axonal_connections.update_stdp_weights(prev_spikes, spikes_with_grad)
+            """
+            Phase 3: STDP + STSP 동시 업데이트
+            """
+            # Axonal STDP 업데이트
+            self.axonal_connections.update_stdp_weights(prev_spikes, spikes_with_grad)
 
-        # Local connections도 STDP 적용하려면 여기서 추가
-        # self._update_local_stdp_weights(prev_spikes, spikes_with_grad)
+            # Local STSP 업데이트 추가
+            for node_name in self.nodes.keys():
+                if node_name in prev_spikes and prev_spikes[node_name] is not None:
+                    self.local_connections[node_name].update_stsp(prev_spikes[node_name])
     
     def _update_outputs_and_decoder(
         self,
@@ -639,25 +642,13 @@ class SCSSystem(nn.Module):
             spikes_for_backward[node_name] = spikes_with_grad
         return pure_spikes_for_forward, spikes_for_backward
     
-    def _update_states(
-        self,
-        external_input: Optional[torch.Tensor],
-        pure_spikes: Dict[str, torch.Tensor],
-        spikes_with_grad: Dict[str, torch.Tensor]
-    ):
-        """
-        입력 통합 및 상태 업데이트.
-        그래디언트 경로 유지를 위해 axonal_connections에는 spikes_with_grad를 사용합니다.
-        """
-        # 축삭 연결(노드 간 연결)에는 반드시 그래디언트 경로가 있는 텐서를 사용합니다.
+    def _update_states(self, external_input, pure_spikes, spikes_with_grad):
+        """Phase 2에서 상태 업데이트"""
         axonal_inputs = self.axonal_connections(spikes_with_grad)
         
         for node_name, node in self.nodes.items():
-            influence = self.nodes[node_name].influence_strength
-            # 지역 연결은 순전파 값이므로 pure_spikes를 사용해도 무방합니다.
-            internal_input = self.local_connections[node_name](
-                spikes_with_grad[node_name] * influence
-            )
+            # influence 제거: spikes_with_grad 직접 사용
+            internal_input = self.local_connections[node_name](spikes_with_grad[node_name])
             
             axonal_input = axonal_inputs.get(node_name)
             node_external_input = external_input if node_name == self.input_node else None
@@ -668,7 +659,7 @@ class SCSSystem(nn.Module):
                 axonal_input=axonal_input
             )
         
-        # 스파이크 후처리 (순전파 값이므로 pure_spikes 사용)
+        # 스파이크 후처리
         for node_name, node in self.nodes.items():
             spikes = pure_spikes[node_name]
             node.post_spike_update(spikes)
@@ -682,7 +673,7 @@ class SCSSystem(nn.Module):
         # 로짓 생성
         all_output_logits = self.output_interface(decoder_input_ids)
         return all_output_logits[:, -1, :]  # 마지막 위치의 로짓만 반환
-    
+        
     def reset_state(self, batch_size: int = 1):
         """전체 시스템 상태 초기화"""
         self.timing_manager.reset(batch_size, self.device)
@@ -692,6 +683,10 @@ class SCSSystem(nn.Module):
 
         self.output_interface.reset_state(batch_size)
 
+        # Local connections STSP 상태 리셋 추가
+        for local_conn in self.local_connections.values():
+            local_conn.reset_state(batch_size)
+
         self.decoder_sequences = torch.full(
             (batch_size, self.decoder_window_size + 1), 
             self.pad_token_id, 
@@ -699,7 +694,7 @@ class SCSSystem(nn.Module):
             device=self.device
         )
         
-        # STDP 상태 리셋 (배치 차원 포함)
+        # STDP 상태 리셋
         self.axonal_connections.reset_state_batch(batch_size)
     
     def _get_orthogonal_regularization(self) -> torch.Tensor:

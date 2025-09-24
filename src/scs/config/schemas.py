@@ -43,13 +43,18 @@ class SpikeDynamicsConfig(BaseModel):
     ema_alpha: float = Field(default=0.1)
     influence_init_mean: float = Field(default=1.0)
     influence_init_std: float = Field(default=0.01)
-    excitatory_ratio: float = Field(default=1.0)
 
 
 class ConnectivityConfig(BaseModel):
     """연결성 설정"""
-    local: Dict[str, int] = Field(default={"max_distance": 5})
-
+    local_distance: int = Field(default=7)
+    excitatory_ratio: float = Field(default=1.0)
+    tau_D: int = Field(default=5)
+    tau_F: int = Field(default=30)
+    U: float = Field(default=0.2)
+    connection_sigma: float = Field(default=1.5)
+    weight_mean: float = Field(default=1.0)
+    weight_std: float = Field(default=0.1)
 
 class AxonalConnectionConfig(BaseModel):
     """개별 축삭 연결 설정"""

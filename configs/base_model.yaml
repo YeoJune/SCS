@@ -32,8 +32,14 @@ spike_dynamics:
 
 # === 연결성 설정 ===
 connectivity:
-  local:
-    max_distance: 3
+  local_distance: 7
+  excitatory_ratio: 0.8
+  tau_D: 5
+  tau_F: 30
+  U: 0.2
+  connection_sigma: 1.5
+  weight_mean: 1.0
+  weight_std: 0.1
 
 # === 축삭 연결 (IN→OUT 단일 연결) ===
 axonal_connections:

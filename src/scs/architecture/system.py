@@ -405,18 +405,16 @@ class SCSSystem(nn.Module):
             if active_mask.any() and (clk % self.output_interval == 0):
                 current_generated_length = self.timing_manager.generated_length
                 max_len_for_decoder = current_generated_length.max().item()
+                max_len_for_decoder = min(max_len_for_decoder, self.decoder_window_size)
+                decoder_batch = self.decoder_sequences[:, :max_len_for_decoder]
                 
-                if max_len_for_decoder > 0:
-                    max_len_for_decoder = min(max_len_for_decoder, self.decoder_window_size)
-                    decoder_batch = self.decoder_sequences[:, :max_len_for_decoder]
-                    
-                    logits = self._generate_logits(spikes_with_grad, decoder_batch, batch_size)
-                    
-                    self._update_outputs_and_decoder(
-                        logits, all_logits, self.decoder_sequences,
-                        target_tokens, training, scheduled_sampling_prob
-                    )
-                    tokens_generated = active_mask.sum().item()
+                logits = self._generate_logits(spikes_with_grad, decoder_batch, batch_size)
+                
+                self._update_outputs_and_decoder(
+                    logits, all_logits, self.decoder_sequences,
+                    target_tokens, training, scheduled_sampling_prob
+                )
+                tokens_generated = active_mask.sum().item()
 
             # ====== PHASE 4: TimingManager 업데이트 ======
             self.timing_manager.step(

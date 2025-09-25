@@ -405,9 +405,9 @@ class SCSSystem(nn.Module):
                 # ====== PHASE 2: 상태 업데이트 ======
                 self._update_states(external_input, pure_spikes, spikes_with_grad)
                 
-                # ====== PHASE 3: STDP 업데이트 ======
+                # ====== PHASE 3: STP 업데이트 ======
                 if prev_spikes is not None:
-                    self._update_stdp_weights(prev_spikes, spikes_with_grad)
+                    self._update_stp_weights(prev_spikes, spikes_with_grad)
                 
                 # 출력 노드만 지수 가중 평균(LPF) 누적 (호환성을 위해 딕셔너리 형식 유지)
                 if self.output_node in spikes_with_grad:
@@ -497,7 +497,7 @@ class SCSSystem(nn.Module):
             'decoder_sequences': self.decoder_sequences
         }
 
-    def _update_stdp_weights(self, prev_spikes: Dict[str, torch.Tensor], spikes_with_grad: Dict[str, torch.Tensor]):
+    def _update_stp_weights(self, prev_spikes: Dict[str, torch.Tensor], spikes_with_grad: Dict[str, torch.Tensor]):
             """
             Phase 3: STDP + STSP 동시 업데이트
             """
@@ -506,8 +506,8 @@ class SCSSystem(nn.Module):
 
             # Local STSP 업데이트 추가
             for node_name in self.nodes.keys():
-                if node_name in prev_spikes and prev_spikes[node_name] is not None:
-                    self.local_connections[node_name].update_stsp(prev_spikes[node_name])
+                if node_name in spikes_with_grad and spikes_with_grad[node_name] is not None:
+                    self.local_connections[node_name].update_stsp(spikes_with_grad[node_name])
     
     def _update_outputs_and_decoder(
         self,

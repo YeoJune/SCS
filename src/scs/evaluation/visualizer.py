@@ -416,7 +416,7 @@ class SCSVisualizer:
         attention_mask: Optional[torch.Tensor] = None,
         max_t_blocks: int = 10
     ) -> List[Dict[str, np.ndarray]]:
-        """스파이크 패턴 수집 유틸리티 함수 - T-block 기반 처리"""
+        """스파이크 패턴 수집 유틸리티 함수 - CLK 단위로 저장"""
         model.reset_state(batch_size=1)
         all_spike_patterns = []
         
@@ -454,6 +454,14 @@ class SCSVisualizer:
                     if prev_spikes is not None:
                         model._update_stdp_weights(prev_spikes, spikes_with_grad)
                     
+                    # 각 CLK의 스파이크 패턴 저장
+                    if pure_spikes:
+                        spike_pattern = {}
+                        for node_name, spikes in pure_spikes.items():
+                            if spikes is not None:
+                                spike_pattern[node_name] = spikes[0].cpu().numpy()
+                        all_spike_patterns.append(spike_pattern)
+                    
                     # 스파이크 누적 (T CLK 평균용)
                     if not t_block_spikes_sum:
                         t_block_spikes_sum = {k: v.clone() for k, v in spikes_with_grad.items()}
@@ -466,14 +474,6 @@ class SCSVisualizer:
                 # === T-block 완료: 평균 스파이크 계산 ===
                 avg_spikes = {k: v / T for k, v in t_block_spikes_sum.items()}
                 final_acc_spikes = avg_spikes.get(model.acc_node)
-
-                # 평균 스파이크 패턴 저장
-                if avg_spikes:
-                    spike_pattern = {}
-                    for node_name, spikes in avg_spikes.items():
-                        if spikes is not None:
-                            spike_pattern[node_name] = spikes[0].cpu().numpy()
-                    all_spike_patterns.append(spike_pattern)
                 
                 # TimingManager 업데이트 (T-block 단위)
                 model.timing_manager.step(
@@ -492,7 +492,7 @@ class SCSVisualizer:
                 logger.warning(f"T-block {t_block} 처리 중 오류: {e}")
                 break
         
-        logger.info(f"총 {len(all_spike_patterns)}개 T-block 패턴 수집 완료")
+        logger.info(f"총 {len(all_spike_patterns)}개 CLK 패턴 수집 완료")
         return all_spike_patterns
 
     def generate_all_visualizations(self, model, test_loader, output_dir: Path):
@@ -518,11 +518,11 @@ class SCSVisualizer:
                 
                 node_names = list(all_spike_patterns[0].keys())
                 
-                # 2. 스파이크 패턴 이미지들 저장 (T-block 단위)
+                # 2. 스파이크 패턴 이미지들 저장 (CLK 단위)
                 spike_dir = vis_dir / "spike_patterns"
                 figures_with_clk = self.create_spike_pattern_images_batch(all_spike_patterns, node_names)
-                for fig, t_block in figures_with_clk:
-                    self.save_figure(fig, spike_dir / f"t_block_{t_block:03d}.png")
+                for fig, clk in figures_with_clk:
+                    self.save_figure(fig, spike_dir / f"clk_{clk:03d}.png")
 
                 # 3. 스파이크 애니메이션 저장
                 try:

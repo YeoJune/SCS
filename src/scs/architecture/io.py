@@ -81,6 +81,9 @@ class InputInterface(nn.Module):
         
         total_energy = self.grid_height * self.grid_width * self.input_power
         scaled_pattern = pattern_probs * total_energy
+
+        # 1이 넘는 값은 1로 클램핑
+        scaled_pattern = torch.clamp(scaled_pattern, max=1.0)
         
         return scaled_pattern.view(-1, self.grid_height, self.grid_width)
 

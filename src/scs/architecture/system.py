@@ -386,9 +386,6 @@ class SCSSystem(nn.Module):
             input_probs = self._get_external_input_at_clk(
                 input_tokens, t_block, attention_mask
             )
-            # input_prob의 통계량 출력
-            print(input_probs)
-            print(input_probs.mean().item(), input_probs.std().item())
             
             # T CLK 동안 출력 노드 스파이크 LPF 누적용 (호환성을 위해 딕셔너리 형식 유지)
             t_block_spikes_lpf = {}

@@ -344,7 +344,7 @@ class SCSSystem(nn.Module):
         tensorboard_logger: Optional[Any] = None
     ) -> Dict[str, Any]:
         """
-        완전한 시퀀스 처리: CLK 루프를 내부에서 관리
+        T-block 단위 시퀀스 처리: T=20 CLK마다 입출력
         """
         batch_size = input_tokens.shape[0]
         input_seq_len = input_tokens.shape[1]
@@ -355,10 +355,14 @@ class SCSSystem(nn.Module):
         else:
             target_seq_len = max_output_length or input_seq_len
         
-        # 시스템 초기화
+        # 시스템 초기화 (전체 시퀀스에 대해 한 번만)
         self.reset_state(batch_size)
         
-        all_spikes_for_reg = [] # 스파이크 정보를 저장할 리스트
+        # T-block 설정
+        T = 20  # CLK per T-block
+        max_t_blocks = self.max_clk // T
+        
+        all_spikes_for_reg = []  # 스파이크 정보를 저장할 리스트
 
         # 출력 상태 초기화
         vocab_size = self.output_interface.vocab_size
@@ -368,43 +372,63 @@ class SCSSystem(nn.Module):
             device=self.device
         )
         
-        # CLK 루프
-        final_clk = 0
+        # T-block 루프
+        final_t_block = 0
         final_acc_spikes = None
         
-        for clk in range(self.max_clk):
-            final_clk = clk
+        for t_block in range(max_t_blocks):
+            final_t_block = t_block
 
-            
-            # ====== PHASE 1: 스파이크 계산 ======
-            pure_spikes, spikes_with_grad = self._compute_spikes()
-            if all_spikes_for_reg:
-                prev_spikes = all_spikes_for_reg[-1]
-            else:
-                prev_spikes = None
-            all_spikes_for_reg.append(spikes_with_grad)
-            
-            # ====== PHASE 2: 현재 W_dyn으로 상태 업데이트 ======
-            external_input = self._get_external_input_at_clk(
-                input_tokens, clk, attention_mask
+            # === T-block 시작: 입력 확률 계산 ===
+            input_probs = self._get_external_input_at_clk(
+                input_tokens, t_block, attention_mask
             )
-            self._update_states(external_input, pure_spikes, spikes_with_grad)
-            final_acc_spikes = pure_spikes.get(self.acc_node)
             
-            # ====== PHASE 3: W_dyn 업데이트 (STDP) ======
-            if prev_spikes is not None:
-                self._update_stdp_weights(prev_spikes, spikes_with_grad)
+            # T CLK 동안 스파이크 누적용
+            t_block_spikes_sum = {}
+            prev_spikes = None
             
-            # ====== PHASE 4: TimingManager 업데이트 ======
+            # === T CLK 내부 루프 ===
+            for clk_in_t in range(T):
+                # 확률적 입력 샘플링 (매 CLK마다 새로 샘플링)
+                external_input = None
+                if input_probs is not None:
+                    external_input = torch.bernoulli(input_probs)
+                
+                # ====== PHASE 1: 스파이크 계산 ======
+                pure_spikes, spikes_with_grad = self._compute_spikes()
+                all_spikes_for_reg.append(spikes_with_grad)
+                
+                # ====== PHASE 2: 상태 업데이트 ======
+                self._update_states(external_input, pure_spikes, spikes_with_grad)
+                
+                # ====== PHASE 3: STDP 업데이트 ======
+                if prev_spikes is not None:
+                    self._update_stdp_weights(prev_spikes, spikes_with_grad)
+                
+                # 스파이크 누적 (T CLK 평균용)
+                if not t_block_spikes_sum:
+                    t_block_spikes_sum = {k: v.clone() for k, v in spikes_with_grad.items()}
+                else:
+                    for k in t_block_spikes_sum:
+                        t_block_spikes_sum[k] += spikes_with_grad[k]
+                
+                prev_spikes = spikes_with_grad
+            
+            # === T-block 완료: 평균 스파이크 계산 ===
+            avg_spikes = {k: v / T for k, v in t_block_spikes_sum.items()}
+            final_acc_spikes = avg_spikes.get(self.acc_node)
+            
+            # ====== PHASE 4: TimingManager 업데이트 (T 단위) ======
             self.timing_manager.step(
-                current_clk=clk,
+                current_clk=t_block,  # T-block을 CLK 파라미터로 전달
                 acc_node_spikes=final_acc_spikes,
                 training=training,
                 input_seq_len=input_seq_len,
                 target_seq_len=target_seq_len
             )
             
-            # ====== PHASE 5: 출력 생성 및 저장 ======
+            # ====== PHASE 5: 출력 생성 및 저장 (T 단위) ======
             active_mask = self.timing_manager.get_active_mask()
             if active_mask.any():
                 current_generated_length = self.timing_manager.generated_length
@@ -414,7 +438,8 @@ class SCSSystem(nn.Module):
                     max_len_for_decoder = min(max_len_for_decoder, self.decoder_window_size)
                     decoder_batch = self.decoder_sequences[:, :max_len_for_decoder]
                     
-                    logits = self._generate_logits(spikes_with_grad, decoder_batch, batch_size)
+                    # 평균 스파이크로 로짓 생성
+                    logits = self._generate_logits(avg_spikes, decoder_batch, batch_size)
                     
                     self._update_outputs_and_decoder(
                         logits, all_logits, self.decoder_sequences,
@@ -436,15 +461,16 @@ class SCSSystem(nn.Module):
         
         # 처리 정보 구성
         processing_info = {
-            "processing_clk": final_clk + 1,
+            "processing_clk": final_t_block * T + T,  # 실제 처리된 CLK 수
+            "processing_t_blocks": final_t_block + 1,
             "batch_size": batch_size,
             "sequence_length": output_logits.shape[1],
             "training_mode": training,
             "tokens_generated": max_generated,
             "output_started": self.timing_manager.output_started.any().item(),
-            "convergence_achieved": final_clk < self.max_clk - 1,
+            "convergence_achieved": final_t_block < max_t_blocks - 1,
             "final_acc_activity": final_acc_spikes.mean().item() if final_acc_spikes is not None else 0.0,
-            "generation_clks": torch.arange(max_generated, device=self.device),
+            "generation_t_blocks": torch.arange(max_generated, device=self.device),
             "orthogonal_reg_loss": self._get_orthogonal_regularization(),
             "all_spikes": all_spikes_for_reg
         }

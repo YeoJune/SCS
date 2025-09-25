@@ -360,7 +360,7 @@ class SCSSystem(nn.Module):
         
         # T-block 설정
         T = 5  # CLK per T-block
-        max_t_blocks = self.max_clk // T
+        max_t_blocks = self.max_clk
         
         all_spikes_for_reg = []  # 스파이크 정보를 저장할 리스트
 

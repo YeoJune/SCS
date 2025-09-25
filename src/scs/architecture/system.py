@@ -506,8 +506,8 @@ class SCSSystem(nn.Module):
 
             # Local STSP 업데이트 추가
             for node_name in self.nodes.keys():
-                if node_name in spikes_with_grad and spikes_with_grad[node_name] is not None:
-                    self.local_connections[node_name].update_stsp(spikes_with_grad[node_name])
+                if node_name in prev_spikes and prev_spikes[node_name] is not None:
+                    self.local_connections[node_name].update_stsp(prev_spikes[node_name])
     
     def _update_outputs_and_decoder(
         self,

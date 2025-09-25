@@ -442,7 +442,7 @@ class SCSVisualizer:
                     # 확률적 입력 샘플링 (매 CLK마다 새로 샘플링)
                     external_input = None
                     if input_probs is not None:
-                        external_input = 1.2 * torch.bernoulli(input_probs)
+                        external_input = 1.1 * torch.bernoulli(input_probs) # margin
                     
                     # ====== PHASE 1: 스파이크 계산 ======
                     pure_spikes, spikes_with_grad = model._compute_spikes()

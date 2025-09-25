@@ -359,7 +359,7 @@ class SCSSystem(nn.Module):
         self.reset_state(batch_size)
         
         # T-block 설정
-        T = 1  # CLK per T-block
+        T = 2  # CLK per T-block
         max_t_blocks = self.max_clk
         
         all_spikes_for_reg = []  # 스파이크 정보를 저장할 리스트

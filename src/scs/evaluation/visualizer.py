@@ -421,7 +421,7 @@ class SCSVisualizer:
         all_spike_patterns = []
         
         # T-block 설정 (system.py와 동일)
-        T = 1  # CLK per T-block
+        T = 2  # CLK per T-block
         max_t_blocks = min(max_t_blocks, model.max_clk // T)
         
         logger.info(f"스파이크 패턴 수집 시작 (최대 {max_t_blocks} T-blocks, {max_t_blocks * T} CLK)")

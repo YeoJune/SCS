@@ -143,6 +143,10 @@ class OutputInterface(nn.Module):
     
     def update_hidden_window(self, grid_spikes: Tensor, batch_size: int):
         current_hidden = self._create_hidden_vector(grid_spikes)
+
+        # current_hidden의 통계량 출력
+        print(f"Hidden vector stats - mean: {current_hidden.mean().item():.4f}, std: {current_hidden.std().item():.4f}")
+
         if self.hidden_window is None or self.hidden_window.shape[0] != batch_size:
             self.reset_state(batch_size)
         

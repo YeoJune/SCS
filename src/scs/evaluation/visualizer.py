@@ -530,10 +530,6 @@ class SCSVisualizer:
                     self.save_animation(anim, vis_dir / "spike_animation_complete.gif")
                 except Exception as e:
                     logger.warning(f"애니메이션 생성 실패: {e}")
-                
-                # 4. 가중치 히트맵 저장
-                weight_fig = self.create_weight_heatmaps_figure(model)
-                self.save_figure(weight_fig, vis_dir / "weight_heatmaps" / "node_influence_weights.png")
 
                 # 5. 처리 정보 시각화 저장
                 activity_fig, spike_count_fig = self.create_processing_info_figures(all_spike_patterns)
@@ -541,30 +537,6 @@ class SCSVisualizer:
                 self.save_figure(activity_fig, info_dir / "node_activity_timeline.png")
                 self.save_figure(spike_count_fig, info_dir / "total_spikes_timeline.png")
                 
-                # 6. Axonal 프루닝 시각화 저장 (Bias 지원 업데이트)
-                if hasattr(model, '_get_axonal_parameters'):
-                    axonal_data = model._get_axonal_parameters()
-                    axonal_dir = vis_dir / "axonal_heatmaps"
-
-                    for conn_data in axonal_data:
-                        gates = conn_data['gates']
-                        transforms = conn_data['transforms']
-                        biases = conn_data['biases']
-                        conn_name = conn_data['connection_name']
-
-                        if biases is not None:
-                            # 4뷰 시각화 (Gate, Bias, Source-fixed, Target-fixed)
-                            gate_fig, bias_fig, source_fig, target_fig = self.create_axonal_figures(
-                                gates, transforms, biases, conn_name
-                            )
-
-                            self.save_figure(gate_fig, axonal_dir / f"{conn_name}_gates.png")
-                            self.save_figure(bias_fig, axonal_dir / f"{conn_name}_biases.png")  # 새로 추가
-                            self.save_figure(source_fig, axonal_dir / f"{conn_name}_source_fixed.png")
-                            self.save_figure(target_fig, axonal_dir / f"{conn_name}_target_fixed.png")
-                        else:
-                            logger.warning(f"Bias 데이터가 없습니다: {conn_name}")
-
             logger.info(f"모든 시각화 저장 완료: {vis_dir}")
             
         except Exception as e:

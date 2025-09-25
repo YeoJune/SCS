@@ -360,6 +360,9 @@ class SCSSystem(nn.Module):
         
         # T-block 설정
         T = 5  # CLK per T-block
+        # LPF 필터 시정수 (임시 구현)
+        lpf_alpha = 0.5  # 지수 가중 평균 계수 (0 < α < 1)
+        
         max_t_blocks = self.max_clk
         
         all_spikes_for_reg = []  # 스파이크 정보를 저장할 리스트
@@ -384,8 +387,8 @@ class SCSSystem(nn.Module):
                 input_tokens, t_block, attention_mask
             )
             
-            # T CLK 동안 스파이크 누적용
-            t_block_spikes_sum = {}
+            # T CLK 동안 출력 노드 스파이크 LPF 누적용 (호환성을 위해 딕셔너리 형식 유지)
+            t_block_spikes_lpf = {}
             prev_spikes = None
             
             # === T CLK 내부 루프 ===
@@ -406,18 +409,24 @@ class SCSSystem(nn.Module):
                 if prev_spikes is not None:
                     self._update_stdp_weights(prev_spikes, spikes_with_grad)
                 
-                # 스파이크 누적 (T CLK 평균용)
-                if not t_block_spikes_sum:
-                    t_block_spikes_sum = {k: v.clone() for k, v in spikes_with_grad.items()}
-                else:
-                    for k in t_block_spikes_sum:
-                        t_block_spikes_sum[k] += spikes_with_grad[k]
+                # 출력 노드만 지수 가중 평균(LPF) 누적 (호환성을 위해 딕셔너리 형식 유지)
+                if self.output_node in spikes_with_grad:
+                    output_spikes = spikes_with_grad[self.output_node]
+                    if self.output_node not in t_block_spikes_lpf:
+                        # 첫 번째 CLK: 초기값으로 설정
+                        t_block_spikes_lpf[self.output_node] = output_spikes.clone()
+                    else:
+                        # LPF 적용: LPF_State(t) = α * LPF_State(t-1) + (1-α) * spikes(t)
+                        t_block_spikes_lpf[self.output_node] = (
+                            lpf_alpha * t_block_spikes_lpf[self.output_node] + 
+                            (1 - lpf_alpha) * output_spikes
+                        )
                 
                 prev_spikes = spikes_with_grad
             
-            # === T-block 완료: 평균 스파이크 계산 ===
-            avg_spikes = {k: v / T for k, v in t_block_spikes_sum.items()}
-            final_acc_spikes = avg_spikes.get(self.acc_node)
+            # === T-block 완료: LPF 필터링된 스파이크 사용 ===
+            lpf_spikes = t_block_spikes_lpf  # 이미 LPF가 적용된 상태
+            final_acc_spikes = lpf_spikes.get(self.acc_node)
             
             # ====== PHASE 4: TimingManager 업데이트 (T 단위) ======
             self.timing_manager.step(
@@ -438,8 +447,8 @@ class SCSSystem(nn.Module):
                     max_len_for_decoder = min(max_len_for_decoder, self.decoder_window_size)
                     decoder_batch = self.decoder_sequences[:, :max_len_for_decoder]
                     
-                    # 평균 스파이크로 로짓 생성
-                    logits = self._generate_logits(avg_spikes, decoder_batch, batch_size)
+                    # LPF 필터링된 스파이크로 로짓 생성
+                    logits = self._generate_logits(lpf_spikes, decoder_batch, batch_size)
                     
                     self._update_outputs_and_decoder(
                         logits, all_logits, self.decoder_sequences,

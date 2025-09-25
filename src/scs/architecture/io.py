@@ -138,9 +138,6 @@ class OutputInterface(nn.Module):
     def _create_hidden_vector(self, grid_spikes: Tensor) -> Tensor:
         spikes_flat = grid_spikes.view(grid_spikes.shape[0], -1)
         hidden_vector = self.output_mapper(spikes_flat)
-        # hidden_vector 통계량 출력
-        print(f"Hidden vector stats - mean: {hidden_vector.mean().item():.4f}, std: {hidden_vector.std().item():.4f}")
-
         hidden_vector = self.hidden_norm(hidden_vector)
         return hidden_vector
     

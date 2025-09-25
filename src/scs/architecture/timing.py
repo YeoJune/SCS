@@ -78,7 +78,11 @@ class TimingManager:
             self.sync_ema_alpha * instant_sync + 
             (1 - self.sync_ema_alpha) * self.stable_sync_index
         )
-        
+
+        # 1.5. 학습용 타겟 타이밍 결정 (한 번만)
+        if training and self.target_start_clk is None:
+            self._determine_target_timing(input_seq_len, target_seq_len)
+            
         # 2. 출력 시작 결정 및 상태 업데이트
         start_mask = self._get_start_mask(current_clk, training, input_seq_len)
         newly_started = start_mask & ~self.output_started
@@ -92,10 +96,6 @@ class TimingManager:
         # 4. 생성 길이 업데이트
         is_generating = self.output_started & ~self.output_ended
         self.generated_length = self.generated_length + is_generating.long()
-        
-        # 5. 학습용 타겟 타이밍 결정 (한 번만)
-        if training and self.target_start_clk is None:
-            self._determine_target_timing(input_seq_len, target_seq_len)
 
     def _get_start_mask(self, current_clk: int, training: bool, input_seq_len: int) -> torch.Tensor:
         """출력 시작 조건을 만족하는 샘플들의 마스크 반환 [B]"""

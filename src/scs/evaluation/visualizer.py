@@ -452,7 +452,7 @@ class SCSVisualizer:
                     
                     # ====== PHASE 3: STDP 업데이트 ======
                     if prev_spikes is not None:
-                        model._update_stdp_weights(prev_spikes, spikes_with_grad)
+                        model._update_stp_weights(prev_spikes, spikes_with_grad)
                     
                     # 각 CLK의 스파이크 패턴 저장
                     if pure_spikes:

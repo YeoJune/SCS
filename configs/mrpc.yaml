@@ -21,15 +21,15 @@ system_roles:
 # === 뇌 영역 구성 (완전 오버라이드) ===
 brain_regions:
   IN:
-    grid_size: [64, 64]
+    grid_size: [32, 32]
     decay_rate: 0.85
     distance_tau: 1.0
   PASS:
-    grid_size: [64, 64]
+    grid_size: [32, 32]
     decay_rate: 0.85
     distance_tau: 1.0
   OUT:
-    grid_size: [64, 64]
+    grid_size: [32, 32]
     decay_rate: 0.85
     distance_tau: 1.0
 
@@ -56,8 +56,8 @@ task:
 # === 학습 설정 오버라이드 ===
 learning:
   epochs: 21
-  learning_rate: 5e-4
-  eta_min: 2e-4
+  learning_rate: 2e-4
+  eta_min: 1e-4
   max_clk_training: 138
   optimizer: "adamw"
   weight_decay: 1e-4
@@ -74,9 +74,9 @@ learning:
 
 timing_manager:
   train_fixed_ref: "start"
-  train_fixed_offset: 3
+  train_fixed_offset: 0
   evaluate_fixed_ref: "start"
-  evaluate_fixed_offset: 3
+  evaluate_fixed_offset: 0
   sync_ema_alpha: 0.1 # EMA 필터링 강도
   sync_threshold_start: 0.3 # 시작 임계값
   sync_threshold_end: 0.1 # 종료 임계값
@@ -86,7 +86,7 @@ timing_manager:
 
 # === 데이터 로딩 오버라이드 ===
 data_loading:
-  batch_size: 16
+  batch_size: 4
   tokenizer:
     name: "t5-small"
     max_length: 128

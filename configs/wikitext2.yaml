@@ -21,16 +21,16 @@ system_roles:
 # === 뇌 영역 구성 (완전 오버라이드) ===
 brain_regions:
   IN:
-    grid_size: [64, 64]
-    decay_rate: 0.8
+    grid_size: [32, 32]
+    decay_rate: 0.85
     distance_tau: 1.0
   OUT:
-    grid_size: [64, 64]
-    decay_rate: 0.8
+    grid_size: [32, 32]
+    decay_rate: 0.85
     distance_tau: 1.0
   PASS:
-    grid_size: [64, 64]
-    decay_rate: 0.8
+    grid_size: [32, 32]
+    decay_rate: 0.85
     distance_tau: 1.0
 
 # === 축삭 연결 (완전 오버라이드) ===
@@ -54,8 +54,8 @@ task:
   task_type: "pretraining"
   task_id: 1
   learning_style: "mlm" # MLM 학습 스타일
-  max_length: 512 # Pre-training용 긴 컨텍스트
-  stride: 256 # 50% overlap sliding window
+  max_length: 32 # Pre-training용 긴 컨텍스트
+  stride: 16 # 50% overlap sliding window
 
   # MLM 설정
   mlm_config:
@@ -69,14 +69,14 @@ task:
 
 # === 학습 설정 오버라이드 ===
 learning:
-  epochs: 5
-  learning_rate: 1e-3
-  eta_min: 5e-4
-  max_clk_training: 138
+  epochs: 11
+  learning_rate: 2e-4
+  eta_min: 1e-4
+  max_clk_training: 32
   optimizer: "adamw"
   weight_decay: 1e-4
-  eval_every: 1
-  save_every: 1
+  eval_every: 2
+  save_every: 10
   early_stopping_patience: 100
 
   # 점진적 커리큘럼 학습
@@ -87,9 +87,9 @@ learning:
 
 timing_manager:
   train_fixed_ref: "start"
-  train_fixed_offset: 3
+  train_fixed_offset: 0
   evaluate_fixed_ref: "start"
-  evaluate_fixed_offset: 3
+  evaluate_fixed_offset: 0
   sync_ema_alpha: 0.1 # EMA 필터링 강도
   sync_threshold_start: 0.3 # 시작 임계값
   sync_threshold_end: 0.1 # 종료 임계값
@@ -105,9 +105,9 @@ data_loading:
     max_length: 128
 
 data:
-  train_samples: -1
-  val_samples: -1
-  test_samples: -1
+  train_samples: 10000
+  val_samples: 1000
+  test_samples: 1000
 
 # === 평가 설정 ===
 evaluation:

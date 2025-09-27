@@ -98,7 +98,7 @@ class AxonalConnections(nn.Module):
             linear_weights = torch.zeros(num_patches, pixels_per_target_patch, pixels_per_source_patch, device=self.device)
 
             fan_in = pixels_per_source_patch
-            gain = math.sqrt(fan_in)
+            gain = fan_in ** 0.5
 
             for patch_idx in range(num_patches):
                 weight_matrix = torch.empty(pixels_per_target_patch, pixels_per_source_patch)

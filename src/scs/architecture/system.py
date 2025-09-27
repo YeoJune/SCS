@@ -96,10 +96,18 @@ class AxonalConnections(nn.Module):
             
             # Base Linear weights 초기화
             linear_weights = torch.zeros(num_patches, pixels_per_target_patch, pixels_per_source_patch, device=self.device)
+
+            fan_in = pixels_per_source_patch
+            gain = math.sqrt(fan_in)
+
             for patch_idx in range(num_patches):
                 weight_matrix = torch.empty(pixels_per_target_patch, pixels_per_source_patch)
-                nn.init.orthogonal_(weight_matrix)
+                
+                # nn.init.orthogonal_의 gain 파라미터를 직접 사용하여 스케일링
+                nn.init.orthogonal_(weight_matrix, gain=gain) 
+                
                 linear_weights[patch_idx] = weight_matrix
+
             self.patch_linear_base[conn_key] = nn.Parameter(linear_weights)
 
             # LayerNorm 초기화

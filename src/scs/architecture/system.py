@@ -359,9 +359,9 @@ class SCSSystem(nn.Module):
         self.reset_state(batch_size)
         
         # T-block 설정
-        T = 5  # CLK per T-block
+        T = 20  # CLK per T-block
         # LPF 필터 시정수 (임시 구현)
-        lpf_alpha = 0.3  # 지수 가중 평균 계수 (0 < α < 1)
+        lpf_alpha = 0.95  # 지수 가중 평균 계수 (0 < α < 1)
         
         max_t_blocks = self.max_clk
         

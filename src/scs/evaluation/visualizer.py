@@ -421,7 +421,7 @@ class SCSVisualizer:
         all_spike_patterns = []
         
         # T-block 설정 (system.py와 동일)
-        T = 5  # CLK per T-block
+        T = 20  # CLK per T-block
         max_t_blocks = min(max_t_blocks, model.max_clk)
         
         logger.info(f"스파이크 패턴 수집 시작 (최대 {max_t_blocks} T-blocks, {max_t_blocks * T} CLK)")
@@ -442,7 +442,16 @@ class SCSVisualizer:
                     # 확률적 입력 샘플링 (매 CLK마다 새로 샘플링)
                     external_input = None
                     if input_probs is not None:
-                        external_input = 1.1 * torch.bernoulli(input_probs) # margin
+                        # 순방향: 확률적 샘플링
+                        sampled_spikes = torch.bernoulli(input_probs)
+                        
+                        # 역방향: STE 트릭 적용
+                        # (sampled_spikes - input_probs).detach()는 순방향에서는 0에 가까운 작은 노이즈이지만,
+                        # 역방향에서는 sampled_spikes의 그래디언트 경로를 끊고 input_probs의 경로를 살려줍니다.
+                        # 즉, d(output)/d(input_probs) = 1 로 근사됩니다.
+                        external_input = (sampled_spikes - input_probs).detach() + input_probs
+
+                        external_input = external_input * 1.1 # margin
                     
                     # ====== PHASE 1: 스파이크 계산 ======
                     pure_spikes, spikes_with_grad = model._compute_spikes()

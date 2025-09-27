@@ -425,11 +425,15 @@ class SCSSystem(nn.Module):
                         # 첫 번째 CLK: 초기값으로 설정
                         t_block_spikes_lpf[self.output_node] = output_spikes.clone()
                     else:
-                        # LPF 적용: LPF_State(t) = α * LPF_State(t-1) + (1-α) * spikes(t)
-                        t_block_spikes_lpf[self.output_node] = (
-                            lpf_alpha * t_block_spikes_lpf[self.output_node] + 
-                            (1 - lpf_alpha) * output_spikes
-                        )
+                        # # LPF 적용: LPF_State(t) = α * LPF_State(t-1) + (1-α) * spikes(t)
+                        # t_block_spikes_lpf[self.output_node] = (
+                        #     lpf_alpha * t_block_spikes_lpf[self.output_node] + 
+                        #     (1 - lpf_alpha) * output_spikes
+                        # )
+
+                        # 그냥 평균
+                        t_block_spikes_lpf[self.output_node] = (t_block_spikes_lpf[self.output_node] * clk_in_t + output_spikes) / (clk_in_t + 1)
+                        
                 
                 prev_spikes = spikes_with_grad
             

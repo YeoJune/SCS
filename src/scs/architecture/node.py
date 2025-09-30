@@ -324,64 +324,40 @@ class LocalConnectivity(nn.Module):
 
     def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:
         """
-        einsum 기반 효율적 구현
+        F.conv2d 기반의 진정한 최적화 구현
         """
         B, H, W = grid_spikes.shape
         if self.u is None or self.u.shape[0] != B: 
             self.reset_state(B)
 
-        # 1. 입력 재구성
-        spikes_grouped = grid_spikes.view(
-            B, self.num_groups_h, self.group_h, 
-            self.num_groups_w, self.group_w
-        ).permute(0, 1, 3, 2, 4).contiguous().view(
-            B, self.num_groups, self.group_h, self.group_w
-        )
+        # 1. 입력 재구성: [B, H, W] -> [B * num_groups, 1, group_h, group_w]
+        # 이 과정은 피할 수 없으며, 효율적인 메모리 복사 연산입니다.
+        spikes_reshaped = self._reshape_input_for_grouped_conv(grid_spikes)
         
-        # 2. Unfold로 패치 추출
-        padding = self.local_distance // 2
-        spikes_flat = spikes_grouped.view(B * self.num_groups, 1, self.group_h, self.group_w)
-        
-        patches = F.unfold(
-            spikes_flat,
-            kernel_size=self.local_distance,
-            padding=padding
-        )  # [B*G, k*k, num_pixels]
-        
-        patches = patches.view(
-            B, self.num_groups, 
-            self.local_distance * self.local_distance, 
-            self.group_h * self.group_w
-        )  # [B, G, k*k, H_g*W_g]
-        
-        # 3. 유효 가중치
+        # 2. 유효 가중치 계산: [B, G, 1, k, k] -> [B*G, 1, k, k]
+        # STSP를 위한 동적 가중치 계산
         effective_weights = (self.u * self.x / self.U) * self.base_weights.unsqueeze(0)
-        # [B, G, 1, k, k] → [B, G, k*k]
-        weights_flat = effective_weights.squeeze(2).view(
-            B, self.num_groups, self.local_distance * self.local_distance
+        effective_weights_reshaped = effective_weights.view(
+            B * self.num_groups, 1, self.local_distance, self.local_distance
         )
         
-        # 4. einsum으로 가중합 계산
-        output_flat = torch.einsum('bgkp,bgk->bgp', patches, weights_flat)
-        # [B, G, H_g*W_g]
+        # 3. 단일 F.conv2d 호출 (핵심 최적화)
+        # unfold, einsum, fold의 모든 작업을 이 한 줄이 대체하며, 훨씬 빠릅니다.
+        padding = self.local_distance // 2
+        internal_input_reshaped = F.conv2d(
+            input=spikes_reshaped,
+            weight=effective_weights_reshaped,
+            padding=padding,
+            # 각 샘플, 각 그룹이 모두 독립적인 컨볼루션을 수행 (Depthwise Conv와 유사)
+            groups=B * self.num_groups 
+        )
         
-        # 5. Fold로 재구성
-        output_flat = output_flat.view(B * self.num_groups, 1, self.group_h * self.group_w)
-        output_reshaped = F.fold(
-            output_flat,
-            output_size=(self.group_h, self.group_w),
-            kernel_size=1,
-            stride=1
-        ).squeeze(1)  # [B*G, group_h, group_w]
-        
-        # 6. 그리드 재구성
-        output_grouped = output_reshaped.view(B, self.num_groups, self.group_h, self.group_w)
-        output = output_grouped.view(
-            B, self.num_groups_h, self.num_groups_w, 
-            self.group_h, self.group_w
-        ).permute(0, 1, 3, 2, 4).contiguous().view(B, H, W)
+        # 4. 출력 재구성: [B * G, 1, group_h, group_w] -> [B, H, W]
+        # 최종 결과를 원래 그리드 형태로 복원합니다.
+        output = self._reshape_output_to_grid(internal_input_reshaped, B, H, W)
         
         return output
+        
         
     def update_stsp(self, prev_spikes: torch.Tensor):
         """

@@ -324,30 +324,48 @@ class LocalConnectivity(nn.Module):
 
     def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:
         """
-        STSP 적용 및 그룹 컨볼루션 수행 (이전 코드와 동일, 최적화 유지)
+        완전 벡터화된 그룹 컨볼루션
         """
         B, H, W = grid_spikes.shape
-        if self.u is None or self.u.shape[0] != B: self.reset_state(B)
+        if self.u is None or self.u.shape[0] != B: 
+            self.reset_state(B)
 
-        # 1. 입력 재구성
-        spikes_reshaped = self._reshape_input_for_grouped_conv(grid_spikes)
+        # 1. 입력 재구성: [B, H, W] → [B, num_groups, group_h, group_w]
+        spikes_grouped = grid_spikes.view(
+            B, self.num_groups_h, self.group_h, 
+            self.num_groups_w, self.group_w
+        ).permute(0, 1, 3, 2, 4).contiguous().view(
+            B, self.num_groups, self.group_h, self.group_w
+        )
         
-        # 2. 유효 가중치 계산
+        # 2. 유효 가중치: [B, num_groups, 1, k, k]
         effective_weights = (self.u * self.x / self.U) * self.base_weights.unsqueeze(0)
-        effective_weights_reshaped = effective_weights.view(B * self.num_groups, 1, self.local_distance, self.local_distance)
-
-        # 3. 그룹 컨볼루션
+        
+        # 3. 각 그룹을 독립적인 "배치"로 처리
+        # [B, num_groups, group_h, group_w] → [B*num_groups, 1, group_h, group_w]
+        spikes_flat = spikes_grouped.view(B * self.num_groups, 1, self.group_h, self.group_w)
+        
+        # [B, num_groups, 1, k, k] → [B*num_groups, 1, k, k]
+        weights_flat = effective_weights.view(B * self.num_groups, 1, self.local_distance, self.local_distance)
+        
+        # 4. 각 (배치, 그룹) 조합마다 독립적인 1-채널 컨볼루션
         padding = self.local_distance // 2
-        internal_input_reshaped = F.conv2d(
-            input=spikes_reshaped,
-            weight=effective_weights_reshaped,
+        output_flat = F.conv2d(
+            input=spikes_flat,
+            weight=weights_flat,
             padding=padding,
             groups=B * self.num_groups
         )
         
-        # 4. 출력 재구성
-        return self._reshape_output_to_grid(internal_input_reshaped, B, H, W)
-
+        # 5. 출력 재구성: [B*num_groups, 1, group_h, group_w] → [B, H, W]
+        output_grouped = output_flat.view(B, self.num_groups, self.group_h, self.group_w)
+        output = output_grouped.view(
+            B, self.num_groups_h, self.num_groups_w, 
+            self.group_h, self.group_w
+        ).permute(0, 1, 3, 2, 4).contiguous().view(B, H, W)
+        
+        return output
+        
     def update_stsp(self, prev_spikes: torch.Tensor):
         """
         벡터화된 STSP 업데이트 (이전 코드와 유사하게 근사)
@@ -389,8 +407,4 @@ class LocalConnectivity(nn.Module):
         return grid_tensor.view(B, self.num_groups_h, self.group_h, self.num_groups_w, self.group_w)\
                           .permute(0, 1, 3, 2, 4).contiguous()\
                           .view(B * self.num_groups, 1, self.group_h, self.group_w)
-
-    def _reshape_output_to_grid(self, reshaped_tensor: torch.Tensor, B: int, H: int, W: int):
-        return reshaped_tensor.view(B, self.num_groups_h, self.num_groups_w, self.group_h, self.group_w)\
-                              .permute(0, 1, 3, 2, 4).contiguous()\
-                              .view(B, H, W)
+                          

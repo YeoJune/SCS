@@ -225,6 +225,7 @@ class SpikeNode(nn.Module):
 class LocalConnectivity(nn.Module):
     """
     지역적 연결성 모듈 with STSP (Short-Term Synaptic Plasticity)
+    base_weights는 모든 위치에서 공유, STSP 상태는 각 연결마다 독립적
     """
     
     def __init__(
@@ -261,16 +262,17 @@ class LocalConnectivity(nn.Module):
 
     def _initialize_connections(self, excitatory_ratio, g_inhibitory, connection_sigma, weight_mean, weight_std):
         """
-        연결 구조 생성 및 가중치 초기화 - incoming 관점
+        연결 구조 생성 및 가중치 초기화 - 공유 가중치 버전
         
-        incoming 관점 사용 이유: F.unfold()와 einsum()을 활용한 완전 벡터화 계산을 위해
-        outgoing 관점은 k×k 루프가 필요하여 GPU 병렬화 효율성이 현저히 떨어짐
+        base_weights는 [k, k] 크기로 모든 위치에서 공유
+        Dale's Law는 위치별 excitatory/inhibitory map으로 적용
         """
         
-        # Dale's Law를 위한 source 뉴런 분류
-        source_excitatory = torch.rand(self.grid_height, self.grid_width) < excitatory_ratio
+        # Dale's Law를 위한 source 뉴런 분류 (여전히 위치별로 다름)
+        source_excitatory = torch.rand(self.grid_height, self.grid_width, device=self.device) < excitatory_ratio
+        self.register_buffer('source_excitatory', source_excitatory)  # 학습 파라미터는 아니지만 저장 필요
         
-        # 거리 기반 연결 확률 계산 (기존과 동일)
+        # 거리 기반 연결 확률 계산
         center = self.local_distance // 2
         distances = torch.zeros(self.local_distance, self.local_distance)
         for i in range(self.local_distance):
@@ -282,31 +284,16 @@ class LocalConnectivity(nn.Module):
         
         connection_probs = torch.exp(-distances**2 / (2 * connection_sigma**2))
         connection_probs[center, center] = 0
-        connection_mask = torch.bernoulli(connection_probs)
+        connection_mask = torch.bernoulli(connection_probs).to(self.device)
+        self.register_buffer('connection_mask', connection_mask)  # 고정된 마스크
         
-        # 가중치 초기화: [H, W, local_distance, local_distance]
-        # weights[i,j,di,dj] = source(i+di-center, j+dj-center) → target(i,j) 가중치
-        weights = weight_mean + torch.randn(self.grid_height, self.grid_width, self.local_distance, self.local_distance) * weight_std
-        
-        # Dale's Law 적용: 각 source의 모든 outgoing이 같은 부호
-        for i in range(self.grid_height):
-            for j in range(self.grid_width):
-                for di in range(self.local_distance):
-                    for dj in range(self.local_distance):
-                        if di == center and dj == center:
-                            continue
-                        
-                        # Source 좌표 계산 (circular)
-                        si = (i + di - center) % self.grid_height
-                        sj = (j + dj - center) % self.grid_width
-                        
-                        # 해당 source가 억제성이면 음수
-                        if not source_excitatory[si, sj]:
-                            weights[i, j, di, dj] *= -g_inhibitory
-        
-        # 연결 마스킹
+        # 공유 가중치 초기화: [k, k] 크기만 (메모리 대폭 절감!)
+        weights = weight_mean + torch.randn(self.local_distance, self.local_distance, device=self.device) * weight_std
         weights = weights * connection_mask
         self.base_weights = nn.Parameter(weights)
+        
+        # g_inhibitory 저장 (Dale's Law 적용 시 사용)
+        self.g_inhibitory = g_inhibitory
     
     def reset_state(self, batch_size: int = 1):
         """STSP 상태 초기화"""
@@ -318,6 +305,44 @@ class LocalConnectivity(nn.Module):
             (batch_size, self.grid_height, self.grid_width, self.local_distance, self.local_distance),
             device=self.device
         )
+    
+    def _get_dale_weights(self):
+        """
+        Dale's Law를 적용한 가중치 생성
+        각 위치의 source 뉴런 타입에 따라 부호 결정
+        """
+        # base_weights를 [H, W, k, k]로 broadcast
+        weights = self.base_weights.unsqueeze(0).unsqueeze(0).expand(
+            self.grid_height, self.grid_width, -1, -1
+        ).clone()  # [H, W, k, k]
+        
+        center = self.local_distance // 2
+        
+        # 각 타겟 위치(i,j)에서 각 offset(di,dj)의 source 뉴런 타입 확인
+        for di in range(self.local_distance):
+            for dj in range(self.local_distance):
+                if di == center and dj == center:
+                    continue
+                
+                # 각 타겟 위치에 대한 source 좌표 계산 (vectorized)
+                i_indices = torch.arange(self.grid_height, device=self.device)
+                j_indices = torch.arange(self.grid_width, device=self.device)
+                
+                # Source 좌표 (circular)
+                si = (i_indices + di - center) % self.grid_height
+                sj = (j_indices.unsqueeze(0) + dj - center) % self.grid_width
+                
+                # 해당 source가 억제성인지 확인
+                is_inhibitory = ~self.source_excitatory[si.unsqueeze(1), sj]  # [H, W]
+                
+                # 억제성인 경우 음수로 변환
+                weights[:, :, di, dj] = torch.where(
+                    is_inhibitory,
+                    -torch.abs(weights[:, :, di, dj]) * self.g_inhibitory,
+                    torch.abs(weights[:, :, di, dj])
+                )
+        
+        return weights
     
     def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:
         """
@@ -334,8 +359,11 @@ class LocalConnectivity(nn.Module):
         if self.u is None or self.u.shape[0] != B:
             self.reset_state(B)
         
+        # Dale's Law가 적용된 가중치 생성
+        dale_weights = self._get_dale_weights()  # [H, W, k, k]
+        
         # STSP가 적용된 effective weights
-        effective_weights = (self.u * self.x / self.U) * self.base_weights
+        effective_weights = (self.u * self.x / self.U) * dale_weights  # [B, H, W, k, k]
         
         # Unfold를 사용한 이웃 패치 추출
         padding = self.local_distance // 2

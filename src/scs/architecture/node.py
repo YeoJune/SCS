@@ -324,13 +324,13 @@ class LocalConnectivity(nn.Module):
 
     def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:
         """
-        완전 벡터화된 그룹 컨볼루션
+        einsum 기반 효율적 구현
         """
         B, H, W = grid_spikes.shape
         if self.u is None or self.u.shape[0] != B: 
             self.reset_state(B)
 
-        # 1. 입력 재구성: [B, H, W] → [B, num_groups, group_h, group_w]
+        # 1. 입력 재구성
         spikes_grouped = grid_spikes.view(
             B, self.num_groups_h, self.group_h, 
             self.num_groups_w, self.group_w
@@ -338,27 +338,44 @@ class LocalConnectivity(nn.Module):
             B, self.num_groups, self.group_h, self.group_w
         )
         
-        # 2. 유효 가중치: [B, num_groups, 1, k, k]
-        effective_weights = (self.u * self.x / self.U) * self.base_weights.unsqueeze(0)
-        
-        # 3. 각 그룹을 독립적인 "배치"로 처리
-        # [B, num_groups, group_h, group_w] → [B*num_groups, 1, group_h, group_w]
+        # 2. Unfold로 패치 추출
+        padding = self.local_distance // 2
         spikes_flat = spikes_grouped.view(B * self.num_groups, 1, self.group_h, self.group_w)
         
-        # [B, num_groups, 1, k, k] → [B*num_groups, 1, k, k]
-        weights_flat = effective_weights.view(B * self.num_groups, 1, self.local_distance, self.local_distance)
+        patches = F.unfold(
+            spikes_flat,
+            kernel_size=self.local_distance,
+            padding=padding
+        )  # [B*G, k*k, num_pixels]
         
-        # 4. 각 (배치, 그룹) 조합마다 독립적인 1-채널 컨볼루션
-        padding = self.local_distance // 2
-        output_flat = F.conv2d(
-            input=spikes_flat,
-            weight=weights_flat,
-            padding=padding,
-            groups=B * self.num_groups
+        patches = patches.view(
+            B, self.num_groups, 
+            self.local_distance * self.local_distance, 
+            self.group_h * self.group_w
+        )  # [B, G, k*k, H_g*W_g]
+        
+        # 3. 유효 가중치
+        effective_weights = (self.u * self.x / self.U) * self.base_weights.unsqueeze(0)
+        # [B, G, 1, k, k] → [B, G, k*k]
+        weights_flat = effective_weights.squeeze(2).view(
+            B, self.num_groups, self.local_distance * self.local_distance
         )
         
-        # 5. 출력 재구성: [B*num_groups, 1, group_h, group_w] → [B, H, W]
-        output_grouped = output_flat.view(B, self.num_groups, self.group_h, self.group_w)
+        # 4. einsum으로 가중합 계산
+        output_flat = torch.einsum('bgkp,bgk->bgp', patches, weights_flat)
+        # [B, G, H_g*W_g]
+        
+        # 5. Fold로 재구성
+        output_flat = output_flat.view(B * self.num_groups, 1, self.group_h * self.group_w)
+        output_reshaped = F.fold(
+            output_flat,
+            output_size=(self.group_h, self.group_w),
+            kernel_size=1,
+            stride=1
+        ).squeeze(1)  # [B*G, group_h, group_w]
+        
+        # 6. 그리드 재구성
+        output_grouped = output_reshaped.view(B, self.num_groups, self.group_h, self.group_w)
         output = output_grouped.view(
             B, self.num_groups_h, self.num_groups_w, 
             self.group_h, self.group_w
@@ -407,4 +424,3 @@ class LocalConnectivity(nn.Module):
         return grid_tensor.view(B, self.num_groups_h, self.group_h, self.num_groups_w, self.group_w)\
                           .permute(0, 1, 3, 2, 4).contiguous()\
                           .view(B * self.num_groups, 1, self.group_h, self.group_w)
-                          

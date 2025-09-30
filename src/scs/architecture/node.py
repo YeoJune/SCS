@@ -321,43 +321,65 @@ class LocalConnectivity(nn.Module):
 
         self.u = torch.full(shape, self.U, device=self.device)
         self.x = torch.ones(shape, device=self.device)
-
+        
     def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:
         """
-        F.conv2d 기반의 진정한 최적화 구현
+        F.conv2d와 '배치를 채널로' 기법을 사용한 진정한 최적화 구현
         """
         B, H, W = grid_spikes.shape
         if self.u is None or self.u.shape[0] != B: 
             self.reset_state(B)
 
-        # 1. 입력 재구성: [B, H, W] -> [B * num_groups, 1, group_h, group_w]
-        # 이 과정은 피할 수 없으며, 효율적인 메모리 복사 연산입니다.
-        spikes_reshaped = self._reshape_input_for_grouped_conv(grid_spikes)
-        
-        # 2. 유효 가중치 계산: [B, G, 1, k, k] -> [B*G, 1, k, k]
-        # STSP를 위한 동적 가중치 계산
+        # 1. 입력 재구성: [B, H, W] -> [B, G, H_g, W_g]
+        # 각 그룹을 별도의 공간 영역으로 분리합니다.
+        spikes_grouped = grid_spikes.view(
+            B, self.num_groups_h, self.group_h, 
+            self.num_groups_w, self.group_w
+        ).permute(0, 1, 3, 2, 4).contiguous().view(
+            B, self.num_groups, self.group_h, self.group_w
+        )
+
+        # 2. ★ 핵심 트릭: 배치와 그룹을 채널 차원으로 병합 ★
+        # [B, G, H_g, W_g] -> [1, B*G, H_g, W_g]
+        # 이제 이 텐서는 배치 크기가 1이고, 채널 수가 B*G인 거대한 단일 입력으로 취급됩니다.
+        spikes_as_channels = spikes_grouped.view(1, B * self.num_groups, self.group_h, self.group_w)
+
+        # 3. 유효 가중치 계산 및 재구성
+        # self.u, self.x: [B, G, 1, k, k] / self.base_weights: [G, 1, k, k]
         effective_weights = (self.u * self.x / self.U) * self.base_weights.unsqueeze(0)
-        effective_weights_reshaped = effective_weights.view(
+        # 가중치도 입력에 맞춰 채널 차원으로 병합합니다.
+        # [B, G, 1, k, k] -> [B*G, 1, k, k]
+        # C_out = B*G, C_in_per_group = 1, kernel_size = (k,k)
+        weights_as_channels = effective_weights.view(
             B * self.num_groups, 1, self.local_distance, self.local_distance
         )
         
-        # 3. 단일 F.conv2d 호출 (핵심 최적화)
-        # unfold, einsum, fold의 모든 작업을 이 한 줄이 대체하며, 훨씬 빠릅니다.
+        # 4. 단일 그룹 컨볼루션 호출
+        # 이제 모든 조건이 완벽하게 충족됩니다.
+        # input_channels = B*G
+        # output_channels = B*G
+        # groups = B*G
         padding = self.local_distance // 2
-        internal_input_reshaped = F.conv2d(
-            input=spikes_reshaped,
-            weight=effective_weights_reshaped,
+        output_as_channels = F.conv2d(
+            input=spikes_as_channels,
+            weight=weights_as_channels,
             padding=padding,
-            # 각 샘플, 각 그룹이 모두 독립적인 컨볼루션을 수행 (Depthwise Conv와 유사)
-            groups=B * self.num_groups 
+            groups=B * self.num_groups
+        ) # 결과: [1, B*G, H_g, W_g]
+        
+        # 5. 최종 출력 재구성: 채널을 다시 배치와 그룹으로 분리
+        # [1, B*G, H_g, W_g] -> [B, G, H_g, W_g]
+        output_grouped = output_as_channels.view(
+            B, self.num_groups, self.group_h, self.group_w
         )
         
-        # 4. 출력 재구성: [B * G, 1, group_h, group_w] -> [B, H, W]
-        # 최종 결과를 원래 그리드 형태로 복원합니다.
-        output = self._reshape_output_to_grid(internal_input_reshaped, B, H, W)
+        # [B, G, H_g, W_g] -> [B, H, W]
+        output = output_grouped.view(
+            B, self.num_groups_h, self.num_groups_w, 
+            self.group_h, self.group_w
+        ).permute(0, 1, 3, 2, 4).contiguous().view(B, H, W)
         
         return output
-        
         
     def update_stsp(self, prev_spikes: torch.Tensor):
         """

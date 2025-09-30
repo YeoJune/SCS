@@ -385,9 +385,11 @@ class LocalConnectivity(nn.Module):
         
     def update_stsp(self, prev_spikes: torch.Tensor):
         """
-        벡터화된 STSP 업데이트 (이전 코드와 유사하게 근사)
+        벡터화된 STSP 업데이트 (inplace 연산 제거)
         """
-        if self.u is None: return
+        if self.u is None: 
+            return
+            
         B, H, W = prev_spikes.shape
         dt = 1.0
         
@@ -396,27 +398,34 @@ class LocalConnectivity(nn.Module):
         
         # Unfold로 소스 스파이크 추출
         padding = self.local_distance // 2
-        source_patches = F.unfold(spikes_reshaped, kernel_size=self.local_distance, padding=padding)
+        source_patches = F.unfold(
+            spikes_reshaped, 
+            kernel_size=self.local_distance, 
+            padding=padding
+        )
         
-        # k*k 이웃의 평균 활동도를 presynaptic 활동도로 근사
-        # source_patches: [B*G, k*k, group_h*group_w]
+        # 평균 활동도 계산
         k_sq = self.local_distance ** 2
-        # avg_source_activity: [B, G, k, k]
-        avg_source_activity = source_patches.view(B, self.num_groups, k_sq, -1).mean(dim=-1).view(B, self.num_groups, self.local_distance, self.local_distance)
+        avg_source_activity = source_patches.view(
+            B, self.num_groups, k_sq, -1
+        ).mean(dim=-1).view(
+            B, self.num_groups, self.local_distance, self.local_distance
+        )
 
-        # STSP 업데이트 로직
-        # u,x: [B, G, 1, k, k] / avg_source_activity: [B, G, k, k]
+        # STSP 업데이트 (out-of-place)
         depression = self.u * self.x * avg_source_activity.unsqueeze(2)
-        self.x -= depression
+        x_new = self.x - depression  # ← out-of-place
         
         facilitation = self.U * (1 - self.u) * avg_source_activity.unsqueeze(2)
-        self.u += facilitation
+        u_new = self.u + facilitation  # ← out-of-place
         
-        self.x += dt * (1 - self.x) / self.tau_D
-        self.u += dt * (self.U - self.u) / self.tau_F
+        # 자연 감쇠 (out-of-place)
+        x_new = x_new + dt * (1 - x_new) / self.tau_D
+        u_new = u_new + dt * (self.U - u_new) / self.tau_F
         
-        self.x.clamp_(0, 1)
-        self.u.clamp_(0, 1)
+        # 경계값 (out-of-place)
+        self.x = torch.clamp(x_new, 0, 1)  # ← out-of-place
+        self.u = torch.clamp(u_new, 0, 1)  # ← out-of-place
 
     # --- Helper functions for readability ---
     def _reshape_input_for_grouped_conv(self, grid_tensor: torch.Tensor):

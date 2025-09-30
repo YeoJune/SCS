@@ -432,3 +432,7 @@ class LocalConnectivity(nn.Module):
         return grid_tensor.view(B, self.num_groups_h, self.group_h, self.num_groups_w, self.group_w)\
                           .permute(0, 1, 3, 2, 4).contiguous()\
                           .view(B * self.num_groups, 1, self.group_h, self.group_w)
+    def _reshape_output_to_grid(self, reshaped_tensor: torch.Tensor, B: int, H: int, W: int):
+        return reshaped_tensor.view(B, self.num_groups_h, self.num_groups_w, self.group_h, self.group_w)\
+                              .permute(0, 1, 3, 2, 4).contiguous()\
+                              .view(B, H, W)

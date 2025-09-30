@@ -324,60 +324,63 @@ class LocalConnectivity(nn.Module):
         
     def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:
         """
-        "정적 연산 + 동적 변조" 분리를 통한 최종 고성능 최적화 구현
+        Grouped Conv + BMM Hybrid: VRAM, Speed, and Precision
         """
         B, H, W = grid_spikes.shape
-        if self.u is None or self.u.shape[0] != B: 
+        if self.u is None or self.u.shape[0] != B:
             self.reset_state(B)
 
-        # 1. 입력 재구성: [B, H, W] -> [B, 1, H, W]
-        #    그룹 컨볼루션을 위해 채널 차원 추가
-        spikes_with_channel = grid_spikes.unsqueeze(1)
-
-        # 2. ★ 정적 연산: 표준 그룹 컨볼루션 ★
-        #    입력: [B, 1, H, W], 가중치: [G, 1, k, k], groups=1 (오타 아님)
-        #    아, 이 방식은 C_in, C_out을 맞춰야 해서 더 복잡해집니다.
-        #    더 직접적인 방식으로 수정하겠습니다.
-
-        # 1. 입력 재구성 (수정): [B, H, W] -> [B * G, 1, H_g, W_g]
-        spikes_reshaped = self._reshape_input_for_grouped_conv(grid_spikes)
-
-        # 2. ★ 정적 연산 (수정): 표준 그룹 컨볼루션 ★
-        #    base_weights [G, 1, k, k]는 학습 가능한 고정된 커널 셋입니다.
-        #    입력 [B*G, 1, H_g, W_g]에 대해 G개의 커널을 반복 적용합니다.
-        #    이를 위해 가중치를 B번 반복하고, 그룹 수를 B*G로 설정합니다. (이전의 잘못된 방식)
+        # 1. 입력 재구성 및 Unfold
+        # ★ 핵심 변경점: 전체 그리드가 아닌, 그룹별로 Unfold 수행
+        # [B, H, W] -> [B, G, H_g, W_g]
+        spikes_grouped = grid_spikes.view(
+            B, self.num_groups_h, self.group_h,
+            self.num_groups_w, self.group_w
+        ).permute(0, 1, 3, 2, 4).contiguous().view(
+            B, self.num_groups, self.group_h, self.group_w
+        )
         
-        # === 진짜 최종 버전 ===
-        # 1. 입력 채널을 그룹 수에 맞게 확장
-        # [B, 1, H, W] -> [B, G, H, W]
-        spikes_expanded = grid_spikes.unsqueeze(1).expand(-1, self.num_groups, -1, -1)
+        # 이제 patches 텐서는 B와 G 차원을 모두 가짐: [B, G, k*k, H_g*W_g]
+        # 이전 BMM 방식의 [B*G, ...] 보다 메모리 관리에 더 명확함
+        patches = F.unfold(
+            spikes_grouped.view(B * self.num_groups, 1, self.group_h, self.group_w),
+            kernel_size=self.local_distance,
+            padding=self.local_distance // 2
+        ).view(
+            B, self.num_groups,
+            self.local_distance**2,
+            self.group_h * self.group_w
+        )
+
+        # 2. 유효 가중치 계산 (정확성 100% 보존)
+        # effective_weights: [B, G, 1, k, k]
+        effective_weights = (self.u * self.x / self.U) * self.base_weights.unsqueeze(0)
         
-        # 2. 정적 연산: 표준 그룹 컨볼루션
-        # 입력: [B, G, H, W], 가중치: [G, 1, k, k], groups=G
-        # 이것이 cuDNN이 가장 잘 처리하는 표준적인 그룹 컨볼루션입니다.
-        padding = self.local_distance // 2
-        internal_input_base = F.conv2d(
-            input=spikes_expanded,
-            weight=self.base_weights,
-            padding=padding,
-            groups=self.num_groups
-        ) # 결과: [B, G, H, W]
+        # 3. BMM을 위한 가중치 준비
+        # [B, G, 1, k, k] -> [B, G, 1, k*k]
+        weights_for_bmm = effective_weights.view(
+            B, self.num_groups, 1, self.local_distance**2
+        )
 
-        # 3. ★ 동적 변조 계수 계산 ★
-        # u, x: [B, G, 1, k, k] -> 각 커널의 평균 변조 계수를 계산
-        # 공간적(k*k) 평균을 내어 각 그룹의 단일 변조 값으로 만듦
-        modulation_factors = (self.u * self.x / self.U).mean(dim=(-1, -2)) # 결과: [B, G, 1]
-        modulation_factors = modulation_factors.unsqueeze(-1) # -> [B, G, 1, 1] for broadcasting
+        # 4. ★ Batched Matrix Multiplication (그룹별로 수행) ★
+        # torch.einsum을 사용하여 B와 G 차원에 대한 배치를 명시적으로 처리
+        # 'bgik,bgkj->bgij' -> B,G 차원은 배치, i,k,j는 행렬 곱셈
+        # patches: [B, G, k*k, H_g*W_g] / weights: [B, G, 1, k*k]
+        # 결과: [B, G, 1, H_g*W_g]
+        output_flat = torch.einsum(
+            'bgik,bgkj->bgij',
+            weights_for_bmm,
+            patches
+        )
 
-        # 4. 동적 변조 적용
-        # [B, G, H, W] * [B, G, 1, 1] -> element-wise 곱셈
-        internal_input_modulated = internal_input_base * modulation_factors
-        
-        # 5. 최종 결과 취합
-        # 각 그룹에 대한 결과를 모두 합산하여 최종 internal_input을 만듦
-        final_output = torch.sum(internal_input_modulated, dim=1) # 결과: [B, H, W]
+        # 5. 최종 출력 재구성
+        # Fold 없이 view로만 처리하여 오버헤드 최소화
+        output_reshaped = output_flat.view(
+            B * self.num_groups, 1, self.group_h, self.group_w
+        )
+        output = self._reshape_output_to_grid(output_reshaped, B, H, W)
 
-        return final_output
+        return output
         
     def update_stsp(self, prev_spikes: torch.Tensor):
         """

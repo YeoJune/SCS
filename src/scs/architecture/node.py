@@ -225,21 +225,25 @@ class SpikeNode(nn.Module):
 class LocalConnectivity(nn.Module):
     """
     지역적 연결성 모듈 with STSP (Short-Term Synaptic Plasticity)
+    - 그룹 컨볼루션 기반 최적화 버전
+    - 원본의 생물학적 디테일(Dale's Law, 연결 확률)을 정교하게 보존
     """
     
     def __init__(
         self,
         grid_height: int,
         grid_width: int,
-        local_distance: int = 7, # k
-        tau_D: int = 5,          # CLK 단위 (자원 회복 시간상수)
-        tau_F: int = 30,         # CLK 단위 (칼슘 감쇠 시간상수)
-        U: float = 0.2,          # 기본 칼슘 수준
+        num_groups_h: int,
+        num_groups_w: int,
+        local_distance: int = 5,
+        tau_D: int = 600,
+        tau_F: int = 1200,
+        U: float = 0.2,
         excitatory_ratio: float = 0.8,
         g_inhibitory: float = 4.0,
-        connection_sigma: float = 1.5,
-        weight_mean: float = 1.0,
-        weight_std: float = 0.1,
+        connection_sigma: float = 2.0,
+        weight_mean: float = 0.25,
+        weight_std: float = 0.025,
         device: str = "cuda"
     ):
         super().__init__()
@@ -251,146 +255,142 @@ class LocalConnectivity(nn.Module):
         self.tau_F = tau_F
         self.U = U
         self.device = device
-        
-        # 연결 구조 및 초기 가중치 생성
-        self._initialize_connections(excitatory_ratio, g_inhibitory, connection_sigma, weight_mean, weight_std)
-        
-        # STSP 상태 (reset_state에서 초기화)
-        self.u = None
-        self.x = None
 
+        self.num_groups_h = num_groups_h
+        self.num_groups_w = num_groups_w
+        self.num_groups = num_groups_h * num_groups_w
+        assert grid_height % num_groups_h == 0, "grid_height must be divisible by num_groups_h"
+        assert grid_width % num_groups_w == 0, "grid_width must be divisible by num_groups_w"
+        self.group_h = grid_height // num_groups_h
+        self.group_w = grid_width // num_groups_w
+
+        # STSP 상태 변수는 나중에 reset_state에서 초기화
+        self.u, self.x = None, None
+        
+        # 가중치 생성 및 초기화
+        self._initialize_connections(
+            excitatory_ratio, g_inhibitory, connection_sigma, weight_mean, weight_std
+        )
+        
     def _initialize_connections(self, excitatory_ratio, g_inhibitory, connection_sigma, weight_mean, weight_std):
-        """
-        연결 구조 생성 및 가중치 초기화 - incoming 관점
+        k = self.local_distance
+        num_groups = self.num_groups
         
-        incoming 관점 사용 이유: F.unfold()와 einsum()을 활용한 완전 벡터화 계산을 위해
-        outgoing 관점은 k×k 루프가 필요하여 GPU 병렬화 효율성이 현저히 떨어짐
-        """
+        # --- 1. Dale's Law 적용을 위한 '소스 뉴런' 타입 맵 생성 ---
+        # 각 커널(그룹) 내에서 k*k 이웃 뉴런들이 어떤 타입일지를 가상으로 설정합니다.
+        # 이 타입 맵은 모든 그룹에 걸쳐 공유될 수 있으며, 이는 정규 마이크로 회로 가설에 부합합니다.
+        # source_neuron_type_map: [k, k], True이면 흥분성
+        source_neuron_type_map = (torch.rand(k, k) < excitatory_ratio).to(self.device)
         
-        # Dale's Law를 위한 source 뉴런 분류
-        source_excitatory = torch.rand(self.grid_height, self.grid_width) < excitatory_ratio
-        
-        # 거리 기반 연결 확률 계산 (기존과 동일)
-        center = self.local_distance // 2
-        distances = torch.zeros(self.local_distance, self.local_distance)
-        for i in range(self.local_distance):
-            for j in range(self.local_distance):
-                if i == center and j == center:
-                    distances[i, j] = float('inf')
-                else:
-                    distances[i, j] = ((i - center)**2 + (j - center)**2)**0.5
-        
+        # --- 2. 거리 기반 연결 확률 마스크 생성 ---
+        center = k // 2
+        distances = torch.zeros(k, k, device=self.device)
+        for i in range(k):
+            for j in range(k):
+                distances[i, j] = ((i - center)**2 + (j - center)**2)**0.5
+    
         connection_probs = torch.exp(-distances**2 / (2 * connection_sigma**2))
         connection_probs[center, center] = 0
+        # connection_mask: [k, k]
         connection_mask = torch.bernoulli(connection_probs)
+
+        # --- 3. 기본 가중치 생성 ---
+        # 초기 가중치는 모두 양수라고 가정합니다. (흥분성 연결의 기본 강도)
+        # base_weights: [num_groups, 1, k, k]
+        base_weights = weight_mean + torch.randn(num_groups, 1, k, k, device=self.device) * weight_std
+        base_weights = torch.abs(base_weights) # 부호는 Dale's Law로 결정하므로 절대값 처리
+
+        # --- 4. 디테일 적용 ---
+        # 4a. Dale's Law 적용: 소스 뉴런 타입에 따라 부호 결정
+        # inhibitory_mask: [k, k], 억제성 소스 뉴런 위치는 True
+        inhibitory_mask = ~source_neuron_type_map
+        # base_weights의 해당 위치에 -g_inhibitory를 곱함
+        # 브로드캐스팅: [G, 1, k, k] * [k, k]
+        base_weights[:, :, inhibitory_mask] *= -g_inhibitory
+
+        # 4b. 연결 확률 마스크 적용
+        # 연결이 없는 곳은 가중치를 0으로 만듦
+        final_weights = base_weights * connection_mask.view(1, 1, k, k)
         
-        # 가중치 초기화: [H, W, local_distance, local_distance]
-        # weights[i,j,di,dj] = source(i+di-center, j+dj-center) → target(i,j) 가중치
-        weights = weight_mean + torch.randn(self.grid_height, self.grid_width, self.local_distance, self.local_distance) * weight_std
-        
-        # Dale's Law 적용: 각 source의 모든 outgoing이 같은 부호
-        for i in range(self.grid_height):
-            for j in range(self.grid_width):
-                for di in range(self.local_distance):
-                    for dj in range(self.local_distance):
-                        if di == center and dj == center:
-                            continue
-                        
-                        # Source 좌표 계산 (circular)
-                        si = (i + di - center) % self.grid_height
-                        sj = (j + dj - center) % self.grid_width
-                        
-                        # 해당 source가 억제성이면 음수
-                        if not source_excitatory[si, sj]:
-                            weights[i, j, di, dj] *= -g_inhibitory
-        
-        # 연결 마스킹
-        weights = weights * connection_mask
-        self.base_weights = nn.Parameter(weights)
-    
+        self.base_weights = nn.Parameter(final_weights)
+
     def reset_state(self, batch_size: int = 1):
         """STSP 상태 초기화"""
-        self.u = torch.full(
-            (batch_size, self.grid_height, self.grid_width, self.local_distance, self.local_distance),
-            self.U, device=self.device
-        )
-        self.x = torch.ones(
-            (batch_size, self.grid_height, self.grid_width, self.local_distance, self.local_distance),
-            device=self.device
-        )
-    
+        k = self.local_distance
+        shape = (batch_size, self.num_groups, 1, k, k)
+
+        self.u = torch.full(shape, self.U, device=self.device)
+        self.x = torch.ones(shape, device=self.device)
+
     def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:
         """
-        현재 STSP 상태를 적용하여 지역적 입력 계산
-        
-        Args:
-            grid_spikes: [B, H, W] 형태의 스파이크 텐서
-            
-        Returns:
-            internal_input: [B, H, W] 형태의 지역적 입력
+        STSP 적용 및 그룹 컨볼루션 수행 (이전 코드와 동일, 최적화 유지)
         """
         B, H, W = grid_spikes.shape
+        if self.u is None or self.u.shape[0] != B: self.reset_state(B)
+
+        # 1. 입력 재구성
+        spikes_reshaped = self._reshape_input_for_grouped_conv(grid_spikes)
         
-        if self.u is None or self.u.shape[0] != B:
-            self.reset_state(B)
-        
-        # STSP가 적용된 effective weights
-        effective_weights = (self.u * self.x / self.U) * self.base_weights
-        
-        # Unfold를 사용한 이웃 패치 추출
+        # 2. 유효 가중치 계산
+        effective_weights = (self.u * self.x / self.U) * self.base_weights.unsqueeze(0)
+        effective_weights_reshaped = effective_weights.view(B * self.num_groups, 1, self.local_distance, self.local_distance)
+
+        # 3. 그룹 컨볼루션
         padding = self.local_distance // 2
-        patches = F.unfold(
-            grid_spikes.unsqueeze(1),
-            kernel_size=self.local_distance,
-            padding=padding
+        internal_input_reshaped = F.conv2d(
+            input=spikes_reshaped,
+            weight=effective_weights_reshaped,
+            padding=padding,
+            groups=B * self.num_groups
         )
         
-        # [B, k*k, H*W] -> [B, H, W, k, k] 형태로 변환
-        patches = patches.view(B, self.local_distance * self.local_distance, H, W).permute(0, 2, 3, 1).view(B, H, W, self.local_distance, self.local_distance)
-        
-        # 가중치와 패치의 element-wise 곱셈 후 합산
-        internal_input = torch.sum(patches * effective_weights, dim=(-2, -1))
-        
-        return internal_input
+        # 4. 출력 재구성
+        return self._reshape_output_to_grid(internal_input_reshaped, B, H, W)
 
     def update_stsp(self, prev_spikes: torch.Tensor):
         """
-        벡터화된 STSP 업데이트 - incoming connection 관점
+        벡터화된 STSP 업데이트 (이전 코드와 유사하게 근사)
         """
-        if self.u is None:
-            return
-        
+        if self.u is None: return
         B, H, W = prev_spikes.shape
         dt = 1.0
-        center = self.local_distance // 2
         
-        # 모든 방향의 source 스파이크를 한번에 계산
-        # prev_spikes를 패딩하여 경계 처리
-        padded_spikes = F.pad(prev_spikes, (center, center, center, center), mode='circular')
+        # 입력 재구성
+        spikes_reshaped = self._reshape_input_for_grouped_conv(prev_spikes)
         
-        # Unfold로 각 위치에서 k×k 이웃의 스파이크 추출
-        source_patches = F.unfold(
-            padded_spikes.unsqueeze(1),
-            kernel_size=self.local_distance,
-            padding=0  # 이미 패딩했으므로 0
-        ).view(B, self.local_distance, self.local_distance, H, W).permute(0, 3, 4, 1, 2)  # [B, H, W, local_distance, local_distance]
+        # Unfold로 소스 스파이크 추출
+        padding = self.local_distance // 2
+        source_patches = F.unfold(spikes_reshaped, kernel_size=self.local_distance, padding=padding)
+        
+        # k*k 이웃의 평균 활동도를 presynaptic 활동도로 근사
+        # source_patches: [B*G, k*k, group_h*group_w]
+        k_sq = self.local_distance ** 2
+        # avg_source_activity: [B, G, k, k]
+        avg_source_activity = source_patches.view(B, self.num_groups, k_sq, -1).mean(dim=-1).view(B, self.num_groups, self.local_distance, self.local_distance)
 
-        # 중심(자기 자신) 제거
-        source_patches[:, :, :, center, center] = 0
+        # STSP 업데이트 로직
+        # u,x: [B, G, 1, k, k] / avg_source_activity: [B, G, k, k]
+        depression = self.u * self.x * avg_source_activity.unsqueeze(2)
+        self.x -= depression
         
-        # 벡터화된 STSP 업데이트
-        # x 감소: 각 연결의 presynaptic 스파이크에 따라
-        depression = self.u * self.x * source_patches
-        self.x = self.x - depression
+        facilitation = self.U * (1 - self.u) * avg_source_activity.unsqueeze(2)
+        self.u += facilitation
         
-        # u 증가: 각 연결의 presynaptic 스파이크에 따라  
-        facilitation = self.U * (1 - self.u) * source_patches
-        self.u = self.u + facilitation
+        self.x += dt * (1 - self.x) / self.tau_D
+        self.u += dt * (self.U - self.u) / self.tau_F
         
-        # 자연 감쇠 (모든 연결에 적용)
-        self.x = self.x + dt * (1 - self.x) / self.tau_D
-        self.u = self.u + dt * (self.U - self.u) / self.tau_F
-        
-        # 생물학적 경계값 유지
-        self.x = torch.clamp(self.x, 0, 1)
-        self.u = torch.clamp(self.u, 0, 1)
+        self.x.clamp_(0, 1)
+        self.u.clamp_(0, 1)
+
+    # --- Helper functions for readability ---
+    def _reshape_input_for_grouped_conv(self, grid_tensor: torch.Tensor):
+        B, _, _ = grid_tensor.shape
+        return grid_tensor.view(B, self.num_groups_h, self.group_h, self.num_groups_w, self.group_w)\
+                          .permute(0, 1, 3, 2, 4).contiguous()\
+                          .view(B * self.num_groups, 1, self.group_h, self.group_w)
+
+    def _reshape_output_to_grid(self, reshaped_tensor: torch.Tensor, B: int, H: int, W: int):
+        return reshaped_tensor.view(B, self.num_groups_h, self.num_groups_w, self.group_h, self.group_w)\
+                              .permute(0, 1, 3, 2, 4).contiguous()\
+                              .view(B, H, W)

@@ -221,23 +221,22 @@ class SpikeNode(nn.Module):
             adaptive_refractory, 
             self.refractory_counter
         )
-
 class LocalConnectivity(nn.Module):
     """
-    CNN 기반 지역적 연결성 모듈 (Depthwise Separable Convolution)
-    - STSP 제거, 표준 CNN으로 대체
-    - 층 내부 lateral connections 모델링
+    CNN 기반 지역적 연결성 모듈 (Multi-layer Depthwise Separable)
+    - 3×3 convolution을 여러 층으로 쌓아 표현력 확보
+    - Residual connection으로 gradient flow 개선
     """
     
     def __init__(
         self,
         grid_height: int,
         grid_width: int,
-        channels: int = 1,  # Feature maps (기본 1채널)
-        kernel_size: int = 7,
+        channels: int = 32,
+        kernel_size: int = 3,  # 표준: 3×3
+        num_layers: int = 3,   # 2-3층 권장
         excitatory_ratio: float = 0.8,
         inhibitory_strength: float = 3.0,
-        use_normalization: bool = True,
         device: str = "cuda"
     ):
         super().__init__()
@@ -245,94 +244,89 @@ class LocalConnectivity(nn.Module):
         self.grid_height = grid_height
         self.grid_width = grid_width
         self.channels = channels
-        self.kernel_size = kernel_size
+        self.num_layers = num_layers
         self.device = device
         
-        # Depthwise convolution: 각 채널의 공간적 lateral connections
-        self.depthwise = nn.Conv2d(
-            channels, channels,
-            kernel_size=kernel_size,
-            padding=kernel_size // 2,
-            groups=channels,  # 핵심: 각 채널 독립
-            bias=False,
-            device=device
-        )
+        # Input projection: [B,1,H,W] → [B,C,H,W]
+        self.input_proj = nn.Conv2d(1, channels, 1, bias=False, device=device)
         
-        # Pointwise convolution: 채널 간 상호작용 (E-I balance)
-        self.pointwise = nn.Conv2d(
-            channels, channels,
-            kernel_size=1,
-            bias=True,
-            device=device
-        )
+        # Multi-layer depthwise separable blocks
+        self.blocks = nn.ModuleList()
+        for _ in range(num_layers):
+            block = nn.ModuleDict({
+                'depthwise': nn.Conv2d(
+                    channels, channels,
+                    kernel_size=kernel_size,
+                    padding=kernel_size // 2,
+                    groups=channels,
+                    bias=False,
+                    device=device
+                ),
+                'pointwise': nn.Conv2d(
+                    channels, channels,
+                    kernel_size=1,
+                    bias=True,
+                    device=device
+                )
+            })
+            self.blocks.append(block)
         
-        # Normalization (선택적)
-        if use_normalization:
-            self.norm = nn.LayerNorm(
-                [channels, grid_height, grid_width],
-                elementwise_affine=True,
-                device=device
-            )
-        else:
-            self.norm = nn.Identity()
+        # Output projection: [B,C,H,W] → [B,1,H,W]
+        self.output_proj = nn.Conv2d(channels, 1, 1, bias=False, device=device)
         
-        # 가중치 초기화
+        # Learnable residual gate (선택적)
+        self.residual_scale = nn.Parameter(torch.tensor(0.3, device=device))
+        
         self._initialize_weights(excitatory_ratio, inhibitory_strength)
     
     def _initialize_weights(self, exc_ratio: float, inh_strength: float):
-        """
-        생물학적으로 타당한 가중치 초기화
-        - Depthwise: Dale's Law 고려한 초기화
-        - Pointwise: E-I balance
-        """
         with torch.no_grad():
-            # Depthwise 초기화
-            nn.init.kaiming_normal_(self.depthwise.weight, mode='fan_out', nonlinearity='relu')
+            # Input/Output projection: 작게 초기화
+            nn.init.xavier_uniform_(self.input_proj.weight, gain=0.5)
+            nn.init.xavier_uniform_(self.output_proj.weight, gain=0.5)
             
-            # Dale's Law 근사: 일부 필터를 음수로 (억제성)
-            num_inhibitory = int(self.channels * (1 - exc_ratio))
-            if num_inhibitory > 0:
-                # 마지막 몇 개 채널을 억제성으로
-                self.depthwise.weight[-num_inhibitory:] *= -inh_strength
-            
-            # Pointwise 초기화 (E-I balance)
-            nn.init.xavier_uniform_(self.pointwise.weight)
-            nn.init.zeros_(self.pointwise.bias)
+            # 각 블록 초기화
+            for i, block in enumerate(self.blocks):
+                # Depthwise
+                nn.init.kaiming_normal_(block['depthwise'].weight, mode='fan_out', nonlinearity='relu')
+                
+                # Dale's Law: 첫 번째 레이어에만 적용
+                if i == 0:
+                    num_inhibitory = int(self.channels * (1 - exc_ratio))
+                    if num_inhibitory > 0:
+                        block['depthwise'].weight[-num_inhibitory:] *= -inh_strength
+                
+                # Pointwise: 작게 초기화 (깊어질수록 더 작게)
+                gain = 0.5 / (i + 1)
+                nn.init.xavier_uniform_(block['pointwise'].weight, gain=gain)
+                nn.init.zeros_(block['pointwise'].bias)
     
     def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            grid_spikes: [B, H, W] 형태의 스파이크 텐서
+            grid_spikes: [B, H, W] 스파이크 텐서
             
         Returns:
-            internal_input: [B, H, W] 형태의 지역적 입력
+            internal_input: [B, H, W] 지역적 입력
         """
-        B, H, W = grid_spikes.shape
+        # [B, H, W] → [B, 1, H, W] → [B, C, H, W]
+        x = grid_spikes.unsqueeze(1)
+        x = self.input_proj(x)
         
-        # [B, H, W] -> [B, C, H, W]
-        if self.channels == 1:
-            x = grid_spikes.unsqueeze(1)
-        else:
-            # 다중 채널인 경우 repeat (또는 학습 가능한 projection 추가 가능)
-            x = grid_spikes.unsqueeze(1).repeat(1, self.channels, 1, 1)
+        # Multi-layer processing with residual
+        for block in self.blocks:
+            identity = x
+            
+            # Depthwise + Pointwise
+            x = block['depthwise'](x)
+            x = block['pointwise'](x)
+            
+            # Residual connection with learnable gate
+            x = identity + self.residual_scale * x
         
-        # Depthwise: 공간적 lateral connections
-        x = self.depthwise(x)
-        
-        # Pointwise: 채널 간 상호작용
-        x = self.pointwise(x)
-        
-        # Normalization
-        x = self.norm(x)
-        
-        # [B, C, H, W] -> [B, H, W] (채널 평균 또는 합)
-        if self.channels > 1:
-            output = x.mean(dim=1)  # 또는 sum, max 등
-        else:
-            output = x.squeeze(1)
+        # [B, C, H, W] → [B, 1, H, W] → [B, H, W]
+        x = self.output_proj(x)
+        output = x.squeeze(1)
         
         return output
     
-    def reset_state(self, batch_size: int = 1):
-        """CNN은 stateless이므로 STSP 같은 상태 관리 불필요"""
-        pass

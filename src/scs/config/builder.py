@@ -59,14 +59,6 @@ class ModelBuilder:
                 local_connections[region_name] = LocalConnectivity(
                     grid_height=grid_height,
                     grid_width=grid_width,
-                    local_distance=config.local_connectivity.local_distance,
-                    tau_D=config.local_connectivity.tau_D,
-                    tau_F=config.local_connectivity.tau_F,
-                    U=config.local_connectivity.U,
-                    excitatory_ratio=config.local_connectivity.excitatory_ratio,
-                    connection_sigma=config.local_connectivity.connection_sigma,
-                    weight_mean=config.local_connectivity.weight_mean,
-                    weight_std=config.local_connectivity.weight_std,
                     device=device
                 )
             

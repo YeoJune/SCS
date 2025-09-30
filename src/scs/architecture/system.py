@@ -520,15 +520,10 @@ class SCSSystem(nn.Module):
 
     def _update_stp_weights(self, prev_spikes: Dict[str, torch.Tensor], spikes_with_grad: Dict[str, torch.Tensor]):
             """
-            Phase 3: STDP + STSP 동시 업데이트
+            Phase 3: STDP 업데이트
             """
             # Axonal STDP 업데이트
             self.axonal_connections.update_stdp_weights(prev_spikes, spikes_with_grad)
-
-            # Local STSP 업데이트 추가
-            for node_name in self.nodes.keys():
-                if node_name in prev_spikes and prev_spikes[node_name] is not None:
-                    self.local_connections[node_name].update_stsp(prev_spikes[node_name])
     
     def _update_outputs_and_decoder(
         self,
@@ -738,10 +733,6 @@ class SCSSystem(nn.Module):
             node.reset_state(batch_size)
 
         self.output_interface.reset_state(batch_size)
-
-        # Local connections STSP 상태 리셋 추가
-        for local_conn in self.local_connections.values():
-            local_conn.reset_state(batch_size)
 
         self.decoder_sequences = torch.full(
             (batch_size, self.decoder_window_size + 1), 

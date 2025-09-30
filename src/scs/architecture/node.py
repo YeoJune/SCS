@@ -306,7 +306,7 @@ class LocalConnectivity(nn.Module):
         
         # 연결 마스킹
         weights = weights * connection_mask
-        self.register_buffer('base_weights', weights)
+        self.base_weights = nn.Parameter(weights)
     
     def reset_state(self, batch_size: int = 1):
         """STSP 상태 초기화"""

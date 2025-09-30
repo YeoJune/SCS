@@ -54,8 +54,8 @@ task:
   task_type: "pretraining"
   task_id: 1
   learning_style: "mlm" # MLM 학습 스타일
-  max_length: 8 # Pre-training용 긴 컨텍스트
-  stride: 8 # 50% overlap sliding window
+  max_length: 32 # Pre-training용 긴 컨텍스트
+  stride: 32 # 50% overlap sliding window
 
   # MLM 설정
   mlm_config:
@@ -99,7 +99,7 @@ timing_manager:
 
 # === 데이터 로딩 오버라이드 ===
 data_loading:
-  batch_size: 8
+  batch_size: 2
   tokenizer:
     name: "t5-small"
     max_length: 128

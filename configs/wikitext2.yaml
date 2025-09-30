@@ -38,12 +38,12 @@ axonal_connections:
   connections:
     - source: "IN"
       target: "PASS"
-      patch_size: 1
+      patch_size: 8
       patch_weight_scale: 1.0
       inner_weight_scale: 1.2
     - source: "PASS"
       target: "OUT"
-      patch_size: 1
+      patch_size: 8
       patch_weight_scale: 1.0
       inner_weight_scale: 1.2
 
@@ -63,15 +63,15 @@ task:
     mask_token_id: null # 자동 감지
     random_token_prob: 0.1 # 10% 랜덤 토큰
     unchanged_prob: 0.1 # 10% 원본 유지
-    min_masks: 2 # 최소 2개 토큰 마스킹
+    min_masks: 0 # 최소 2개 토큰 마스킹
     max_masks_ratio: 0.4 # 최대 40% 마스킹
     special_tokens: null # 자동 설정
 
 # === 학습 설정 오버라이드 ===
 learning:
   epochs: 11
-  learning_rate: 2e-4
-  eta_min: 1e-4
+  learning_rate: 5e-4
+  eta_min: 2e-4
   max_clk_training: 32
   optimizer: "adamw"
   weight_decay: 1e-4
@@ -99,15 +99,15 @@ timing_manager:
 
 # === 데이터 로딩 오버라이드 ===
 data_loading:
-  batch_size: 16
+  batch_size: 8
   tokenizer:
     name: "t5-small"
     max_length: 128
 
 data:
-  train_samples: 100
-  val_samples: 10
-  test_samples: 10
+  train_samples: 2000
+  val_samples: 100
+  test_samples: 100
 
 # === 평가 설정 ===
 evaluation:

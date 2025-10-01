@@ -49,6 +49,7 @@ class LocalConnectivityConfig(BaseModel):
     kernel_size: int = Field(default=3)
     num_layers: int = Field(default=2)
     initial_output_gain: float = Field(default=0.5)
+    initial_output_bias: float = Field(default=0.0)
 
 class AxonalConnectionConfig(BaseModel):
     """개별 축삭 연결 설정"""

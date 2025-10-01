@@ -63,6 +63,7 @@ class ModelBuilder:
                     kernel_size=config.local_connectivity.kernel_size,
                     num_layers=config.local_connectivity.num_layers,
                     initial_output_gain=config.local_connectivity.initial_output_gain,
+                    initial_output_bias=config.local_connectivity.initial_output_bias,
                     device=device
                 )
             

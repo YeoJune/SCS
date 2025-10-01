@@ -249,6 +249,7 @@ class LocalConnectivity(nn.Module):
         kernel_size: int = 3,
         num_layers: int = 2,
         initial_output_gain: float = 0.5,
+        initial_output_bias: float = 0.0,
         device: str = "cuda"
     ):
         super().__init__()
@@ -289,6 +290,7 @@ class LocalConnectivity(nn.Module):
         # Output normalization
         self.output_norm = RMSNorm2d([grid_height, grid_width])
         self.output_gain = nn.Parameter(torch.tensor(initial_output_gain, device=device))
+        self.output_bias = nn.Parameter(torch.tensor(initial_output_bias, device=device))
         
         self._initialize_weights()
     
@@ -329,6 +331,6 @@ class LocalConnectivity(nn.Module):
         output = self.output_proj(x).squeeze(1)
         
         # normalize and scale
-        output = self.output_norm(output) * self.output_gain
+        output = self.output_norm(output) * self.output_gain + self.output_bias
         
         return output

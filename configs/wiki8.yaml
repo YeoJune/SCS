@@ -1,9 +1,0 @@
-defaults:
-  - wikitext2
-
-# === 축삭 연결 (완전 오버라이드) ===
-local_connectivity:
-  channels: 32
-  kernel_size: 3
-  num_layers: 2
-  initial_output_gain: 0.8

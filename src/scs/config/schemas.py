@@ -45,15 +45,10 @@ class SpikeDynamicsConfig(BaseModel):
 
 class LocalConnectivityConfig(BaseModel):
     """연결성 설정"""
-    local_distance: int = Field(default=7)
-    excitatory_ratio: float = Field(default=1.0)
-    g_inhibitory: float = Field(default=4.0)
-    tau_D: int = Field(default=5)
-    tau_F: int = Field(default=30)
-    U: float = Field(default=0.2)
-    connection_sigma: float = Field(default=1.5)
-    weight_mean: float = Field(default=1.0)
-    weight_std: float = Field(default=0.1)
+    channels: int = Field(default=32)
+    kernel_size: int = Field(default=3)
+    num_layers: int = Field(default=2)
+    initial_output_gain: float = Field(default=0.5)
 
 class AxonalConnectionConfig(BaseModel):
     """개별 축삭 연결 설정"""

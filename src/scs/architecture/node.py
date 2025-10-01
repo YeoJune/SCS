@@ -245,10 +245,10 @@ class LocalConnectivity(nn.Module):
         self,
         grid_height: int,
         grid_width: int,
-        channels: int = 64,
+        channels: int = 32,
         kernel_size: int = 3,
         num_layers: int = 2,
-        initial_output_gain: float = 1.0,
+        initial_output_gain: float = 0.5,
         device: str = "cuda"
     ):
         super().__init__()

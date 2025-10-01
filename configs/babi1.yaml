@@ -1,9 +1,0 @@
-defaults:
-  - babi
-
-# === 축삭 연결 (완전 오버라이드) ===
-axonal_connections:
-  tau_pre: 5.0
-  tau_post: 5.0
-  A_plus: 1e-1
-  A_minus: 1e-1

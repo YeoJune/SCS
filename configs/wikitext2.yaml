@@ -15,16 +15,12 @@ experiment:
 # === 시스템 역할 (base와 동일하므로 생략 가능) ===
 system_roles:
   input_node: "IN"
-  output_node: "OUT"
-  acc_node: "OUT"
+  output_node: "PASS"
+  acc_node: "PASS"
 
 # === 뇌 영역 구성 (완전 오버라이드) ===
 brain_regions:
   IN:
-    grid_size: [32, 32]
-    decay_rate: 0.85
-    distance_tau: 1.0
-  OUT:
     grid_size: [32, 32]
     decay_rate: 0.85
     distance_tau: 1.0
@@ -41,11 +37,6 @@ axonal_connections:
       patch_size: 8
       patch_weight_scale: 1.0
       inner_weight_scale: 1.2
-    - source: "PASS"
-      target: "OUT"
-      patch_size: 8
-      patch_weight_scale: 1.0
-      inner_weight_scale: 1.2
 
 # === 작업 설정 오버라이드 ===
 task:
@@ -54,8 +45,8 @@ task:
   task_type: "pretraining"
   task_id: 1
   learning_style: "mlm" # MLM 학습 스타일
-  max_length: 32 # Pre-training용 긴 컨텍스트
-  stride: 32 # 50% overlap sliding window
+  max_length: 8 # Pre-training용 긴 컨텍스트
+  stride: 8 # 50% overlap sliding window
 
   # MLM 설정
   mlm_config:
@@ -72,7 +63,7 @@ learning:
   epochs: 11
   learning_rate: 5e-4
   eta_min: 2e-4
-  max_clk_training: 32
+  max_clk_training: 8
   optimizer: "adamw"
   weight_decay: 1e-4
   eval_every: 2
@@ -99,7 +90,7 @@ timing_manager:
 
 # === 데이터 로딩 오버라이드 ===
 data_loading:
-  batch_size: 2
+  batch_size: 64
   tokenizer:
     name: "t5-small"
     max_length: 128

@@ -29,15 +29,10 @@ spike_dynamics:
 
 # === 연결성 설정 ===
 local_connectivity:
-  local_distance: 5
-  excitatory_ratio: 0.8
-  g_inhibitory: 4.0
-  tau_D: 600
-  tau_F: 1200
-  U: 0.2
-  connection_sigma: 2.0
-  weight_mean: 0.25
-  weight_std: 0.025
+  channels: 32
+  kernel_size: 3
+  num_layers: 2
+  initial_output_gain: 0.5
 
 # === 축삭 연결 (IN→OUT 단일 연결) ===
 axonal_connections:
@@ -107,7 +102,7 @@ learning:
 
   # Scheduled Sampling
   use_scheduled_sampling: true
-  ss_start_prob: 1.0
+  ss_start_prob: 0.0
   ss_end_prob: 0.0
   ss_decay_epochs: 8
 

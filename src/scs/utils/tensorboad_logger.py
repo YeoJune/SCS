@@ -174,6 +174,9 @@ class SCSTensorBoardLogger:
         # 배치 크기
         if 'batch_size' in processing_info:
             self.writer.add_scalar("Processing/Batch_Size", processing_info['batch_size'], self.epoch)
+        
+        if 'all_spikes' in processing_info:
+            self.log_processing_info_figures(processing_info['all_spikes'], step=self.epoch)
     
     def log_loss_components(self, loss_components: Dict[str, float]):
         """손실 구성요소 로깅"""

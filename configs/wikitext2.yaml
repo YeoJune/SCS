@@ -15,8 +15,8 @@ experiment:
 # === 시스템 역할 (base와 동일하므로 생략 가능) ===
 system_roles:
   input_node: "IN"
-  output_node: "PASS"
-  acc_node: "PASS"
+  output_node: "OUT"
+  acc_node: "OUT"
 
 # === 뇌 영역 구성 (완전 오버라이드) ===
 brain_regions:
@@ -24,7 +24,7 @@ brain_regions:
     grid_size: [32, 32]
     decay_rate: 0.85
     distance_tau: 1.0
-  PASS:
+  OUT:
     grid_size: [32, 32]
     decay_rate: 0.85
     distance_tau: 1.0
@@ -33,7 +33,7 @@ brain_regions:
 axonal_connections:
   connections:
     - source: "IN"
-      target: "PASS"
+      target: "OUT"
       patch_size: 8
       patch_weight_scale: 1.0
       inner_weight_scale: 1.2
@@ -90,7 +90,7 @@ timing_manager:
 
 # === 데이터 로딩 오버라이드 ===
 data_loading:
-  batch_size: 64
+  batch_size: 32
   tokenizer:
     name: "t5-small"
     max_length: 128

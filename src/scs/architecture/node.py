@@ -221,22 +221,22 @@ class SpikeNode(nn.Module):
             adaptive_refractory, 
             self.refractory_counter
         )
+    
 class LocalConnectivity(nn.Module):
     """
     CNN 기반 지역적 연결성 모듈 (Multi-layer Depthwise Separable)
     - 3×3 convolution을 여러 층으로 쌓아 표현력 확보
-    - Residual connection으로 gradient flow 개선
+    - Learnable output gain으로 스케일 자동 조정
     """
     
     def __init__(
         self,
         grid_height: int,
         grid_width: int,
-        channels: int = 32,
-        kernel_size: int = 3,  # 표준: 3×3
-        num_layers: int = 3,   # 2-3층 권장
-        excitatory_ratio: float = 0.8,
-        inhibitory_strength: float = 3.0,
+        channels: int = 64,
+        kernel_size: int = 3,
+        num_layers: int = 2,
+        initial_output_gain: float = 5.0,
         device: str = "cuda"
     ):
         super().__init__()
@@ -274,32 +274,34 @@ class LocalConnectivity(nn.Module):
         # Output projection: [B,C,H,W] → [B,1,H,W]
         self.output_proj = nn.Conv2d(channels, 1, 1, bias=False, device=device)
         
-        # Learnable residual gate (선택적)
-        self.residual_scale = nn.Parameter(torch.tensor(0.3, device=device))
+        # Learnable output gain (핵심!)
+        self.output_gain = nn.Parameter(
+            torch.tensor(initial_output_gain, device=device)
+        )
         
-        self._initialize_weights(excitatory_ratio, inhibitory_strength)
+        self._initialize_weights()
     
-    def _initialize_weights(self, exc_ratio: float, inh_strength: float):
+    def _initialize_weights(self):
+        """표준적인 초기화"""
         with torch.no_grad():
-            # Input/Output projection: 작게 초기화
-            nn.init.xavier_uniform_(self.input_proj.weight, gain=0.5)
-            nn.init.xavier_uniform_(self.output_proj.weight, gain=0.5)
+            # Input projection: Xavier uniform
+            nn.init.xavier_uniform_(self.input_proj.weight)
             
             # 각 블록 초기화
-            for i, block in enumerate(self.blocks):
-                # Depthwise
-                nn.init.kaiming_normal_(block['depthwise'].weight, mode='fan_out', nonlinearity='relu')
+            for block in self.blocks:
+                # Depthwise: Kaiming normal (fan_out)
+                nn.init.kaiming_normal_(
+                    block['depthwise'].weight, 
+                    mode='fan_out',
+                    nonlinearity='linear'
+                )
                 
-                # Dale's Law: 첫 번째 레이어에만 적용
-                if i == 0:
-                    num_inhibitory = int(self.channels * (1 - exc_ratio))
-                    if num_inhibitory > 0:
-                        block['depthwise'].weight[-num_inhibitory:] *= -inh_strength
-                
-                # Pointwise: 작게 초기화 (깊어질수록 더 작게)
-                gain = 0.5 / (i + 1)
-                nn.init.xavier_uniform_(block['pointwise'].weight, gain=gain)
+                # Pointwise: Xavier uniform
+                nn.init.xavier_uniform_(block['pointwise'].weight)
                 nn.init.zeros_(block['pointwise'].bias)
+            
+            # Output projection: Xavier uniform
+            nn.init.xavier_uniform_(self.output_proj.weight)
     
     def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:
         """
@@ -307,26 +309,22 @@ class LocalConnectivity(nn.Module):
             grid_spikes: [B, H, W] 스파이크 텐서
             
         Returns:
-            internal_input: [B, H, W] 지역적 입력
+            internal_input: [B, H, W] 지역적 입력 (스케일 조정됨)
         """
         # [B, H, W] → [B, 1, H, W] → [B, C, H, W]
         x = grid_spikes.unsqueeze(1)
         x = self.input_proj(x)
         
-        # Multi-layer processing with residual
+        # Multi-layer processing (no residual, no activation)
         for block in self.blocks:
-            identity = x
-            
-            # Depthwise + Pointwise
             x = block['depthwise'](x)
             x = block['pointwise'](x)
-            
-            # Residual connection with learnable gate
-            x = identity + self.residual_scale * x
         
         # [B, C, H, W] → [B, 1, H, W] → [B, H, W]
         x = self.output_proj(x)
         output = x.squeeze(1)
         
+        # Learnable gain 적용
+        output = self.output_gain * output
+        
         return output
-    

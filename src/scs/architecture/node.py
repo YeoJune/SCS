@@ -221,7 +221,19 @@ class SpikeNode(nn.Module):
             adaptive_refractory, 
             self.refractory_counter
         )
+
+class RMSNorm2d(nn.Module):
+    def __init__(self, normalized_shape, eps=1e-8):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(normalized_shape))
     
+    def forward(self, x):
+        # [B, H, W]
+        rms = torch.sqrt(x.pow(2).mean(dim=[-2, -1], keepdim=True) + self.eps)
+        x_norm = x / rms
+        return self.weight * x_norm    
+
 class LocalConnectivity(nn.Module):
     """
     CNN 기반 지역적 연결성 모듈
@@ -236,6 +248,7 @@ class LocalConnectivity(nn.Module):
         channels: int = 64,
         kernel_size: int = 3,
         num_layers: int = 2,
+        initial_output_gain: float = 1.0,
         device: str = "cuda"
     ):
         super().__init__()
@@ -274,10 +287,8 @@ class LocalConnectivity(nn.Module):
         self.output_proj = nn.Conv2d(channels, 1, 1, bias=False, device=device)
         
         # Output normalization
-        self.output_norm = nn.LayerNorm([grid_height, grid_width], device=device)
-        
-        # Learnable gate for input strength scaling
-        self.gate = nn.Parameter(torch.tensor(2.0, device=device))
+        self.output_norm = RMSNorm2d([grid_height, grid_width])
+        self.output_gain = nn.Parameter(torch.tensor(initial_output_gain, device=device))
         
         self._initialize_weights()
     
@@ -317,13 +328,7 @@ class LocalConnectivity(nn.Module):
         # [B, C, H, W] → [B, H, W]
         output = self.output_proj(x).squeeze(1)
         
-        # LayerNorm: mean=0, std=1
-        output = self.output_norm(output)
-        
-        # 입력 강도 계산 (평균 활동도)
-        input_strength = grid_spikes.mean(dim=[-2, -1], keepdim=True)  # [B, 1, 1]
-        
-        # Gate로 스케일링
-        output = output * (self.gate * input_strength)
+        # normalize and scale
+        output = self.output_norm(output) * self.output_gain
         
         return output

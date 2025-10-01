@@ -6,4 +6,4 @@ local_connectivity:
   channels: 32
   kernel_size: 3
   num_layers: 2
-  initial_output_gain: 0.0
+  initial_output_gain: 1.0

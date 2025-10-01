@@ -224,9 +224,9 @@ class SpikeNode(nn.Module):
     
 class LocalConnectivity(nn.Module):
     """
-    CNN 기반 지역적 연결성 모듈 (Multi-layer Depthwise Separable)
-    - 3×3 convolution을 여러 층으로 쌓아 표현력 확보
-    - Learnable output gain으로 스케일 자동 조정
+    CNN 기반 지역적 연결성 모듈
+    - LayerNorm으로 패턴 정규화
+    - 입력 강도 기반 스케일링
     """
     
     def __init__(
@@ -236,7 +236,6 @@ class LocalConnectivity(nn.Module):
         channels: int = 64,
         kernel_size: int = 3,
         num_layers: int = 2,
-        initial_output_gain: float = 5.0,
         device: str = "cuda"
     ):
         super().__init__()
@@ -247,10 +246,10 @@ class LocalConnectivity(nn.Module):
         self.num_layers = num_layers
         self.device = device
         
-        # Input projection: [B,1,H,W] → [B,C,H,W]
+        # Input projection
         self.input_proj = nn.Conv2d(1, channels, 1, bias=False, device=device)
         
-        # Multi-layer depthwise separable blocks
+        # Multi-layer blocks
         self.blocks = nn.ModuleList()
         for _ in range(num_layers):
             block = nn.ModuleDict({
@@ -271,36 +270,31 @@ class LocalConnectivity(nn.Module):
             })
             self.blocks.append(block)
         
-        # Output projection: [B,C,H,W] → [B,1,H,W]
+        # Output projection
         self.output_proj = nn.Conv2d(channels, 1, 1, bias=False, device=device)
         
-        # Learnable output gain (핵심!)
-        self.output_gain = nn.Parameter(
-            torch.tensor(initial_output_gain, device=device)
-        )
+        # Output normalization
+        self.output_norm = nn.LayerNorm([grid_height, grid_width], device=device)
+        
+        # Learnable gate for input strength scaling
+        self.gate = nn.Parameter(torch.tensor(2.0, device=device))
         
         self._initialize_weights()
     
     def _initialize_weights(self):
-        """표준적인 초기화"""
+        """표준 초기화"""
         with torch.no_grad():
-            # Input projection: Xavier uniform
             nn.init.xavier_uniform_(self.input_proj.weight)
             
-            # 각 블록 초기화
             for block in self.blocks:
-                # Depthwise: Kaiming normal (fan_out)
                 nn.init.kaiming_normal_(
                     block['depthwise'].weight, 
                     mode='fan_out',
                     nonlinearity='linear'
                 )
-                
-                # Pointwise: Xavier uniform
                 nn.init.xavier_uniform_(block['pointwise'].weight)
                 nn.init.zeros_(block['pointwise'].bias)
             
-            # Output projection: Xavier uniform
             nn.init.xavier_uniform_(self.output_proj.weight)
     
     def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:
@@ -309,22 +303,27 @@ class LocalConnectivity(nn.Module):
             grid_spikes: [B, H, W] 스파이크 텐서
             
         Returns:
-            internal_input: [B, H, W] 지역적 입력 (스케일 조정됨)
+            internal_input: [B, H, W] 지역적 입력
         """
         # [B, H, W] → [B, 1, H, W] → [B, C, H, W]
         x = grid_spikes.unsqueeze(1)
         x = self.input_proj(x)
         
-        # Multi-layer processing (no residual, no activation)
+        # Multi-layer processing
         for block in self.blocks:
             x = block['depthwise'](x)
             x = block['pointwise'](x)
         
-        # [B, C, H, W] → [B, 1, H, W] → [B, H, W]
-        x = self.output_proj(x)
-        output = x.squeeze(1)
+        # [B, C, H, W] → [B, H, W]
+        output = self.output_proj(x).squeeze(1)
         
-        # Learnable gain 적용
-        output = self.output_gain * output
+        # LayerNorm: mean=0, std=1
+        output = self.output_norm(output)
+        
+        # 입력 강도 계산 (평균 활동도)
+        input_strength = grid_spikes.mean(dim=[-2, -1], keepdim=True)  # [B, 1, 1]
+        
+        # Gate로 스케일링
+        output = output * (self.gate * input_strength)
         
         return output

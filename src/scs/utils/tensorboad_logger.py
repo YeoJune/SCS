@@ -175,12 +175,12 @@ class SCSTensorBoardLogger:
         if 'batch_size' in processing_info:
             self.writer.add_scalar("Processing/Batch_Size", processing_info['batch_size'], self.epoch)
         
-        # 노드별 스파이크율 로깅
+        # 노드별 스파이크율 로깅 및 시각화
         if 'all_spikes' in processing_info:
             all_spikes = processing_info['all_spikes']
             
             if len(all_spikes) > 0:
-                # 각 노드별로 시간에 걸친 평균 스파이크율 계산
+                # 1. 스칼라 스파이크율 로깅
                 node_spike_rates = {}
                 
                 for spike_dict in all_spikes:
@@ -199,6 +199,25 @@ class SCSTensorBoardLogger:
                 for node_name, rates in node_spike_rates.items():
                     avg_rate = sum(rates) / len(rates) if rates else 0.0
                     self.writer.add_scalar(f"Spike_Rates/{node_name}", avg_rate, self.epoch)
+                
+                # 2. log_processing_info_figures용 형식으로 변환하여 시각화
+                try:
+                    # List[Dict[str, np.ndarray]] 형식으로 변환
+                    all_spike_patterns = []
+                    for spike_dict in all_spikes:
+                        pattern = {}
+                        for node_name, spike_tensor in spike_dict.items():
+                            # 0.5 기준 이진화 후 배치 평균을 취해 [H, W] numpy array로 변환
+                            binary_spikes = (spike_tensor > 0.5).float()
+                            # 배치 차원 평균 (여러 배치 샘플의 평균 활성도 패턴)
+                            pattern[node_name] = binary_spikes.mean(dim=0).detach().cpu().numpy()
+                        all_spike_patterns.append(pattern)
+                    
+                    # 시각화 생성 및 로깅
+                    self.log_processing_info_figures(all_spike_patterns, step=self.epoch)
+                    
+                except Exception as e:
+                    warnings.warn(f"스파이크 패턴 시각화 중 오류: {e}")
             
     
     def log_loss_components(self, loss_components: Dict[str, float]):

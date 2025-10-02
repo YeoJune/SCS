@@ -223,14 +223,19 @@ class SpikeNode(nn.Module):
         )
 
 class LocalConnectivity(nn.Module):
+    """
+    CNN 기반 지역적 연결성 모듈 (Standard Conv)
+    - num_layers=1: input→output만
+    - num_layers=2+: 중간 layer 추가
+    """
+    
     def __init__(
         self,
         grid_height: int,
         grid_width: int,
         channels: int = 64,
-        kernel_size: int = 3,
         num_layers: int = 2,
-        initial_output_gain: float = 0.5,
+        initial_output_gain: float = 1.0,
         device: str = "cuda"
     ):
         super().__init__()
@@ -241,66 +246,81 @@ class LocalConnectivity(nn.Module):
         self.num_layers = num_layers
         self.device = device
         
-        # Input projection
-        self.input_proj = nn.Conv2d(
-            1, channels, 
-            kernel_size=1, 
-            bias=False, 
+        # Input layer: [B,1,H,W] → [B,C,H,W]
+        self.conv_in = nn.Conv2d(
+            1, channels,
+            kernel_size=3,
+            padding=1,
+            bias=False,
             device=device
         )
-        self.input_bn = nn.BatchNorm2d(channels, device=device)
+        self.bn_in = nn.BatchNorm2d(channels, device=device)
         
-        # Standard conv blocks
-        self.blocks = nn.ModuleList()
-        for _ in range(num_layers):
-            block = nn.ModuleDict({
+        # Middle layers (optional, num_layers >= 2)
+        self.middle_layers = nn.ModuleList()
+        for _ in range(num_layers - 1):
+            layer = nn.ModuleDict({
                 'conv': nn.Conv2d(
                     channels, channels,
-                    kernel_size=3,  # 표준
-                    padding=1,      # same padding
-                    bias=False,     # 표준
+                    kernel_size=3,
+                    padding=1,
+                    bias=False,
                     device=device
                 ),
-                'bn': nn.BatchNorm2d(channels, device=device),
+                'bn': nn.BatchNorm2d(channels, device=device)
             })
-            self.blocks.append(block)
+            self.middle_layers.append(layer)
         
-        # Output projection
-        self.output_proj = nn.Conv2d(
-            channels, 1, 
-            kernel_size=1, 
-            bias=False, 
+        # Output layer: [B,C,H,W] → [B,1,H,W]
+        self.conv_out = nn.Conv2d(
+            channels, 1,
+            kernel_size=3,
+            padding=1,
+            bias=False,
             device=device
         )
         
-        # Output normalization
-        self.output_norm = nn.LayerNorm([grid_height, grid_width], device=device)
-        self.output_gain = nn.Parameter(torch.tensor(initial_output_gain, device=device))
+        # Learnable output gain
+        self.output_gain = nn.Parameter(
+            torch.tensor(initial_output_gain, device=device)
+        )
         
         self._initialize_weights()
     
     def _initialize_weights(self):
-        """표준 Kaiming initialization"""
+        """Kaiming normal initialization"""
         with torch.no_grad():
             for m in self.modules():
                 if isinstance(m, nn.Conv2d):
-                    nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                    nn.init.kaiming_normal_(
+                        m.weight, 
+                        mode='fan_out', 
+                        nonlinearity='relu'
+                    )
     
     def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:
-        # [B, H, W] → [B, 1, H, W] → [B, C, H, W]
-        x = grid_spikes.unsqueeze(1)
-        x = self.input_proj(x)
-        x = self.input_bn(x)
+        """
+        Args:
+            grid_spikes: [B, H, W]
+            
+        Returns:
+            internal_input: [B, H, W]
+        """
+        # Input
+        x = grid_spikes.unsqueeze(1)  # [B, 1, H, W]
+        x = self.conv_in(x)
+        x = self.bn_in(x)
         
-        # Standard conv blocks
-        for block in self.blocks:
-            x = block['conv'](x)
-            x = block['bn'](x)
+        # Middle layers (if any)
+        for layer in self.middle_layers:
+            x = layer['conv'](x)
+            x = layer['bn'](x)
         
-        # [B, C, H, W] → [B, H, W]
-        output = self.output_proj(x).squeeze(1)
+        # Output
+        x = self.conv_out(x)
+        output = x.squeeze(1)  # [B, H, W]
         
-        # Normalize and scale
-        output = self.output_norm(output) * self.output_gain
+        # Learnable gain
+        output = output * self.output_gain
         
         return output

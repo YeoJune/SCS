@@ -279,6 +279,7 @@ class LocalConnectivity(nn.Module):
             bias=False,
             device=device
         )
+        self.bn_out = nn.BatchNorm2d(1, device=device)
         
         # Learnable output gain
         self.output_gain = nn.Parameter(
@@ -318,6 +319,7 @@ class LocalConnectivity(nn.Module):
         
         # Output
         x = self.conv_out(x)
+        x = self.bn_out(x)
         output = x.squeeze(1)  # [B, H, W]
         
         # Learnable gain

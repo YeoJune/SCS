@@ -222,25 +222,7 @@ class SpikeNode(nn.Module):
             self.refractory_counter
         )
 
-class RMSNorm2d(nn.Module):
-    def __init__(self, normalized_shape, eps=1e-8):
-        super().__init__()
-        self.eps = eps
-        self.weight = nn.Parameter(torch.ones(normalized_shape))
-    
-    def forward(self, x):
-        # [B, H, W]
-        rms = torch.sqrt(x.pow(2).mean(dim=[-2, -1], keepdim=True) + self.eps)
-        x_norm = x / rms
-        return self.weight * x_norm    
-
 class LocalConnectivity(nn.Module):
-    """
-    CNN 기반 지역적 연결성 모듈
-    - LayerNorm으로 패턴 정규화
-    - 입력 강도 기반 스케일링
-    """
-    
     def __init__(
         self,
         grid_height: int,
@@ -249,21 +231,13 @@ class LocalConnectivity(nn.Module):
         kernel_size: int = 3,
         num_layers: int = 2,
         initial_output_gain: float = 0.5,
-        initial_output_bias: float = 0.0,
         device: str = "cuda"
     ):
         super().__init__()
         
-        self.grid_height = grid_height
-        self.grid_width = grid_width
-        self.channels = channels
-        self.num_layers = num_layers
-        self.device = device
-        
-        # Input projection
         self.input_proj = nn.Conv2d(1, channels, 1, bias=False, device=device)
+        self.input_bn = nn.BatchNorm2d(channels, device=device)
         
-        # Multi-layer blocks
         self.blocks = nn.ModuleList()
         for _ in range(num_layers):
             block = nn.ModuleDict({
@@ -272,65 +246,49 @@ class LocalConnectivity(nn.Module):
                     kernel_size=kernel_size,
                     padding=kernel_size // 2,
                     groups=channels,
-                    bias=False,
+                    bias=False,  # BatchNorm 있으므로 False
                     device=device
                 ),
+                'bn_dw': nn.BatchNorm2d(channels, device=device),
                 'pointwise': nn.Conv2d(
                     channels, channels,
                     kernel_size=1,
-                    bias=True,
+                    bias=False,  # BatchNorm 있으므로 False
                     device=device
-                )
+                ),
+                'bn_pw': nn.BatchNorm2d(channels, device=device),
             })
             self.blocks.append(block)
         
-        # Output projection
         self.output_proj = nn.Conv2d(channels, 1, 1, bias=False, device=device)
-        
-        # Output normalization
-        self.output_norm = RMSNorm2d([grid_height, grid_width])
+        self.output_norm = nn.LayerNorm([grid_height, grid_width], device=device)
         self.output_gain = nn.Parameter(torch.tensor(initial_output_gain, device=device))
-        self.output_bias = nn.Parameter(torch.tensor(initial_output_bias, device=device))
         
         self._initialize_weights()
     
     def _initialize_weights(self):
-        """표준 초기화"""
         with torch.no_grad():
-            nn.init.xavier_uniform_(self.input_proj.weight)
+            nn.init.kaiming_normal_(self.input_proj.weight)
             
             for block in self.blocks:
-                nn.init.kaiming_normal_(
-                    block['depthwise'].weight, 
-                    mode='fan_out',
-                    nonlinearity='linear'
-                )
-                nn.init.xavier_uniform_(block['pointwise'].weight)
-                nn.init.zeros_(block['pointwise'].bias)
+                nn.init.kaiming_normal_(block['depthwise'].weight)
+                nn.init.kaiming_normal_(block['pointwise'].weight)
             
-            nn.init.xavier_uniform_(self.output_proj.weight)
+            nn.init.kaiming_normal_(self.output_proj.weight)
     
     def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            grid_spikes: [B, H, W] 스파이크 텐서
-            
-        Returns:
-            internal_input: [B, H, W] 지역적 입력
-        """
-        # [B, H, W] → [B, 1, H, W] → [B, C, H, W]
         x = grid_spikes.unsqueeze(1)
-        x = self.input_proj(x)
         
-        # Multi-layer processing
+        x = self.input_proj(x)
+        x = self.input_bn(x)
+        
         for block in self.blocks:
             x = block['depthwise'](x)
+            x = block['bn_dw'](x)
             x = block['pointwise'](x)
+            x = block['bn_pw'](x)
         
-        # [B, C, H, W] → [B, H, W]
         output = self.output_proj(x).squeeze(1)
-        
-        # normalize and scale
-        output = self.output_norm(output) * self.output_gain + self.output_bias
+        output = self.output_norm(output) * self.output_gain
         
         return output

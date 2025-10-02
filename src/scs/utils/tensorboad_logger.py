@@ -175,8 +175,28 @@ class SCSTensorBoardLogger:
         if 'batch_size' in processing_info:
             self.writer.add_scalar("Processing/Batch_Size", processing_info['batch_size'], self.epoch)
         
+        # 노드별 스파이크율 로깅
         if 'all_spikes' in processing_info:
-            self.log_processing_info_figures(processing_info['all_spikes'], step=self.epoch)
+            all_spikes = processing_info['all_spikes']
+            
+            if len(all_spikes) > 0:
+                # 각 노드별로 시간에 걸친 평균 스파이크율 계산
+                node_spike_rates = {}
+                
+                for spike_dict in all_spikes:
+                    for node_name, spike_tensor in spike_dict.items():
+                        if node_name not in node_spike_rates:
+                            node_spike_rates[node_name] = []
+                        
+                        # 스파이크율 계산 (0~1 범위의 평균 활성도)
+                        spike_rate = spike_tensor.float().mean().item()
+                        node_spike_rates[node_name].append(spike_rate)
+                
+                # 각 노드별 평균 스파이크율 로깅
+                for node_name, rates in node_spike_rates.items():
+                    avg_rate = sum(rates) / len(rates) if rates else 0.0
+                    self.writer.add_scalar(f"Spike_Rates/{node_name}", avg_rate, self.epoch)
+            
     
     def log_loss_components(self, loss_components: Dict[str, float]):
         """손실 구성요소 로깅"""

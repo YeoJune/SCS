@@ -180,7 +180,7 @@ class SCSTensorBoardLogger:
             all_spikes = processing_info['all_spikes']
             
             if len(all_spikes) > 0:
-                # 1. 스칼라 스파이크율 로깅
+                # 1. 스칼라 스파이크율 로깅 (시각화와 동일한 방식)
                 node_spike_rates = {}
                 
                 for spike_dict in all_spikes:
@@ -188,11 +188,9 @@ class SCSTensorBoardLogger:
                         if node_name not in node_spike_rates:
                             node_spike_rates[node_name] = []
                         
-                        # 0.5 기준으로 이진화 (노이즈 제거)
-                        binary_spikes = (spike_tensor > 0.5).float()
-                        
-                        # 배치와 공간 차원 전체에 걸친 평균 스파이크율 계산
-                        spike_rate = binary_spikes.mean().item()
+                        # 시각화와 동일: 배치 평균 먼저, 그 다음 공간 평균
+                        batch_avg = spike_tensor.mean(dim=0)  # [H, W]
+                        spike_rate = batch_avg.mean().item()  # 스칼라
                         node_spike_rates[node_name].append(spike_rate)
                 
                 # 각 노드별 시간 평균 스파이크율 로깅

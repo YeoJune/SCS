@@ -291,6 +291,8 @@ class LocalConnectivity(nn.Module):
         self.output_norm = RMSNorm2d([grid_height, grid_width])
         self.output_gain = nn.Parameter(torch.tensor(initial_output_gain, device=device))
         self.output_bias = nn.Parameter(torch.tensor(initial_output_bias, device=device))
+        self.output_gain.requires_grad = False
+        self.output_bias.requires_grad = False
         
         self._initialize_weights()
     

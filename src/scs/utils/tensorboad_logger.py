@@ -188,11 +188,14 @@ class SCSTensorBoardLogger:
                         if node_name not in node_spike_rates:
                             node_spike_rates[node_name] = []
                         
-                        # 스파이크율 계산 (0~1 범위의 평균 활성도)
-                        spike_rate = spike_tensor.float().mean().item()
+                        # 0.5 기준으로 이진화 (노이즈 제거)
+                        binary_spikes = (spike_tensor > 0.5).float()
+                        
+                        # 배치와 공간 차원 전체에 걸친 평균 스파이크율 계산
+                        spike_rate = binary_spikes.mean().item()
                         node_spike_rates[node_name].append(spike_rate)
                 
-                # 각 노드별 평균 스파이크율 로깅
+                # 각 노드별 시간 평균 스파이크율 로깅
                 for node_name, rates in node_spike_rates.items():
                     avg_rate = sum(rates) / len(rates) if rates else 0.0
                     self.writer.add_scalar(f"Spike_Rates/{node_name}", avg_rate, self.epoch)

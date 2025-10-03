@@ -281,6 +281,7 @@ class LocalConnectivity(nn.Module):
         
         # Expand
         h = self.bn_expand(self.expand(x))
+        h = F.relu(h)
         
         # Position modulation
         h = h * self.position_modulation.unsqueeze(0)

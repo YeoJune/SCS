@@ -45,7 +45,6 @@ class SpikeDynamicsConfig(BaseModel):
 
 class LocalConnectivityConfig(BaseModel):
     """연결성 설정"""
-    channels: int = Field(default=32)
     num_layers: int = Field(default=2)
     initial_output_gain: float = Field(default=0.5)
 

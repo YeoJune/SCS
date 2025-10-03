@@ -59,7 +59,6 @@ class ModelBuilder:
                 local_connections[region_name] = LocalConnectivity(
                     grid_height=grid_height,
                     grid_width=grid_width,
-                    channels=config.local_connectivity.channels,
                     num_layers=config.local_connectivity.num_layers,
                     initial_output_gain=config.local_connectivity.initial_output_gain,
                     device=device

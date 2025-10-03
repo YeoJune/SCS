@@ -224,16 +224,13 @@ class SpikeNode(nn.Module):
 
 class LocalConnectivity(nn.Module):
     """
-    CNN 기반 지역적 연결성 모듈 (Standard Conv)
-    - num_layers=1: input→output만
-    - num_layers=2+: 중간 layer 추가
+    CNN 기반 지역적 연결성 모듈 (Single Channel, N Layers)
     """
     
     def __init__(
         self,
         grid_height: int,
         grid_width: int,
-        channels: int = 64,
         num_layers: int = 2,
         initial_output_gain: float = 1.0,
         device: str = "cuda"
@@ -242,44 +239,23 @@ class LocalConnectivity(nn.Module):
         
         self.grid_height = grid_height
         self.grid_width = grid_width
-        self.channels = channels
         self.num_layers = num_layers
         self.device = device
         
-        # Input layer: [B,1,H,W] → [B,C,H,W]
-        self.conv_in = nn.Conv2d(
-            1, channels,
-            kernel_size=3,
-            padding=1,
-            bias=False,
-            device=device
-        )
-        self.bn_in = nn.BatchNorm2d(channels, device=device)
-        
-        # Middle layers (optional, num_layers >= 2)
-        self.middle_layers = nn.ModuleList()
-        for _ in range(num_layers - 1):
+        # N layers of Conv + BN
+        self.layers = nn.ModuleList()
+        for _ in range(num_layers):
             layer = nn.ModuleDict({
                 'conv': nn.Conv2d(
-                    channels, channels,
+                    1, 1,
                     kernel_size=3,
                     padding=1,
                     bias=False,
                     device=device
                 ),
-                'bn': nn.BatchNorm2d(channels, device=device)
+                'bn': nn.BatchNorm2d(1, device=device)
             })
-            self.middle_layers.append(layer)
-        
-        # Output layer: [B,C,H,W] → [B,1,H,W]
-        self.conv_out = nn.Conv2d(
-            channels, 1,
-            kernel_size=3,
-            padding=1,
-            bias=False,
-            device=device
-        )
-        self.bn_out = nn.BatchNorm2d(1, device=device)
+            self.layers.append(layer)
         
         # Learnable output gain
         self.output_gain = nn.Parameter(
@@ -307,22 +283,14 @@ class LocalConnectivity(nn.Module):
         Returns:
             internal_input: [B, H, W]
         """
-        # Input
         x = grid_spikes.unsqueeze(1)  # [B, 1, H, W]
-        x = self.conv_in(x)
-        x = self.bn_in(x)
         
-        # Middle layers (if any)
-        for layer in self.middle_layers:
+        # N layers
+        for layer in self.layers:
             x = layer['conv'](x)
             x = layer['bn'](x)
         
-        # Output
-        x = self.conv_out(x)
-        x = self.bn_out(x)
         output = x.squeeze(1)  # [B, H, W]
-        
-        # Learnable gain
         output = output * self.output_gain
         
         return output

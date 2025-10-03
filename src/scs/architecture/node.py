@@ -271,10 +271,25 @@ class LocalConnectivity(nn.Module):
     
     def _initialize_weights(self):
         with torch.no_grad():
+            # Conv weights: Kaiming (ReLU 있으므로)
             for m in self.modules():
                 if isinstance(m, nn.Conv2d):
                     nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-            nn.init.normal_(self.position_modulation, mean=1.0, std=0.1)
+            
+            # Position modulation: Xavier
+            # Fan-in: expand conv의 출력 (num_bases)
+            # Fan-out: 다음 layer로 전달 (num_bases)
+            fan_in = self.num_bases
+            fan_out = self.num_bases
+            std = math.sqrt(2.0 / (fan_in + fan_out))
+            
+            # mean=1.0 중심으로 Xavier std
+            for b in range(self.num_bases):
+                nn.init.normal_(
+                    self.position_modulation[b], 
+                    mean=1.0, 
+                    std=std
+                )
     
     def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:
         x = grid_spikes.unsqueeze(1)

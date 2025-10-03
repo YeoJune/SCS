@@ -221,13 +221,12 @@ class SpikeNode(nn.Module):
             adaptive_refractory, 
             self.refractory_counter
         )
-        
+
 class LocalConnectivity(nn.Module):
     """
     기저 분해 + Multi-layer Conv
-    - Expand: 1 → num_bases
-    - Process: num_bases에서 N layers
-    - Combine: num_bases → 1
+    - num_layers=0: Expand → Modulation → Combine만
+    - num_layers≥1: 중간 처리 추가
     """
     
     def __init__(
@@ -235,7 +234,7 @@ class LocalConnectivity(nn.Module):
         grid_height: int,
         grid_width: int,
         num_bases: int = 8,
-        num_layers: int = 2,
+        num_layers: int = 1,
         kernel_size: int = 3,
         initial_output_gain: float = 1.0,
         device: str = "cuda"
@@ -252,7 +251,7 @@ class LocalConnectivity(nn.Module):
         # Position modulation
         self.position_modulation = nn.Parameter(torch.ones(num_bases, grid_height, grid_width, device=device))
         
-        # Middle layers: num_bases → num_bases (N times)
+        # Middle layers (optional)
         self.layers = nn.ModuleList()
         for _ in range(num_layers):
             layer = nn.ModuleDict({
@@ -285,7 +284,7 @@ class LocalConnectivity(nn.Module):
         # Position modulation
         h = h * self.position_modulation.unsqueeze(0)
         
-        # Middle layers
+        # Middle layers (if any)
         for layer in self.layers:
             h = layer['conv'](h)
             h = layer['bn'](h)

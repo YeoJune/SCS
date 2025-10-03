@@ -222,6 +222,33 @@ class SpikeNode(nn.Module):
             self.refractory_counter
         )
 
+def create_gabor_filter(kernel_size=5, theta=0, lambda_=3.0, sigma=1.0, gamma=0.5):
+    """방향성 있는 Gabor 필터"""
+    ax = np.arange(-kernel_size // 2 + 1., kernel_size // 2 + 1.)
+    xx, yy = np.meshgrid(ax, ax)
+    
+    # 회전
+    x_theta = xx * np.cos(theta) + yy * np.sin(theta)
+    y_theta = -xx * np.sin(theta) + yy * np.cos(theta)
+    
+    # Gabor
+    gabor = np.exp(-(x_theta**2 + gamma**2 * y_theta**2) / (2 * sigma**2)) * \
+            np.cos(2 * np.pi * x_theta / lambda_)
+    
+    return gabor - gabor.mean()
+
+# 여러 방향의 Gabor로 초기화
+def initialize_with_gabor_bank(conv_layer, kernel_size=5):
+    with torch.no_grad():
+        out_ch, in_ch, _, _ = conv_layer.weight.shape
+        orientations = np.linspace(0, np.pi, out_ch, endpoint=False)
+        
+        for i, theta in enumerate(orientations):
+            gabor = create_gabor_filter(kernel_size, theta=theta)
+            gabor_tensor = torch.from_numpy(gabor).float()
+            for j in range(in_ch):
+                conv_layer.weight[i, j] = gabor_tensor
+
 class LocalConnectivity(nn.Module):
     """
     기저 분해 + Multi-layer Conv
@@ -271,21 +298,25 @@ class LocalConnectivity(nn.Module):
     
     def _initialize_weights(self):
         with torch.no_grad():
-            # Conv weights: Kaiming (ReLU 있으므로)
-            for m in self.modules():
-                if isinstance(m, nn.Conv2d):
-                    nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            # Expand/Combine: Xavier (1×1)
+            nn.init.xavier_uniform_(self.expand.weight)
+            nn.init.xavier_uniform_(self.combine.weight)
+            
+            # Middle layers
+            for i, layer in enumerate(self.layers):
+                if i == 0 and layer['conv'].kernel_size[0] > 1:
+                    # 첫 레이어만 Gabor
+                    initialize_with_gabor_bank(layer['conv'], kernel_size=3)
+                else:
+                    # 나머지는 Kaiming
+                    nn.init.kaiming_normal_(layer['conv'].weight, mode='fan_out', nonlinearity='relu')
             
             # Position modulation: Xavier
-            std = math.sqrt(1.0 / self.num_bases)
-            
-            # mean=1.0 중심으로 Xavier std
+            fan_in = self.num_bases
+            fan_out = self.num_bases
+            std = math.sqrt(2.0 / (fan_in + fan_out))
             for b in range(self.num_bases):
-                nn.init.normal_(
-                    self.position_modulation[b], 
-                    mean=1.0, 
-                    std=std
-                )
+                nn.init.normal_(self.position_modulation[b], mean=1.0, std=std)
     
     def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:
         x = grid_spikes.unsqueeze(1)

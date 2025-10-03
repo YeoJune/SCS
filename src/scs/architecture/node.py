@@ -224,14 +224,16 @@ class SpikeNode(nn.Module):
 
 class LocalConnectivity(nn.Module):
     """
-    CNN 기반 지역적 연결성 모듈 (Single Channel, N Layers)
+    기저 분해 기반 위치별 변조 Conv
+    - 공유 기저 필터 + 위치별 modulation
     """
     
     def __init__(
         self,
         grid_height: int,
         grid_width: int,
-        num_layers: int = 2,
+        num_bases: int = 8,
+        kernel_size: int = 3,
         initial_output_gain: float = 1.0,
         device: str = "cuda"
     ):
@@ -239,23 +241,33 @@ class LocalConnectivity(nn.Module):
         
         self.grid_height = grid_height
         self.grid_width = grid_width
-        self.num_layers = num_layers
+        self.num_bases = num_bases
         self.device = device
         
-        # N layers of Conv + BN
-        self.layers = nn.ModuleList()
-        for _ in range(num_layers):
-            layer = nn.ModuleDict({
-                'conv': nn.Conv2d(
-                    1, 1,
-                    kernel_size=3,
-                    padding=1,
-                    bias=False,
-                    device=device
-                ),
-                'bn': nn.BatchNorm2d(1, device=device)
-            })
-            self.layers.append(layer)
+        # 1. Expand: 1 → num_bases (shared basis)
+        self.expand = nn.Conv2d(
+            1, num_bases,
+            kernel_size=kernel_size,
+            padding=kernel_size // 2,
+            bias=False,
+            device=device
+        )
+        self.bn_expand = nn.BatchNorm2d(num_bases, device=device)
+        
+        # 2. Position-specific modulation
+        self.position_modulation = nn.Parameter(
+            torch.ones(num_bases, grid_height, grid_width, device=device)
+        )
+        
+        # 3. Combine: num_bases → 1 (shared combination)
+        self.combine = nn.Conv2d(
+            num_bases, 1,
+            kernel_size=kernel_size,
+            padding=kernel_size // 2,
+            bias=False,
+            device=device
+        )
+        self.bn_combine = nn.BatchNorm2d(1, device=device)
         
         # Learnable output gain
         self.output_gain = nn.Parameter(
@@ -265,15 +277,12 @@ class LocalConnectivity(nn.Module):
         self._initialize_weights()
     
     def _initialize_weights(self):
-        """Kaiming normal initialization"""
+        """Kaiming initialization"""
         with torch.no_grad():
-            for m in self.modules():
-                if isinstance(m, nn.Conv2d):
-                    nn.init.kaiming_normal_(
-                        m.weight, 
-                        mode='fan_out', 
-                        nonlinearity='relu'
-                    )
+            nn.init.kaiming_normal_(self.expand.weight, mode='fan_out', nonlinearity='relu')
+            nn.init.kaiming_normal_(self.combine.weight, mode='fan_out', nonlinearity='relu')
+            # Position modulation: 1 근처로 초기화
+            nn.init.normal_(self.position_modulation, mean=1.0, std=0.1)
     
     def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:
         """
@@ -283,14 +292,24 @@ class LocalConnectivity(nn.Module):
         Returns:
             internal_input: [B, H, W]
         """
-        x = grid_spikes.unsqueeze(1)  # [B, 1, H, W]
+        # [B, H, W] → [B, 1, H, W]
+        x = grid_spikes.unsqueeze(1)
         
-        # N layers
-        for layer in self.layers:
-            x = layer['conv'](x)
-            x = layer['bn'](x)
+        # Expand to basis features
+        h = self.expand(x)  # [B, num_bases, H, W]
+        h = self.bn_expand(h)
         
-        output = x.squeeze(1)  # [B, H, W]
+        # Position-wise modulation (핵심!)
+        h = h * self.position_modulation.unsqueeze(0)  # Broadcasting
+        
+        # Combine basis features
+        output = self.combine(h)  # [B, 1, H, W]
+        output = self.bn_combine(output)
+        
+        # [B, 1, H, W] → [B, H, W]
+        output = output.squeeze(1)
+        
+        # Learnable gain
         output = output * self.output_gain
         
         return output

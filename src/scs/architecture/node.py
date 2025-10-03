@@ -245,7 +245,7 @@ class LocalConnectivity(nn.Module):
         self.num_layers = num_layers
         
         # Expand: 1 → num_bases
-        self.expand = nn.Conv2d(1, num_bases, kernel_size, padding=kernel_size//2, bias=False, device=device)
+        self.expand = nn.Conv2d(1, num_bases, 1, bias=False, device=device)
         self.bn_expand = nn.BatchNorm2d(num_bases, device=device)
         
         # Position modulation
@@ -262,7 +262,7 @@ class LocalConnectivity(nn.Module):
             self.layers.append(layer)
         
         # Combine: num_bases → 1
-        self.combine = nn.Conv2d(num_bases, 1, kernel_size, padding=kernel_size//2, bias=False, device=device)
+        self.combine = nn.Conv2d(num_bases, 1, 1, bias=False, device=device)
         self.bn_combine = nn.BatchNorm2d(1, device=device)
         
         self.output_gain = nn.Parameter(torch.tensor(initial_output_gain, device=device))
@@ -281,7 +281,6 @@ class LocalConnectivity(nn.Module):
         
         # Expand
         h = self.bn_expand(self.expand(x))
-        h = F.relu(h)
         
         # Position modulation
         h = h * self.position_modulation.unsqueeze(0)

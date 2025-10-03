@@ -8,6 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple, Optional, Dict, Any
 import math
+import numpy as np
 
 
 class SpikeNode(nn.Module):

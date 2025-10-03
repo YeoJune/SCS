@@ -221,11 +221,13 @@ class SpikeNode(nn.Module):
             adaptive_refractory, 
             self.refractory_counter
         )
-
+        
 class LocalConnectivity(nn.Module):
     """
-    기저 분해 기반 위치별 변조 Conv
-    - 공유 기저 필터 + 위치별 modulation
+    기저 분해 + Multi-layer Conv
+    - Expand: 1 → num_bases
+    - Process: num_bases에서 N layers
+    - Combine: num_bases → 1
     """
     
     def __init__(
@@ -233,83 +235,62 @@ class LocalConnectivity(nn.Module):
         grid_height: int,
         grid_width: int,
         num_bases: int = 8,
+        num_layers: int = 2,
         kernel_size: int = 3,
         initial_output_gain: float = 1.0,
         device: str = "cuda"
     ):
         super().__init__()
         
-        self.grid_height = grid_height
-        self.grid_width = grid_width
         self.num_bases = num_bases
-        self.device = device
+        self.num_layers = num_layers
         
-        # 1. Expand: 1 → num_bases (shared basis)
-        self.expand = nn.Conv2d(
-            1, num_bases,
-            kernel_size=kernel_size,
-            padding=kernel_size // 2,
-            bias=False,
-            device=device
-        )
+        # Expand: 1 → num_bases
+        self.expand = nn.Conv2d(1, num_bases, kernel_size, padding=kernel_size//2, bias=False, device=device)
         self.bn_expand = nn.BatchNorm2d(num_bases, device=device)
         
-        # 2. Position-specific modulation
-        self.position_modulation = nn.Parameter(
-            torch.ones(num_bases, grid_height, grid_width, device=device)
-        )
+        # Position modulation
+        self.position_modulation = nn.Parameter(torch.ones(num_bases, grid_height, grid_width, device=device))
         
-        # 3. Combine: num_bases → 1 (shared combination)
-        self.combine = nn.Conv2d(
-            num_bases, 1,
-            kernel_size=kernel_size,
-            padding=kernel_size // 2,
-            bias=False,
-            device=device
-        )
+        # Middle layers: num_bases → num_bases (N times)
+        self.layers = nn.ModuleList()
+        for _ in range(num_layers):
+            layer = nn.ModuleDict({
+                'conv': nn.Conv2d(num_bases, num_bases, kernel_size, padding=kernel_size//2, bias=False, device=device),
+                'bn': nn.BatchNorm2d(num_bases, device=device)
+            })
+            self.layers.append(layer)
+        
+        # Combine: num_bases → 1
+        self.combine = nn.Conv2d(num_bases, 1, kernel_size, padding=kernel_size//2, bias=False, device=device)
         self.bn_combine = nn.BatchNorm2d(1, device=device)
         
-        # Learnable output gain
-        self.output_gain = nn.Parameter(
-            torch.tensor(initial_output_gain, device=device)
-        )
+        self.output_gain = nn.Parameter(torch.tensor(initial_output_gain, device=device))
         
         self._initialize_weights()
     
     def _initialize_weights(self):
-        """Kaiming initialization"""
         with torch.no_grad():
-            nn.init.kaiming_normal_(self.expand.weight, mode='fan_out', nonlinearity='relu')
-            nn.init.kaiming_normal_(self.combine.weight, mode='fan_out', nonlinearity='relu')
-            # Position modulation: 1 근처로 초기화
+            for m in self.modules():
+                if isinstance(m, nn.Conv2d):
+                    nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
             nn.init.normal_(self.position_modulation, mean=1.0, std=0.1)
     
     def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            grid_spikes: [B, H, W]
-            
-        Returns:
-            internal_input: [B, H, W]
-        """
-        # [B, H, W] → [B, 1, H, W]
         x = grid_spikes.unsqueeze(1)
         
-        # Expand to basis features
-        h = self.expand(x)  # [B, num_bases, H, W]
-        h = self.bn_expand(h)
+        # Expand
+        h = self.bn_expand(self.expand(x))
         
-        # Position-wise modulation (핵심!)
-        h = h * self.position_modulation.unsqueeze(0)  # Broadcasting
+        # Position modulation
+        h = h * self.position_modulation.unsqueeze(0)
         
-        # Combine basis features
-        output = self.combine(h)  # [B, 1, H, W]
-        output = self.bn_combine(output)
+        # Middle layers
+        for layer in self.layers:
+            h = layer['conv'](h)
+            h = layer['bn'](h)
         
-        # [B, 1, H, W] → [B, H, W]
-        output = output.squeeze(1)
+        # Combine
+        output = self.bn_combine(self.combine(h)).squeeze(1)
         
-        # Learnable gain
-        output = output * self.output_gain
-        
-        return output
+        return output * self.output_gain

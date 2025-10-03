@@ -307,7 +307,7 @@ class LocalConnectivity(nn.Module):
             for i, layer in enumerate(self.layers):
                 if i == 0 and layer['conv'].kernel_size[0] > 1:
                     # 첫 레이어만 Gabor
-                    initialize_with_gabor_bank(layer['conv'], kernel_size=3)
+                    initialize_with_gabor_bank(layer['conv'], kernel_size=layer['conv'].kernel_size[0])
                 else:
                     # 나머지는 Kaiming
                     nn.init.kaiming_normal_(layer['conv'].weight, mode='fan_out', nonlinearity='relu')

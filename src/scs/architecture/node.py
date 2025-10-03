@@ -277,11 +277,7 @@ class LocalConnectivity(nn.Module):
                     nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
             
             # Position modulation: Xavier
-            # Fan-in: expand conv의 출력 (num_bases)
-            # Fan-out: 다음 layer로 전달 (num_bases)
-            fan_in = self.num_bases
-            fan_out = self.num_bases
-            std = math.sqrt(2.0 / (fan_in + fan_out))
+            std = math.sqrt(1.0 / self.num_bases)
             
             # mean=1.0 중심으로 Xavier std
             for b in range(self.num_bases):

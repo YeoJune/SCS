@@ -256,7 +256,8 @@ class LocalConnectivity(nn.Module):
         for _ in range(num_layers):
             layer = nn.ModuleDict({
                 'conv': nn.Conv2d(num_bases, num_bases, kernel_size, padding=kernel_size//2, bias=False, device=device),
-                'bn': nn.BatchNorm2d(num_bases, device=device)
+                'bn': nn.BatchNorm2d(num_bases, device=device),
+                'relu': nn.ReLU(inplace=True)
             })
             self.layers.append(layer)
         
@@ -288,6 +289,7 @@ class LocalConnectivity(nn.Module):
         for layer in self.layers:
             h = layer['conv'](h)
             h = layer['bn'](h)
+            h = layer['relu'](h)
         
         # Combine
         output = self.bn_combine(self.combine(h)).squeeze(1)

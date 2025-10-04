@@ -251,6 +251,7 @@ class LocalConnectivity(nn.Module):
         
         # Position modulation
         self.position_modulation = nn.Parameter(torch.ones(num_bases, grid_height, grid_width, device=device))
+        nn.init.uniform_(self.position_modulation, -0.5, 1.5)
         
         # Middle layers (optional)
         self.layers = nn.ModuleList()
@@ -291,7 +292,7 @@ class LocalConnectivity(nn.Module):
         x = grid_spikes.unsqueeze(1)
         
         # Expand
-        h = self.expand(x)
+        h = self.bn_expand(self.expand(x))
         
         # Position modulation
         h = h * self.position_modulation.unsqueeze(0)
@@ -303,6 +304,6 @@ class LocalConnectivity(nn.Module):
             h = layer['relu'](h)
         
         # Combine
-        output = self.combine(h).squeeze(1)
+        output = self.bn_combine(self.combine(h)).squeeze(1)
         
         return output * self.output_gain

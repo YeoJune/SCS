@@ -303,6 +303,6 @@ class LocalConnectivity(nn.Module):
             h = layer['relu'](h)
         
         # Combine
-        output = self.bn_combine(self.combine(h)).squeeze(1)
+        output = self.combine(h).squeeze(1)
         
         return output * self.output_gain

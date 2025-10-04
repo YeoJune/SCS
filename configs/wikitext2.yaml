@@ -60,7 +60,7 @@ task:
 
 # === 학습 설정 오버라이드 ===
 learning:
-  epochs: 11
+  epochs: 3
   learning_rate: 5e-4
   eta_min: 2e-4
   max_clk_training: 8
@@ -90,7 +90,7 @@ timing_manager:
 
 # === 데이터 로딩 오버라이드 ===
 data_loading:
-  batch_size: 32
+  batch_size: 512
   tokenizer:
     name: "t5-small"
     max_length: 128

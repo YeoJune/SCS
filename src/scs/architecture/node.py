@@ -307,7 +307,8 @@ class LocalConnectivity(nn.Module):
             for i, layer in enumerate(self.layers):
                 nn.init.kaiming_normal_(layer['conv'].weight, mode='fan_out', nonlinearity='relu')
             
-            nn.init.normal_(self.position_modulation, mean=0.0, std=0.2)
+            # 절반은 양수, 절반은 음수로 초기화
+            nn.init.normal_(self.position_modulation)
 
     def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:
         x = grid_spikes.unsqueeze(1)

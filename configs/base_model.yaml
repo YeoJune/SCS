@@ -29,7 +29,7 @@ spike_dynamics:
 
 # === 연결성 설정 ===
 local_connectivity:
-  num_bases: 8
+  num_bases: 4
   num_layers: 2
   initial_output_gain: 0.4
 

@@ -246,8 +246,7 @@ class LocalConnectivity(nn.Module):
         self.num_layers = num_layers
         
         # Expand: 1 → num_bases
-        self.expand = nn.Conv2d(1, num_bases, 1, bias=False, device=device)
-        self.bn_expand = nn.BatchNorm2d(num_bases, device=device)
+        self.expand = nn.Conv2d(1, num_bases, 1, bias=True, device=device)
         
         # Position modulation
         self.position_modulation = nn.Parameter(torch.ones(num_bases, grid_height, grid_width, device=device))
@@ -291,11 +290,8 @@ class LocalConnectivity(nn.Module):
 
         x = grid_spikes.unsqueeze(1)
         
-        # Expand
-        h = self.bn_expand(self.expand(x))
-        
-        # Position modulation
-        h = h * self.position_modulation.unsqueeze(0)
+        # Expand + Modulation
+        h = self.expand(x) * self.position_modulation.unsqueeze(0)
         
         # Middle layers (if any)
         for layer in self.layers:

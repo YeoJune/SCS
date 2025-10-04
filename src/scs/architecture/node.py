@@ -305,28 +305,20 @@ class LocalConnectivity(nn.Module):
             
             # Middle layers
             for i, layer in enumerate(self.layers):
-                if i == 0 and layer['conv'].kernel_size[0] > 1:
-                    # 첫 레이어만 Gabor
-                    initialize_with_gabor_bank(layer['conv'], kernel_size=layer['conv'].kernel_size[0])
-                else:
-                    # 나머지는 Kaiming
-                    nn.init.kaiming_normal_(layer['conv'].weight, mode='fan_out', nonlinearity='relu')
+                nn.init.kaiming_normal_(layer['conv'].weight, mode='fan_out', nonlinearity='relu')
             
-            # Position modulation: Xavier
-            fan_in = self.num_bases
-            fan_out = self.num_bases
-            std = math.sqrt(2.0 / (fan_in + fan_out))
-            for b in range(self.num_bases):
-                nn.init.normal_(self.position_modulation[b], mean=1.0, std=std)
-    
+            nn.init.normal_(self.position_modulation, mean=0.0, std=0.2)
+
     def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:
         x = grid_spikes.unsqueeze(1)
         
         # Expand
-        h = self.bn_expand(self.expand(x))
+        h = self.expand(x)
         
         # Position modulation
         h = h * self.position_modulation.unsqueeze(0)
+
+        h = self.bn_expand(h)
         
         # Middle layers (if any)
         for layer in self.layers:

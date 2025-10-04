@@ -313,12 +313,10 @@ class LocalConnectivity(nn.Module):
         x = grid_spikes.unsqueeze(1)
         
         # Expand
-        h = self.expand(x)
+        h = self.bn_expand(self.expand(x))
         
         # Position modulation
         h = h * self.position_modulation.unsqueeze(0)
-
-        h = self.bn_expand(h)
         
         # Middle layers (if any)
         for layer in self.layers:

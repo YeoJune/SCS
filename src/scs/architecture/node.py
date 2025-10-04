@@ -223,33 +223,6 @@ class SpikeNode(nn.Module):
             self.refractory_counter
         )
 
-def create_gabor_filter(kernel_size=5, theta=0, lambda_=3.0, sigma=1.0, gamma=0.5):
-    """방향성 있는 Gabor 필터"""
-    ax = np.arange(-kernel_size // 2 + 1., kernel_size // 2 + 1.)
-    xx, yy = np.meshgrid(ax, ax)
-    
-    # 회전
-    x_theta = xx * np.cos(theta) + yy * np.sin(theta)
-    y_theta = -xx * np.sin(theta) + yy * np.cos(theta)
-    
-    # Gabor
-    gabor = np.exp(-(x_theta**2 + gamma**2 * y_theta**2) / (2 * sigma**2)) * \
-            np.cos(2 * np.pi * x_theta / lambda_)
-    
-    return gabor - gabor.mean()
-
-# 여러 방향의 Gabor로 초기화
-def initialize_with_gabor_bank(conv_layer, kernel_size=5):
-    with torch.no_grad():
-        out_ch, in_ch, _, _ = conv_layer.weight.shape
-        orientations = np.linspace(0, np.pi, out_ch, endpoint=False)
-        
-        for i, theta in enumerate(orientations):
-            gabor = create_gabor_filter(kernel_size, theta=theta)
-            gabor_tensor = torch.from_numpy(gabor).float()
-            for j in range(in_ch):
-                conv_layer.weight[i, j] = gabor_tensor
-
 class LocalConnectivity(nn.Module):
     """
     기저 분해 + Multi-layer Conv
@@ -307,14 +280,14 @@ class LocalConnectivity(nn.Module):
             for i, layer in enumerate(self.layers):
                 nn.init.kaiming_normal_(layer['conv'].weight, mode='fan_out', nonlinearity='relu')
             
-            # 절반은 양수, 절반은 음수로 초기화
+            # Position modulation: Normal
             nn.init.normal_(self.position_modulation)
 
     def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:
         x = grid_spikes.unsqueeze(1)
         
         # Expand
-        h = self.bn_expand(self.expand(x))
+        h = self.expand(x)
         
         # Position modulation
         h = h * self.position_modulation.unsqueeze(0)
@@ -326,6 +299,6 @@ class LocalConnectivity(nn.Module):
             h = layer['relu'](h)
         
         # Combine
-        output = self.bn_combine(self.combine(h)).squeeze(1)
+        output = self.combine(h).squeeze(1)
         
         return output * self.output_gain

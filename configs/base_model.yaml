@@ -35,7 +35,7 @@ local_connectivity:
 
 # === 축삭 연결 (IN→OUT 단일 연결) ===
 axonal_connections:
-  gate_init_mean: 4.0
+  gate_init_mean: 3.0
   gate_init_std: 0.0
   bias_init_mean: 0.0
   bias_init_std: 0.0

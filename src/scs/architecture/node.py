@@ -238,7 +238,6 @@ class LocalConnectivity(nn.Module):
         num_layers: int = 1,
         kernel_size: int = 3,
         initial_output_gain: float = 1.0,
-        initial_output_bias: float = 0.0,
         device: str = "cuda"
     ):
         super().__init__()
@@ -268,7 +267,6 @@ class LocalConnectivity(nn.Module):
         self.bn_combine = nn.BatchNorm2d(1, device=device)
         
         self.output_gain = nn.Parameter(torch.tensor(initial_output_gain, device=device))
-        self.output_bias = nn.Parameter(torch.tensor(initial_output_bias, device=device))
         
         self._initialize_weights()
     
@@ -303,4 +301,4 @@ class LocalConnectivity(nn.Module):
         # Combine
         output = self.bn_combine(self.combine(h)).squeeze(1)
         
-        return output * self.output_gain + self.output_bias
+        return output * self.output_gain

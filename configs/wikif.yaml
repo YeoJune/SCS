@@ -1,6 +1,0 @@
-defaults:
-  - wikitext2
-
-axonal_connections:
-  gate_init_mean: 4.0
-  bias_init_mean: 0.5

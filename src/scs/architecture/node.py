@@ -284,6 +284,10 @@ class LocalConnectivity(nn.Module):
             nn.init.normal_(self.position_modulation)
 
     def forward(self, grid_spikes: torch.Tensor) -> torch.Tensor:
+        # 입력이 너무 작으면 0 반환
+        if grid_spikes.abs().sum() < 1e-6:
+            return torch.zeros_like(grid_spikes) * self.output_gain
+
         x = grid_spikes.unsqueeze(1)
         
         # Expand

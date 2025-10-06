@@ -87,6 +87,20 @@ class InputInterface(nn.Module):
         
         return scaled_pattern.view(-1, self.grid_height, self.grid_width)
 
+    def batch_forward(self, all_token_windows: Tensor) -> Tensor:
+        """배치 처리 (forward()와 동일 로직)"""
+        if all_token_windows is None or all_token_windows.numel() == 0:
+            return None
+        
+        token_embeds = self.token_embedding(all_token_windows)
+        encoder_output = self.transformer_encoder(token_embeds)
+        context_vector = encoder_output[:, -1, :]
+        membrane_logits = self.input_mapper(context_vector)
+        pattern_probs = F.softmax(membrane_logits / self.softmax_temperature, dim=-1)
+        total_energy = self.grid_height * self.grid_width * self.input_power
+        scaled_pattern = torch.clamp(pattern_probs * total_energy, max=1.0)
+        return scaled_pattern.view(-1, self.grid_height, self.grid_width)
+
 class OutputInterface(nn.Module):
     def __init__(
         self, vocab_size: int, grid_height: int, grid_width: int, pad_token_id: int,
@@ -168,3 +182,38 @@ class OutputInterface(nn.Module):
         final_output = self.transformer_decoder.norm(decoder_output)
 
         return self.final_projection(final_output)
+
+    def create_all_hidden_vectors(self, all_output_spikes: Tensor) -> Tensor:
+        """[B, T, H, W] -> [B, T, E]"""
+        B, T, H, W = all_output_spikes.shape
+        flat = all_output_spikes.reshape(B * T, H, W)
+        hidden = self._create_hidden_vector(flat)
+        return hidden.reshape(B, T, self.embedding_dim)
+    
+    def batch_decode(self, all_hidden: Tensor, target_tokens: Tensor) -> Tensor:
+        """배치 디코딩 [B, T, E] + [B, L] -> [B, L, V]"""
+        B, T, E = all_hidden.shape
+        L = target_tokens.shape[1]
+        
+        # 슬라이딩 윈도우
+        padded = F.pad(all_hidden, (0, 0, self.window_size-1, 0))
+        indices = torch.arange(L, device=all_hidden.device).unsqueeze(-1) + \
+                  torch.arange(self.window_size, device=all_hidden.device)
+        memory_windows = padded[:, indices]  # [B, L, W, E]
+        
+        # 디코딩
+        target_embeds = self.token_embedding(target_tokens)
+        causal_mask = torch.triu(torch.ones(L, L, device=all_hidden.device, dtype=torch.bool), 1)
+        causal_mask = causal_mask.masked_fill(causal_mask, float('-inf'))
+        
+        all_logits = []
+        for pos in range(L):
+            out = self.transformer_decoder(
+                tgt=target_embeds[:, :pos+1],
+                memory=memory_windows[:, pos],
+                tgt_mask=causal_mask[:pos+1, :pos+1]
+            )
+            logits = self.final_projection(self.transformer_decoder.norm(out)[:, -1])
+            all_logits.append(logits)
+        
+        return torch.stack(all_logits, dim=1)

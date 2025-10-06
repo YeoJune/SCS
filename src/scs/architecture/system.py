@@ -368,34 +368,46 @@ class SCSSystem(nn.Module):
         
         # T-block 설정
         T = 20  # CLK per T-block
-        # LPF 필터 시정수 (임시 구현)
-        lpf_alpha = 0.95  # 지수 가중 평균 계수 (0 < α < 1)
+        vocab_size = self.output_interface.vocab_size
+        
+        # 병렬 출력 조건
+        use_parallel = (
+            training and 
+            target_tokens is not None and
+            scheduled_sampling_prob == 1.0 and
+            hasattr(self.timing_manager, 'train_fixed_ref') and
+            self.timing_manager.train_fixed_ref in ['start', 'end']
+        )
+        
+        # Phase A: 입력 병렬 인코딩
+        all_input_probs = self._batch_encode_inputs(input_tokens, attention_mask, self.max_clk)
+        
+        # Phase B+C 초기화
+        all_spikes_for_reg = []
+        if use_parallel:
+            all_output_spikes = []
+            target_start_clk = (input_seq_len + getattr(self.timing_manager, 'train_fixed_offset', 0)
+                               if self.timing_manager.train_fixed_ref == 'end' 
+                               else getattr(self.timing_manager, 'train_fixed_offset', 0))
+        else:
+            all_logits = torch.zeros((batch_size, target_seq_len, vocab_size), device=self.device)
         
         max_t_blocks = self.max_clk
         
-        all_spikes_for_reg = []  # 스파이크 정보를 저장할 리스트
-
-        # 출력 상태 초기화
-        vocab_size = self.output_interface.vocab_size
-        all_logits = torch.zeros(
-            (batch_size, target_seq_len, vocab_size), 
-            dtype=torch.float32, 
-            device=self.device
-        )
-        
-        # T-block 루프
+        # Phase B: SNN 루프 (공통)
         final_t_block = 0
         final_acc_spikes = None
         
         for t_block in range(max_t_blocks):
             final_t_block = t_block
 
-            # === T-block 시작: 입력 확률 계산 ===
-            input_probs = self._get_external_input_at_clk(
-                input_tokens, t_block, attention_mask
-            )
+            # 입력
+            if all_input_probs is not None and t_block < all_input_probs.shape[1]:
+                input_probs = all_input_probs[:, t_block]
+            else:
+                input_probs = self._get_external_input_at_clk(input_tokens, t_block, attention_mask)
             
-            # T CLK 동안 출력 노드 스파이크 LPF 누적용 (호환성을 위해 딕셔너리 형식 유지)
+            # T CLK 내부 루프
             t_block_spikes_lpf = {}
             prev_spikes = None
             
@@ -426,84 +438,115 @@ class SCSSystem(nn.Module):
                 if prev_spikes is not None:
                     self._update_stp_weights(prev_spikes, spikes_with_grad)
                 
-                # 출력 노드만 지수 가중 평균(LPF) 누적 (호환성을 위해 딕셔너리 형식 유지)
+                # 출력 노드만 지수 가중 평균(LPF) 누적
                 if self.output_node in spikes_with_grad:
                     output_spikes = spikes_with_grad[self.output_node]
                     if self.output_node not in t_block_spikes_lpf:
                         # 첫 번째 CLK: 초기값으로 설정
                         t_block_spikes_lpf[self.output_node] = output_spikes.clone()
                     else:
-                        # # LPF 적용: LPF_State(t) = α * LPF_State(t-1) + (1-α) * spikes(t)
-                        # t_block_spikes_lpf[self.output_node] = (
-                        #     lpf_alpha * t_block_spikes_lpf[self.output_node] + 
-                        #     (1 - lpf_alpha) * output_spikes
-                        # )
-
-                        # 그냥 평균
-                        t_block_spikes_lpf[self.output_node] = (t_block_spikes_lpf[self.output_node] * clk_in_t + output_spikes) / (clk_in_t + 1)
+                        # LPF 적용: 단순 평균으로 수정
+                        t_block_spikes_lpf[self.output_node] = (
+                            t_block_spikes_lpf[self.output_node] * clk_in_t + output_spikes) / (clk_in_t + 1)
                         
-                
                 prev_spikes = spikes_with_grad
             
             # === T-block 완료: LPF 필터링된 스파이크 사용 ===
-            lpf_spikes = t_block_spikes_lpf  # 이미 LPF가 적용된 상태
+            lpf_spikes = t_block_spikes_lpf
             final_acc_spikes = lpf_spikes.get(self.acc_node)
             
-            # ====== PHASE 4: TimingManager 업데이트 (T 단위) ======
-            self.timing_manager.step(
-                current_clk=t_block,  # T-block을 CLK 파라미터로 전달
-                acc_node_spikes=final_acc_spikes,
-                training=training,
-                input_seq_len=input_seq_len,
-                target_seq_len=target_seq_len
-            )
-            
-            # ====== PHASE 5: 출력 생성 및 저장 (T 단위) ======
-            active_mask = self.timing_manager.get_active_mask()
-            if active_mask.any():
-                current_generated_length = self.timing_manager.generated_length
-                max_len_for_decoder = current_generated_length.max().item()
+            # Phase C: 출력 분기
+            if use_parallel:
+                # 병렬 경로: 출력 스파이크만 수집
+                if self.output_node in lpf_spikes:
+                    all_output_spikes.append(lpf_spikes[self.output_node])
+            else:
+                # 순차 경로: 기존 TimingManager 사용
+                # ====== PHASE 4: TimingManager 업데이트 (T 단위) ======
+                self.timing_manager.step(
+                    current_clk=t_block,  # T-block을 CLK 파라미터로 전달
+                    acc_node_spikes=final_acc_spikes,
+                    training=training,
+                    input_seq_len=input_seq_len,
+                    target_seq_len=target_seq_len
+                )
                 
-                if max_len_for_decoder > 0:
-                    max_len_for_decoder = min(max_len_for_decoder, self.decoder_window_size)
-                    decoder_batch = self.decoder_sequences[:, :max_len_for_decoder]
+                # ====== PHASE 5: 출력 생성 및 저장 (T 단위) ======
+                active_mask = self.timing_manager.get_active_mask()
+                if active_mask.any():
+                    current_generated_length = self.timing_manager.generated_length
+                    max_len_for_decoder = current_generated_length.max().item()
                     
-                    # LPF 필터링된 스파이크로 로짓 생성
-                    logits = self._generate_logits(lpf_spikes, decoder_batch, batch_size)
-                    
-                    self._update_outputs_and_decoder(
-                        logits, all_logits, self.decoder_sequences,
-                        target_tokens, training, scheduled_sampling_prob
-                    )
-            
-            # 조기 종료 조건
-            if self.timing_manager.all_ended:
-                break
+                    if max_len_for_decoder > 0:
+                        max_len_for_decoder = min(max_len_for_decoder, self.decoder_window_size)
+                        decoder_batch = self.decoder_sequences[:, :max_len_for_decoder]
+                        
+                        # LPF 필터링된 스파이크로 로짓 생성
+                        logits = self._generate_logits(lpf_spikes, decoder_batch, batch_size)
+                        
+                        self._update_outputs_and_decoder(
+                            logits, all_logits, self.decoder_sequences,
+                            target_tokens, training, scheduled_sampling_prob
+                        )
+                
+                # 조기 종료 조건
+                if self.timing_manager.all_ended:
+                    break
         
         # 결과 생성
-        max_generated = self.timing_manager.generated_length.max().item()
-        if max_generated > 0:
-            output_logits = all_logits[:, :max_generated]
+        if use_parallel:
+            # 병렬 경로 결과
+            timing_info = self._extract_timing_info(
+                all_spikes_for_reg, target_start_clk, target_start_clk + target_seq_len - 1, T
+            )
+            output_spikes_tensor = torch.stack(all_output_spikes, dim=1)
+            all_hidden = self.output_interface.create_all_hidden_vectors(output_spikes_tensor)
+            output_logits = self.output_interface.batch_decode(all_hidden, target_tokens)
             generated_tokens = output_logits.argmax(dim=-1)
+            
+            processing_info = {
+                "processing_clk": len(all_output_spikes) * T,
+                "processing_t_blocks": len(all_output_spikes),
+                "tokens_generated": target_seq_len,
+                "parallel_path": True,
+                "timing_info": timing_info,
+                "final_acc_activity": timing_info['final_acc_activity'],
+                "batch_size": batch_size,
+                "sequence_length": output_logits.shape[1],
+                "training_mode": training,
+                "output_started": True,
+                "convergence_achieved": True,
+                "generation_t_blocks": torch.arange(target_seq_len, device=self.device),
+                "orthogonal_reg_loss": self._get_orthogonal_regularization(),
+                "all_spikes": all_spikes_for_reg
+            }
+            decoder_sequences = target_tokens
         else:
-            output_logits = torch.zeros(batch_size, 0, vocab_size, device=self.device)
-            generated_tokens = torch.zeros(batch_size, 0, dtype=torch.long, device=self.device)
-        
-        # 처리 정보 구성
-        processing_info = {
-            "processing_clk": final_t_block * T + T,  # 실제 처리된 CLK 수
-            "processing_t_blocks": final_t_block + 1,
-            "batch_size": batch_size,
-            "sequence_length": output_logits.shape[1],
-            "training_mode": training,
-            "tokens_generated": max_generated,
-            "output_started": self.timing_manager.output_started.any().item(),
-            "convergence_achieved": final_t_block < max_t_blocks - 1,
-            "final_acc_activity": final_acc_spikes.mean().item() if final_acc_spikes is not None else 0.0,
-            "generation_t_blocks": torch.arange(max_generated, device=self.device),
-            "orthogonal_reg_loss": self._get_orthogonal_regularization(),
-            "all_spikes": all_spikes_for_reg
-        }
+            # 순차 경로 결과
+            max_generated = self.timing_manager.generated_length.max().item()
+            if max_generated > 0:
+                output_logits = all_logits[:, :max_generated]
+                generated_tokens = output_logits.argmax(dim=-1)
+            else:
+                output_logits = torch.zeros(batch_size, 0, vocab_size, device=self.device)
+                generated_tokens = torch.zeros(batch_size, 0, dtype=torch.long, device=self.device)
+            
+            processing_info = {
+                "processing_clk": final_t_block * T + T,
+                "processing_t_blocks": final_t_block + 1,
+                "tokens_generated": max_generated,
+                "parallel_path": False,
+                "final_acc_activity": final_acc_spikes.mean().item() if final_acc_spikes is not None else 0.0,
+                "batch_size": batch_size,
+                "sequence_length": output_logits.shape[1],
+                "training_mode": training,
+                "output_started": self.timing_manager.output_started.any().item(),
+                "convergence_achieved": final_t_block < max_t_blocks - 1,
+                "generation_t_blocks": torch.arange(max_generated, device=self.device),
+                "orthogonal_reg_loss": self._get_orthogonal_regularization(),
+                "all_spikes": all_spikes_for_reg
+            }
+            decoder_sequences = self.decoder_sequences
         
         if tensorboard_logger and hasattr(tensorboard_logger, 'log_processing_info'):
             try:
@@ -515,7 +558,7 @@ class SCSSystem(nn.Module):
             'output_logits': output_logits,
             'generated_tokens': generated_tokens,
             'processing_info': processing_info,
-            'decoder_sequences': self.decoder_sequences
+            'decoder_sequences': decoder_sequences
         }
 
     def _update_stp_weights(self, prev_spikes: Dict[str, torch.Tensor], spikes_with_grad: Dict[str, torch.Tensor]):
@@ -783,3 +826,67 @@ class SCSSystem(nn.Module):
     def set_max_clk(self, max_clk: int):
         """최대 CLK 설정 (커리큘럼 학습용)"""
         self.max_clk = max_clk
+
+    def _batch_encode_inputs(self, input_tokens, attention_mask, max_t_blocks):
+        """입력 배치 인코딩"""
+        batch_size, seq_len = input_tokens.shape
+        window_size = self.input_interface.window_size
+        num_valid = min(max_t_blocks, seq_len)
+        
+        all_windows = []
+        for t in range(num_valid):
+            start = max(0, t + 1 - window_size)
+            window = input_tokens[:, start:t+1]
+            
+            if window.shape[1] < window_size:
+                pad = torch.full((batch_size, window_size - window.shape[1]), 
+                               self.pad_token_id, dtype=torch.long, device=window.device)
+                window = torch.cat([pad, window], dim=1)
+            
+            if attention_mask is not None:
+                mask = attention_mask[:, start:t+1]
+                if mask.shape[1] < window_size:
+                    mask = torch.cat([torch.zeros(batch_size, window_size - mask.shape[1], 
+                                                 dtype=torch.bool, device=mask.device), mask], dim=1)
+                window = window * mask.long()
+            
+            all_windows.append(window)
+        
+        if not all_windows:
+            return None
+        
+        stacked = torch.stack(all_windows, dim=1)
+        flat = stacked.reshape(-1, window_size)
+        probs = self.input_interface.batch_forward(flat)
+        
+        if probs is None:
+            return None
+        
+        result = probs.reshape(batch_size, num_valid, *probs.shape[1:])
+        
+        if num_valid < max_t_blocks:
+            pad = torch.zeros(batch_size, max_t_blocks - num_valid, *probs.shape[1:], device=probs.device)
+            result = torch.cat([result, pad], dim=1)
+        
+        return result
+
+    def _extract_timing_info(self, all_spikes, start_clk, end_clk, T):
+        """TimingLoss용 정보 추출"""
+        info = []
+        for clk, typ in [(start_clk, 'start'), (end_clk, 'end')]:
+            idx = (clk + 1) * T - 1
+            if 0 <= idx < len(all_spikes):
+                acc = all_spikes[idx].get(self.acc_node)
+                if acc is not None:
+                    info.append({'clk': clk, 'type': typ, 'stable_sync_index': acc.mean(dim=[-2, -1])})
+        
+        final_acc = 0.0
+        if all_spikes and self.acc_node in all_spikes[-1]:
+            final_acc = all_spikes[-1][self.acc_node].mean().item()
+        
+        return {
+            'target_start_clk': start_clk,
+            'target_end_clk': end_clk,
+            'timing_loss_info': info,
+            'final_acc_activity': final_acc
+        }

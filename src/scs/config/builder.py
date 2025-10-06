@@ -164,6 +164,7 @@ class ModelBuilder:
                 input_node=input_node_name,
                 output_node=output_node_name,
                 acc_node=config.system_roles.acc_node,
+                max_clk=config.learning.max_clk_training,
                 eos_token_id=eos_token_id,
                 device=device
             )

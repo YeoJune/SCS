@@ -26,6 +26,7 @@ class AxonalConnections(nn.Module):
         bias_init_std: float = 0.0,
         axon_temperature: float = 0.1,
         # STDP parameters
+        enable_stdp: bool = False,
         tau_pre: float = 20.0,
         tau_post: float = 20.0,
         A_plus: float = 0.01,
@@ -44,6 +45,7 @@ class AxonalConnections(nn.Module):
         self.axon_temperature = axon_temperature
         
         # STDP parameters
+        self.enable_stdp = enable_stdp
         self.tau_pre = tau_pre
         self.tau_post = tau_post
         self.A_plus = A_plus
@@ -200,6 +202,8 @@ class AxonalConnections(nn.Module):
         """
         Phase 3: W_dyn 업데이트
         """
+        if not self.enable_stdp:
+            return
         for conn in self.connections:
             source = conn["source"]
             target = conn["target"]
@@ -300,6 +304,8 @@ class AxonalConnections(nn.Module):
     
     def reset_state_batch(self, batch_size: int):
         """배치 차원을 포함한 전체 상태 초기화"""
+        if not self.enable_stdp:
+            return
         self._initialize_dynamic_weights(batch_size)
     
 class SCSSystem(nn.Module):
@@ -699,7 +705,7 @@ class SCSSystem(nn.Module):
         
         for node_name, node in self.nodes.items():
             # influence 제거: spikes_with_grad 직접 사용
-            internal_input = self.local_connections[node_name](spikes_with_grad[node_name])
+            internal_input = None #self.local_connections[node_name](spikes_with_grad[node_name])
             
             axonal_input = axonal_inputs.get(node_name)
             node_external_input = external_input if node_name == self.input_node else None

@@ -704,7 +704,7 @@ class SCSSystem(nn.Module):
         
         for node_name, node in self.nodes.items():
             # influence 제거: spikes_with_grad 직접 사용
-            internal_input = None #self.local_connections[node_name](spikes_with_grad[node_name])
+            internal_input = self.local_connections[node_name](spikes_with_grad[node_name])
             
             axonal_input = axonal_inputs.get(node_name)
             node_external_input = external_input if node_name == self.input_node else None

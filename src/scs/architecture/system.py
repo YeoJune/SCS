@@ -119,14 +119,15 @@ class AxonalConnections(nn.Module):
         """W_dyn을 W_base로 초기화 (배치 차원 포함)"""
         for conn in self.connections:
             conn_key = f"{conn['source']}_to_{conn['target']}"
-            # 배치 차원 추가: [B, num_patches, target_size, source_size]
-            base_weights = self.patch_linear_base[conn_key]  # [num_patches, target_size, source_size]
+            base_weights = self.patch_linear_base[conn_key]
+            
+            # 항상 W_dyn 초기화
             self.patch_linear_dyn[conn_key] = base_weights.unsqueeze(0).expand(batch_size, -1, -1, -1).clone()
             
-            # STDP traces 초기화 (배치 차원 포함)
-            num_patches, target_size, source_size = base_weights.shape
-            self.pre_traces[conn_key] = torch.zeros(batch_size, num_patches, source_size, device=self.device)
-            self.post_traces[conn_key] = torch.zeros(batch_size, num_patches, target_size, device=self.device)
+            if self.enable_stdp:  # STDP 켜져있을 때만 traces 초기화
+                num_patches, target_size, source_size = base_weights.shape
+                self.pre_traces[conn_key] = torch.zeros(batch_size, num_patches, source_size, device=self.device)
+                self.post_traces[conn_key] = torch.zeros(batch_size, num_patches, target_size, device=self.device)
 
     def forward(self, node_spikes: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """
@@ -304,8 +305,6 @@ class AxonalConnections(nn.Module):
     
     def reset_state_batch(self, batch_size: int):
         """배치 차원을 포함한 전체 상태 초기화"""
-        if not self.enable_stdp:
-            return
         self._initialize_dynamic_weights(batch_size)
     
 class SCSSystem(nn.Module):
